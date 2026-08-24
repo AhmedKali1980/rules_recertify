@@ -59,7 +59,8 @@ query_initial_delay_minutes: 30
 query_poll_interval_minutes: 10
 query_deadline_minutes: 1380
 traffic_batch_size: 500
-retention_days: 180
+default_lookback_days: 180
+retention_days: 200
 timezone: UTC
 ```
 
@@ -85,7 +86,7 @@ command, file checksum, row count, and extraction time before transformation.
 
 ### 3.3 Outputs
 
-- `rules_recertify_<logical-app>_<env>_<as-of>.xlsx`
+- `rules_recertify_<kear-id>_<env>_<as-of>.xlsx`
 - `manifest.json` with run identity, effective filters, source checksums, coverage,
   warnings, counts, software versions, and workbook schema version
 - immutable raw CSV exports and logs in a run-specific artifact directory
@@ -98,17 +99,20 @@ command, file checksum, row count, and extraction time before transformation.
 1. Acquire a single-instance lock and create a unique `run_id`.
 2. Validate configuration, dates, binary version, credentials, disk space, and
    output paths.
-3. Export rulesets and retain enabled rows. Preserve the full raw file.
-4. Determine relevant rulesets/rules for the requested app labels and environment.
+3. Export and preserve all enabled and disabled rulesets.
+4. Inventory all rules needed to support later on-demand application filtering.
 5. Export labels, IP lists, and managed/unmanaged workloads; ingest derived data.
 6. Submit rule traffic queries in bounded batches.
 7. Poll with `rule-usage` after the initial delay and until every query reaches a
    terminal state or the deadline approaches the 24-hour expiry.
 8. Validate and atomically ingest only completed usage results.
-9. Resolve and explode the policy snapshot.
-10. Calculate coverage and 180-day usage metrics.
-11. Generate the workbook to a temporary path, validate it, then atomically rename.
-12. Finalize the manifest and prune data strictly older than the retention policy.
+9. Persist the policy and resolution inputs needed by on-demand expansion.
+10. Calculate global collection coverage; application-specific metrics are
+    calculated by the report command.
+11. Persist validated collection results; do not generate a daily application
+    workbook.
+12. Send one end-of-batch summary email, finalize the manifest, and prune data
+    strictly older than the retention policy.
 
 A rerun with the same PCE, rule, window, and usage granularity must be idempotent.
 Partial runs remain resumable and must never overwrite a successful run.
@@ -139,7 +143,9 @@ whose label conjunction is impossible. Selection and expansion must evaluate
 selectors as Boolean expressions: OR between include groups, AND within a group,
 then exclusions and scope constraints.
 
-Enabled and disabled rules are included, as are allow/deny rules, custom-iptables rules, unscoped consumers, and rules without descriptions. The treatment of a disabled parent ruleset remains open.
+Enabled and disabled rules are included, as are rules of disabled parent rulesets,
+allow/deny rules, custom-iptables rules, unscoped consumers, and rules without
+descriptions. Preserve rule and ruleset enabled states separately.
 
 ### 4.4 Safe traffic batching
 
@@ -245,8 +251,8 @@ last positive completed window and be labelled conservative/interval-based.
 
 ### 5.3 Retention and assurance
 
-Retain 200 completed UTC days. Prune by window end only after a successful
-backup/checkpoint. Run a daily
+Retain at least 200 completed UTC days, configurable to 365 or more. Prune by
+window end only after a successful backup/checkpoint. Run a daily
 coverage check that detects gaps, schedules backfill while PCE history permits,
 and alerts before the asynchronous query's 24-hour lifetime expires.
 
@@ -279,7 +285,8 @@ One row per `rule_href` in the current snapshot, with stable ordering:
 - Hit Status, Total Flows, First Hit Window, Last Hit Window, Days Since Last Hit
 - Observation Coverage Start/End/Percent and Data Quality Status
 
-Module is the matching requested Application label value, with multiple matching values retained in deterministic input order.
+Module is the matching requested Application label value, with multiple matching
+values retained in deterministic input order.
 
 ### 6.2 Expanded Rules
 
@@ -403,9 +410,19 @@ The following corrections are essential:
 9. Contract-test the exclusive `traffic-end` interpretation before production.
 10. Validate query result truncation before using counts for certification.
 
-## 10. Remaining decisions and information
+## 10. On-demand reporting and residual discovery
 
-Most original questions are resolved in `requirements-decisions.md`. Remaining items are: disabled-parent-ruleset behavior; UID validation; workload interface grammar and enriched-column derivations; exact traffic-result truncation signaling; contract confirmation that traffic end is exclusive; final downstream Excel schema; SMTP reuse details; and confirmation whether retention means exactly 200 or 365 days.
+Scheduled collection and report delivery are separate workflows. Cron accumulates
+validated policy and usage data and sends one execution-summary email; it does not
+produce a daily application workbook. An operator invokes a report command on
+demand with KEAR ID, logical application name, Application labels, Environment,
+and lookback. The report is generated atomically from stored data, and the KEAR ID
+is present in its filename and every sheet.
+
+No product-owner clarification remains open from the latest decision round.
+Implementation must still contract-test traffic-end behavior, inspect any PCE
+truncation signal, validate production CSV encoding/booleans, and review the
+existing SMTP helper interface.
 
 ## 11. Delivery plan and acceptance gates
 

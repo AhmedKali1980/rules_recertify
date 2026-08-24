@@ -31,9 +31,9 @@ in-cell newline. A stable rule row is not duplicated per module.
 
 Include enabled and disabled rules, `allow` and `deny` rules, rules containing
 custom iptables, rules with `unscoped_consumers=true`, and rules with an empty
-description. Disabled rulesets were not explicitly approved and remain an open
-decision; until confirmed, export them for audit but exclude their rules from the
-recertification sheets with a Data Quality count.
+description. Also include rules belonging to disabled rulesets. Preserve
+`ruleset_enabled` and `rule_enabled` as separate columns so consumers can filter
+without losing policy inventory.
 
 ### DEC-004 — Environment behavior
 
@@ -68,6 +68,10 @@ example `--traffic-start 2026-08-20 --traffic-end 2026-08-21`. The generated que
 body confirms midnight UTC timestamps for the supplied examples. Internally
 represent the window as `[start_date 00:00:00Z, end_date 00:00:00Z)` and validate
 the returned `query_body` boundaries before ingestion.
+
+This exclusive-end convention is the project contract. An integration test must
+still verify that Workloader 12.0.20 produces the expected query boundaries before
+production ingestion is enabled.
 
 The PCE exposes approximately 90 days of traffic. Gaps should be backfilled before
 they age out. The initial backfill requests up to the available 90 days, but it
@@ -137,6 +141,9 @@ the binary hit/no-hit conclusion from total `flows`, but sets
 `--traffic-max-results 10000` remains configurable. Since truncation behavior is
 not known, any detected truncation affects count/detail quality, while a positive
 total still proves a hit. It must never turn a positive hit into `NO_HIT`.
+When `flows_by_port` ends with `+ N more`, set
+`port_breakdown_complete=false`, store `N` as `port_details_omitted_count`, add a
+Data Quality warning, and never attempt to infer the omitted ports.
 
 ## 4. Endpoint expansion
 
@@ -158,6 +165,14 @@ exclusions and ruleset scope.
 - More than one Environment label: invalid; exclude from resolution and report.
 - `use_workload_subnets` is expected to be false in the corporate data. Do not
   expand it in release 1; a true value is an unsupported-data warning.
+
+`ip_with_default_gw` is a plain IP such as `10.20.30.40`. `interfaces` is not
+JSON: it is a semicolon-separated list of `interface_name:address` entries. A
+managed example is `eth0:175.128.12.115/21; <any ipv6>`; an unmanaged example is
+`aut0:192.18.18.247; aut0:175.128.12.115`. Trim whitespace, ignore empty or
+malformed entries with a Data Quality warning, parse IPv4/IPv6 with an optional
+prefix, and deduplicate selected IP addresses while preserving first-seen order.
+IPv6 is expected only on managed workloads but must be parsed rather than rejected.
 
 ### DEC-012 — IP Lists and Any
 
@@ -213,9 +228,23 @@ The Workloader extraction wrapper initially requests:
 `href,hostname,name,external_data_set,created_at,interfaces,public_ip,` followed by
 `ip_with_default_gw,app,env,loc,role,managed,enforcement,` followed by
 `external_data_reference,OS,os_id`. The derivation stage adds and/or normalizes the
-remaining columns. Exact delimiters inside `interfaces`, boolean spelling, source
-encoding, and the derivation rules for `short_hostname`, `ocs_name_from_IP`,
-`IPLIST`, and `SUBNET` remain open contract details.
+remaining columns. Derive the enriched fields as follows:
+
+- `short_hostname`: the substring of `hostname` before the first dot. Preserve an
+  already-short hostname. If `hostname` is empty, use the literal
+  `[hostname_empty]`; never fall back to workload `name`.
+- `ocs_name_from_IP`: replace every `.` in the selected IPv4 address with `-`, for
+  example `10.20.30.40` becomes `10-20-30-40`. IPv6 has no confirmed equivalent;
+  leave it empty and emit a Data Quality notice in release 1.
+- `IPLIST`: the name of the IP List whose name starts with `NZ3_` and whose member
+  contains the workload IP (or at least one workload IP at workload summary
+  level).
+- `SUBNET`: the precise member subnet from that matching `NZ3_` IP List which
+  contains the selected IP address.
+
+If several `NZ3_` lists or subnets contain an address, retain every unique match
+in deterministic order rather than selecting an arbitrary first match. Boolean
+spelling and source encoding remain adapter-validation details.
 
 ## 6. Workbook contract baseline
 
@@ -251,15 +280,22 @@ The command requires:
 Never use shell `eval`; pass arguments as an array so quotes and apostrophes are
 data rather than command syntax.
 
+The representative KEAR identifier format is a hyphenated UUID such as
+`51be4bf9-2080-432f-9d02-1c0cf0f251d7`, without a `KEAR-` prefix. Input validation
+only requires a non-empty value; normalize it to lowercase. The mandatory KEAR ID
+appears in every workbook sheet and, together with the Environment, in the
+workbook filename. A safe pattern is
+`rules_recertify_<kear_id>_<environment>_<as-of>.xlsx`.
+
 ## 7. Persistence and operations
 
 ### DEC-017 — History
 
 Use SQLite 3.34-compatible SQL for the single-host deployment. Keep immutable raw
 artifacts alongside the database and consider S3 later. The analytical retention
-period is **200 days**. The earlier parenthetical description “one year” conflicts
-with 200 days; implementation follows the explicit numeric value of 200 days
-unless the owner changes it.
+period is configurable with a minimum and default of **200 days**. It may be
+raised to 365 days without a code change, but configuration validation rejects a
+value below 200.
 
 Initial backfill covers up to 90 available PCE days. A complete 180-day view only
 becomes possible after at least another 90 successfully covered daily windows.
@@ -282,6 +318,21 @@ The `.env` path is configurable, excluded from Git, permissioned `0600`, never
 logged, and loaded without `source`/shell evaluation. Startup validation reports
 missing variable names but never values.
 
+SMTP settings are also stored in `.env`. Send exactly one summary email at the end
+of each scheduled collection batch, whether it succeeds, partially succeeds, or
+fails. The message uses `SUCCESS`, `WARNING`, or `ERROR` and summarizes every
+export and processing stage, traffic-query totals/statuses, coverage, warnings,
+and local artifact/log locations. All operations are logged locally. SMTP failure
+is logged but never changes the collection's business status or exit outcome.
+
+Scheduled collection persists exports and usage history; it does **not** generate
+or email an application workbook every day. A separate on-demand report command
+reads the stored snapshots/history and generates a workbook for the requested
+KEAR ID, logical application name, Application labels, Environment, and lookback.
+Collection must therefore retain the complete PCE policy/inventory scope required
+for arbitrary later application selections rather than discarding non-requested
+applications during ingestion.
+
 ### DEC-019 — Policy version
 
 Use the policy representation returned by the established Workloader export
@@ -289,20 +340,16 @@ workflow. `draft` hrefs are expected in this context and do not require a separa
 active/draft comparison in release 1. Record `--policy-version` and the href in
 the manifest for traceability.
 
-## 8. Remaining open questions
+## 8. Residual implementation discoveries
 
-1. Should disabled rulesets be included in recertification sheets, or only their
-   disabled rules when the parent ruleset is enabled?
-2. What exact UID syntax/validation applies to `kear_consolidated_application`?
-3. What are the delimiters and record grammar of workload `interfaces` and
-   `ip_with_default_gw`?
-4. What are the precise derivation rules for the four enriched workload columns?
-5. Does Workloader/PCE signal `traffic-max-results` truncation anywhere besides
-   the visible `+ N more` port-summary marker?
-6. Confirm that `--traffic-end` is exclusive for Workloader 12.0.20. Returned
-   query bodies strongly support this interpretation, but it should be contract
-   tested.
-7. Which SMTP settings and failure policy should be inherited from
-   `kpi-steerco`?
-8. Confirm whether “200 days (one year)” means exactly 200 days or 365 days. The
-   current implementation baseline is 200.
+No product-owner decision remains open from the R1–R8 clarification round. The
+following behaviors must be discovered or contract-tested during implementation,
+without blocking the approved design:
+
+1. Whether PCE/Workloader exposes a truncation signal beyond the visible
+   `+ N more` port-summary marker.
+2. Confirmation through an integration test that Workloader 12.0.20 applies the
+   agreed exclusive traffic-end convention.
+3. The exact boolean spelling and source encoding of production workload CSVs.
+4. The existing `smtp_utils.py` interface and `.env` variable names, after the
+   referenced repository becomes accessible.

@@ -115,11 +115,11 @@ Partial runs remain resumable and must never overwrite a successful run.
 
 ### 4.2 Date-window semantics
 
-Use half-open UTC intervals: `[traffic_start, traffic_end)`. For a daily run at
+Use half-open UTC intervals: `[traffic_start, traffic_end)`. Workloader 12.0.20
+accepts date-only values. For a daily run at
 2026-08-22 00:00 UTC, query `2026-08-21T00:00:00Z` through
-`2026-08-22T00:00:00Z`. Passing the same date as both start and end, as in the
-sample command, may represent a zero-length interval and must not be relied on
-until the installed Workloader behavior is confirmed.
+`2026-08-22T00:00:00Z`. The earlier same-date example was incorrect. Validate the UTC timestamps embedded
+in each returned `query_body` before ingestion.
 
 `window_days` controls the interval length; it should not silently use “now minus
 N days,” because scheduler delays would create gaps or overlaps. The next window
@@ -128,21 +128,18 @@ they give exact day-level last-hit reporting and make recovery inexpensive.
 
 ### 4.3 Rule selection semantics
 
-The phrase “rules for an application” is ambiguous and must become an explicit
-policy. The recommended default is **touching application**: include an enabled
-rule when, after applying ruleset scope, its effective source or destination can
+The confirmed policy is **touching application**: include a rule when, after applying ruleset scope, its effective source or destination can
 select a workload carrying one requested `app` label and the requested `env`
 label. Include rules scoped directly to that app/environment even when an endpoint
 uses Any. The workbook must state the selection mode.
 
 Do not filter only on `ruleset_scope`: rules can reference the application from a
 differently scoped ruleset. Conversely, simple string matching can include rules
-whose label conjunction is impossible. Selection and explosion must evaluate
+whose label conjunction is impossible. Selection and expansion must evaluate
 selectors as Boolean expressions: OR between include groups, AND within a group,
 then exclusions and scope constraints.
 
-The treatment of disabled rules and rulesets should be configurable; the default
-deliverable contains enabled rules only, while recording excluded counts.
+Enabled and disabled rules are included, as are allow/deny rules, custom-iptables rules, unscoped consumers, and rules without descriptions. The treatment of a disabled parent ruleset remains open.
 
 ### 4.4 Safe traffic batching
 
@@ -180,7 +177,7 @@ Only `async_query_status=completed` is eligible for usage aggregation. `pending`
 zero. A completed query with `flows=0` is a valid observed zero. The run manifest
 and workbook must expose completion percentage and incomplete rules.
 
-### 4.6 Selector explosion
+### 4.6 Selector expansion
 
 Normalize each rule into explicit Source and Destination selector expressions.
 Resolve:
@@ -248,8 +245,8 @@ last positive completed window and be labelled conservative/interval-based.
 
 ### 5.3 Retention and assurance
 
-Retain at least 180 completed UTC days plus a configurable safety margin (default
-7 days). Prune by window end only after a successful backup/checkpoint. Run a daily
+Retain 200 completed UTC days. Prune by window end only after a successful
+backup/checkpoint. Run a daily
 coverage check that detects gaps, schedules backfill while PCE history permits,
 and alerts before the asynchronous query's 24-hour lifetime expires.
 
@@ -271,7 +268,7 @@ recommended default even if weekly reporting is desired.
 
 One row per `rule_href` in the current snapshot, with stable ordering:
 
-- Module (`ruleset_name`)
+- Module (matching requested Application label value(s))
 - Environment (derived from effective scope/input, with conflicts flagged)
 - Source (readable selectors, includes/excludes preserved)
 - Destination (readable selectors, includes/excludes preserved)
@@ -282,22 +279,11 @@ One row per `rule_href` in the current snapshot, with stable ordering:
 - Hit Status, Total Flows, First Hit Window, Last Hit Window, Days Since Last Hit
 - Observation Coverage Start/End/Percent and Data Quality Status
 
-“Module” is assumed to mean ruleset name; this requires confirmation.
+Module is the matching requested Application label value, with multiple matching values retained in deterministic input order.
 
-### 6.2 Exploded Rules
+### 6.2 Expanded Rules
 
-Use one row per rule-side-endpoint (not Source × Destination pair) with:
-
-- rule/module/environment identity;
-- side (`SOURCE` or `DESTINATION`);
-- selector expression and inclusion/exclusion flag;
-- resolved object type and original object name/href;
-- hostname/workload name, IP or CIDR, managed state;
-- applied scope and resolution warning;
-- services and usage summary repeated for filterability.
-
-If consumers require pairwise rows, define an additional `Rule Matrix` sheet or a
-separate CSV after confirming maximum volume.
+Use one row per rule. Sources, Destinations, Modules, and resolved services are deterministic newline-separated values inside their respective cells. Preserve selector provenance and resolution warnings in dedicated columns. Do not build a Source × Destination Cartesian product.
 
 ### 6.3 Recommended workbook sheets
 
@@ -306,8 +292,8 @@ The three requested sheets are mandatory; additional sheets improve auditability
 1. **Presentation** — title, logical application, requested labels/environment,
    modules/scopes, extraction time/timezone, traffic period, coverage, schema and
    tool versions, warnings, and definitions.
-2. **Raw Rules** — canonical non-exploded rule view.
-3. **Exploded Rules** — resolved endpoint view.
+2. **Raw Rules** — canonical non-expanded rule view.
+3. **Expanded Rules** — resolved endpoint view, one row per rule.
 4. **Rule Usage** — per-rule/per-window/per-protocol-port observations and status.
 5. **Data Quality** — pending/expired/missing/truncated queries, unresolved
    selectors, gaps, duplicates, and counts.
@@ -402,7 +388,7 @@ to inform command construction.
 The proposed pipeline is coherent: policy exports supply rule structure, inventory
 exports resolve selectors, and asynchronous usage exports supply traffic evidence.
 Consolidating multiple application labels into one logical deliverable is sound.
-Separating readable Raw Rules from resolution-heavy Exploded Rules is also sound.
+Separating readable Raw Rules from resolution-heavy Expanded Rules is also sound.
 
 The following corrections are essential:
 
@@ -414,67 +400,12 @@ The following corrections are essential:
 6. Do not claim exact first/last hit timestamps from aggregated windows.
 7. Do not expand Any or blindly create endpoint Cartesian products.
 8. Do not use label names as durable rule identity; use href plus PCE identity.
-9. Confirm `traffic-end` inclusivity and timestamp support before production.
+9. Contract-test the exclusive `traffic-end` interpretation before production.
 10. Validate query result truncation before using counts for certification.
 
-## 10. Missing decisions and information
+## 10. Remaining decisions and information
 
-Implementation is blocked from being contract-complete until the following are
-answered or samples are supplied:
-
-### Selection and policy semantics
-
-1. Does “application rules” mean rules whose ruleset scope contains the app,
-   rules whose source/destination selects it, or both (recommended)?
-2. How should multiple environments, `env:NULL`, missing env labels, and ruleset
-   scopes without an environment be treated?
-3. Include disabled rules/rulesets, deny rules, custom iptables rules, unscoped
-   consumers, and inherited/shared rules?
-4. Required semantics for label groups, exclusions, virtual services/servers,
-   user groups, explicit workloads, `all_workloads`, and `use_workload_subnets`?
-5. Is “Module” exactly the ruleset name, a naming-derived value, or derived data?
-
-### Usage semantics
-
-6. Installed Workloader version and exact help/output for all commands, including
-   whether rule export can filter by individual rule href?
-7. Are start/end values dates or timestamps, is end inclusive, and what timezone
-   does the PCE/Workloader apply?
-8. Exact grammar and meaning of `flows_by_port`; is `flows` a session, record,
-   connection, or aggregate count, and are denied flows included?
-9. Does `max_results=10000` truncate counts or port detail, and how is truncation
-   signalled?
-10. Required definition of “first hit,” “last hit,” and “days without a hit” when
-    only a multi-day aggregate is available?
-11. PCE-approved request rate, concurrency, cooldown, batch limit, retry policy,
-    and historical traffic availability for backfill?
-
-### Data and output contracts
-
-12. Representative, sanitized full exports for labels, IP lists, workloads,
-    derived workloads/IP lists, rules with non-zero `flows_by_port`, and all async
-    statuses?
-13. Derived CSV column definitions, key, delimiter/encoding, producer, refresh
-    schedule, and conflict precedence versus Workloader?
-14. Required exact Excel column names/order/types/enumerations, locale, maximum
-    size, downstream schema validation, and whether extra sheets are accepted?
-15. Should Exploded Rules be side-endpoint rows (recommended) or every
-    source/destination pair?
-16. Required protocol rendering, service expansion, IPv4/IPv6 handling, IP-list
-    exclusions, hostname/interface selection, and duplicate-IP behavior?
-17. Logical application display name when several app labels are supplied?
-
-### Operations and governance
-
-18. Scheduler/orchestrator, runtime OS/Python, installation constraints, storage,
-    backup, monitoring, alert destinations, service account, and secret source?
-19. One PCE or several, and draft versus active policy expectations? The sample
-    hrefs are under `sec_policy/draft`, despite the requirement referring to active
-    enabled rulesets; this must be reconciled.
-20. Retention requirements for raw exports and workbooks beyond the 180-day
-    analytical store, including encryption and access controls?
-21. Access to the two reusable repositories/files listed in the repository
-    assessment, plus their licensing/ownership and expected reuse level?
+Most original questions are resolved in `requirements-decisions.md`. Remaining items are: disabled-parent-ruleset behavior; UID validation; workload interface grammar and enriched-column derivations; exact traffic-result truncation signaling; contract confirmation that traffic end is exclusive; final downstream Excel schema; SMTP reuse details; and confirmation whether retention means exactly 200 or 365 days.
 
 ## 11. Delivery plan and acceptance gates
 

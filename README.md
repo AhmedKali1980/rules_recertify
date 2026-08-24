@@ -18,11 +18,15 @@ has not started yet.
 
 ## Proposed implementation stack
 
-- Python 3.11+ for validation, transformation, persistence, and Excel creation.
+- Python 3.9.25 for validation, transformation, persistence, and Excel creation
+  on the target RHEL 9 host.
 - Thin POSIX shell wrappers for `workloader` invocation and scheduler entrypoints.
 - SQLite as the default single-host historical store, with raw immutable CSV
   artifacts retained for audit and replay.
 - `pandas`/`openpyxl` (or `xlsxwriter`) for the final `.xlsx` workbook.
+
+The confirmed functional and operational decisions are recorded in the
+[requirements decision record](docs/requirements-decisions.md).
 
 No PCE credentials, Workloader binary, generated exports, databases, logs, or
 produced workbooks should be committed to Git.

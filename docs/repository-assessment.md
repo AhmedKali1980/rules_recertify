@@ -1,6 +1,6 @@
 # Repository and Reuse Visibility Assessment
 
-Assessment date: 2026-08-22 (UTC).
+Assessment date: 2026-08-24 (UTC).
 
 ## `rules_recertify` repository
 
@@ -31,11 +31,21 @@ The requested reusable assets are known by name:
 - `export_wkld.derived.csv`
 - `export_iplists.derived.csv`
 
-Neither sibling repository nor any of these files is present under the visible
-`/workspace` or `/root` trees. Consequently, their content has **not** been
-reviewed and reuse compatibility cannot yet be asserted. They must be cloned,
-mounted, or supplied before implementation. Reuse should be selective after a
-review of licensing, configuration conventions, secret handling, exit-code
-handling, quoting, retries, and compatibility with the installed Workloader
-version. Derived CSV files should be treated as sample schemas/fixtures unless
-their generation and ownership are explicitly defined.
+The repositories are now reported as public at:
+
+- `https://github.com/AhmedKali1980/kpi-steerco`
+- `https://github.com/AhmedKali1980/carto-create-rule`
+
+They are still not mounted in the local workspace. A direct GitHub verification
+attempt from this execution environment on 2026-08-24 failed because outbound
+GitHub access was rejected by the environment's network proxy (`CONNECT tunnel
+failed, response 403`). Therefore, the URLs are recorded, but repository contents
+and branches cannot honestly be confirmed from this environment yet.
+
+The user supplied the workload and IP-list extraction wrapper bodies. They show
+strict Bash mode, reuse of `workloader_common.sh`, retry/backoff, configurable
+output paths, selected workload headers, and `ipl-export`. The common helper,
+derived-data transformation, cron wrapper, and `smtp_utils.py` still require an
+actual source review. Reuse must remain selective after reviewing licensing,
+secret handling, exit-code handling, quoting, retries, and Workloader 12.0.20
+compatibility.

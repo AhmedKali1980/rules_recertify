@@ -210,8 +210,9 @@ unknown, so its adapter cannot be finalized.
 
 ### 5.1 Recommended persistence
 
-Use SQLite in WAL mode on a single execution host, plus immutable compressed raw
-artifacts. CSV-only accumulation is possible but is fragile for deduplication,
+Use SQLite 3.24 or newer in WAL mode on a single execution host, plus immutable
+compressed raw artifacts. Production uses SQLite `3.26.0-20.el8_10` on RHEL 8.
+CSV-only accumulation is possible but is fragile for deduplication,
 transactions, schema evolution, overlapping windows, and concurrent scheduler
 runs. PostgreSQL should replace SQLite if multiple workers/hosts are introduced.
 

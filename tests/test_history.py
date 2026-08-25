@@ -1,10 +1,14 @@
 import json, tempfile, unittest
 from datetime import date
 from pathlib import Path
-from rules_recertify.history.database import Database
+from rules_recertify.history.database import Database, ensure_sqlite_compatible
 from rules_recertify.history.metrics import summarize_usage
 
 class HistoryTest(unittest.TestCase):
+    def test_production_sqlite_version_is_supported(self):
+        ensure_sqlite_compatible((3, 26, 0))
+        with self.assertRaises(RuntimeError):
+            ensure_sqlite_compatible((3, 23, 0))
     def test_completed_result_is_not_replaced_by_pending(self):
         with tempfile.TemporaryDirectory() as directory:
             db=Database(Path(directory)/"db.sqlite"); db.initialize(); db.begin_run("r","T",{})

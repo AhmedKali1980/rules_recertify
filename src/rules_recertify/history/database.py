@@ -60,6 +60,17 @@ CREATE INDEX IF NOT EXISTS idx_usage_end ON usage_windows(window_end);
 CREATE INDEX IF NOT EXISTS idx_workloads_labels ON workloads(app, env);
 """
 
+MINIMUM_SQLITE_VERSION = (3, 24, 0)
+
+
+def ensure_sqlite_compatible(version_info: Sequence[int] = sqlite3.sqlite_version_info) -> None:
+    """Reject SQLite releases that do not support the UPSERT syntax used here."""
+    normalized = tuple(int(part) for part in version_info[:3])
+    if normalized < MINIMUM_SQLITE_VERSION:
+        found = ".".join(str(part) for part in normalized)
+        required = ".".join(str(part) for part in MINIMUM_SQLITE_VERSION)
+        raise RuntimeError(f"SQLite {found} is unsupported; version {required} or newer is required")
+
 
 class Database:
     def __init__(self, path: Path):
@@ -74,6 +85,7 @@ class Database:
         return connection
 
     def initialize(self) -> None:
+        ensure_sqlite_compatible()
         with self.connect() as db:
             db.executescript(SCHEMA)
 

@@ -291,8 +291,9 @@ workbook filename. A safe pattern is
 
 ### DEC-017 — History
 
-Use SQLite 3.34-compatible SQL for the single-host deployment. Keep immutable raw
-artifacts alongside the database and consider S3 later. The analytical retention
+Use SQL compatible with SQLite 3.24 or newer for the single-host deployment. The
+production SQLite version is `3.26.0-20.el8_10`, which meets this requirement.
+Keep immutable raw artifacts alongside the database and consider S3 later. The analytical retention
 period is configurable with a minimum and default of **200 days**. It may be
 raised to 365 days without a code change, but configuration validation rejects a
 value below 200.
@@ -305,12 +306,15 @@ coverage for the claimed lookback.
 ### DEC-018 — Runtime
 
 - Scheduler: cron.
-- OS: RHEL 9.
+- Production OS: RHEL 8.
+- Production installation root: `/DATA/mco/illumio-mco/rules_recertify`.
 - Python: 3.9.25 in a virtual environment.
 - PyPI: unavailable; dependencies must come from approved installed packages or
   offline artifacts with hashes.
 - Workloader default directory: `/DATA/WORKLOADER/ver12`, configurable.
-- SQLite, pandas, openpyxl, and xlsxwriter are available.
+- Production SQLite RPM: `3.26.0-20.el8_10`.
+- SQLite is accessed through Python's standard `sqlite3` module; `openpyxl` is
+  required for reporting.
 - Alerts: email, with potential reuse of `smtp_utils.py` after source review.
 - PCE/Workloader credentials: `.env` file.
 

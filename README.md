@@ -22,7 +22,7 @@ ingestion, on-demand Excel reporting, structured logs, and SMTP summaries.
 ## Proposed implementation stack
 
 - Python 3.9.25 for validation, transformation, persistence, and Excel creation
-  on the target RHEL 9 host.
+  on the production RHEL 8 host.
 - Thin POSIX shell wrappers for `workloader` invocation and scheduler entrypoints.
 - SQLite as the default single-host historical store, with raw immutable CSV
   artifacts retained for audit and replay.
@@ -46,3 +46,19 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
 See the integration guide before contacting a PCE or enabling cron.
+
+The standard production installation root is:
+
+```text
+/DATA/mco/illumio-mco/rules_recertify
+```
+
+Deploy a reviewed checkout with:
+
+```bash
+sudo RULES_RECERTIFY_OWNER=illumio-mco \
+  RULES_RECERTIFY_GROUP=illumio-mco \
+  ./scripts/install-prod.sh
+```
+
+Replace the example owner/group with the actual production service account.

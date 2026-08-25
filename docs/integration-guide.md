@@ -16,23 +16,56 @@ The `scripts/rules-recertify` entrypoint exposes:
 Collection and report delivery are deliberately separate. Cron runs `collect`;
 an operator or another system runs `report` only when a deliverable is needed.
 
-## 2. RHEL 9 installation
+## 2. Production RHEL 8 installation
 
 ### 2.1 Prerequisites
 
 - Python 3.9.25 and `venv`.
 - Workloader 12.0.20, default `/DATA/WORKLOADER/ver12/workloader`.
-- SQLite 3.34 or newer.
+- SQLite 3.24 or newer. Production provides `3.26.0-20.el8_10`.
 - An approved offline `openpyxl` package for workbook generation.
 - Network/PCE credentials already accepted by Workloader.
 
 No online package lookup is required by collection, ingestion, SQLite, or tests.
 `openpyxl` is imported only by `report`.
 
-### 2.2 Install from the checkout
+The standard production installation root is:
+
+```text
+/DATA/mco/illumio-mco/rules_recertify
+```
+
+The code uses SQLite UPSERT syntax introduced in 3.24 and checks the linked
+Python SQLite version before creating the schema. The production 3.26 release is
+therefore supported. Verify the version used by Python—not only the RPM—with:
+
+```bash
+python3.9 -c 'import sqlite3; print(sqlite3.sqlite_version)'
+```
+
+### 2.2 Deploy the checkout under `/DATA`
+
+From a reviewed checkout, run as the target service account or as root while
+providing the intended owner/group:
 
 ```bash
 cd /path/to/rules_recertify
+sudo RULES_RECERTIFY_OWNER=illumio-mco \
+  RULES_RECERTIFY_GROUP=illumio-mco \
+  ./scripts/install-prod.sh
+cd /DATA/mco/illumio-mco/rules_recertify
+```
+
+The installer creates the standard root and `var/state`, `var/raw`, `var/output`,
+and `var/logs` with mode `0750`. On a first install it creates
+`config/local.json` from the production example and `.env` with mode `0600`.
+During an upgrade it preserves `.env`, `config/local.json`, `.venv`, and the entire
+`var` tree. It does not install RPMs, credentials, cron, or Python wheels.
+
+### 2.3 Create the Python environment
+
+```bash
+cd /DATA/mco/illumio-mco/rules_recertify
 python3.9 -m venv .venv
 . .venv/bin/activate
 python -m pip install --no-index --no-deps -e .
@@ -47,7 +80,8 @@ provided script without installing the package.
 ## 3. Configuration
 
 ```bash
-cp config/example.json config/local.json
+# install-prod.sh creates these on first installation. If provisioning manually:
+cp config/production.example.json config/local.json
 cp .env.example .env
 chmod 600 .env
 ```
@@ -69,6 +103,23 @@ Validate and initialize:
 ./scripts/rules-recertify --config config/local.json validate-config
 ./scripts/rules-recertify --config config/local.json init-db
 ```
+
+The second command creates
+`/DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite` and the
+version-1 schema. `collect`, `ingest-reference`, `ingest-usage`, and `report` also
+initialize the schema defensively. This is application setup, not an RPM install:
+the installer does not execute `dnf` or modify the operating system.
+
+Verify the created database:
+
+```bash
+sqlite3 /DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite \
+  'PRAGMA integrity_check; SELECT version FROM schema_version;'
+sqlite3 /DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite \
+  '.tables'
+```
+
+Expected schema version is `1`; integrity must return `ok`.
 
 ## 4. Reference-data ingestion
 
@@ -125,12 +176,15 @@ Example for a daily launch at 03:15 server time (ensure the host timezone and
 window-generation wrapper are reviewed):
 
 ```cron
-15 3 * * * cd /opt/rules_recertify && /opt/rules_recertify/scripts/daily-collect.sh
+15 3 * * * cd /DATA/mco/illumio-mco/rules_recertify && /DATA/mco/illumio-mco/rules_recertify/scripts/daily-collect.sh
 ```
 
 Use the supplied wrapper template, which computes adjacent UTC dates, activates
 the virtual environment, obtains a non-blocking lock, and preserves the collector
 exit code.
+
+The repository does not modify crontab automatically. Install the reviewed line
+under the service account only after the PCE integration test succeeds.
 
 ## 6. On-demand report
 
@@ -206,3 +260,30 @@ existing usage result without re-querying the PCE:
 ./scripts/rules-recertify --config config/local.json ingest-usage \
   /data/workloader-rule-usage.csv
 ```
+
+## 9. Production ownership and upgrade checklist
+
+Before the first real collection, verify:
+
+```bash
+cd /DATA/mco/illumio-mco/rules_recertify
+pwd
+stat -c '%U:%G %a %n' . .env config/local.json var var/state var/raw var/output var/logs
+python3.9 -c 'import sqlite3; print(sqlite3.sqlite_version)'
+./scripts/rules-recertify --config config/local.json validate-config
+./scripts/rules-recertify --config config/local.json init-db
+```
+
+The runtime owner needs read/execute access to application files and read/write
+access to every `var` directory. Keep `.env` at `0600`. Review SELinux labels and
+mount options with the RHEL administrators because the repository does not change
+SELinux policy.
+
+For an application upgrade, take a SQLite backup, stop/disable the cron launch,
+deploy from the new reviewed checkout with `install-prod.sh`, run the offline test
+suite and `init-db`, then re-enable cron. The installer preserves runtime state and
+local configuration, but it is not a backup mechanism.
+
+Because WAL mode can create `rules_recertify.sqlite-wal` and
+`rules_recertify.sqlite-shm`, do not copy only the main database during active
+writes. Use SQLite's backup mechanism or stop collection and checkpoint first.

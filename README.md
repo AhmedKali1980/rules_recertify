@@ -5,8 +5,9 @@ rolling 180-day history, resolve labels and IP lists to concrete endpoints,
 and generate a consolidated Excel recertification workbook for one logical
 application (one or more application labels) in one environment.
 
-This repository currently contains the approved design baseline; implementation
-has not started yet.
+The repository now contains the first executable implementation: Workloader
+collection and polling, validated CSV adapters, SQLite history, endpoint reference
+ingestion, on-demand Excel reporting, structured logs, and SMTP summaries.
 
 ## Design documents
 
@@ -15,6 +16,8 @@ has not started yet.
   delivery phases, and open questions.
 - [Repository assessment](docs/repository-assessment.md): verified Git and
   reusable-project visibility from the current workspace.
+- [Integration and test guide](docs/integration-guide.md): offline installation,
+  configuration, cron, collection, backfill, reporting, and acceptance tests.
 
 ## Proposed implementation stack
 
@@ -23,10 +26,23 @@ has not started yet.
 - Thin POSIX shell wrappers for `workloader` invocation and scheduler entrypoints.
 - SQLite as the default single-host historical store, with raw immutable CSV
   artifacts retained for audit and replay.
-- `pandas`/`openpyxl` (or `xlsxwriter`) for the final `.xlsx` workbook.
+- Standard-library processing plus `openpyxl` for the final `.xlsx` workbook.
 
 The confirmed functional and operational decisions are recorded in the
 [requirements decision record](docs/requirements-decisions.md).
 
 No PCE credentials, Workloader binary, generated exports, databases, logs, or
 produced workbooks should be committed to Git.
+
+## Quick start
+
+```bash
+cp config/example.json config/local.json
+cp .env.example .env
+chmod 600 .env
+./scripts/rules-recertify --config config/local.json validate-config
+./scripts/rules-recertify --config config/local.json init-db
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+See the integration guide before contacting a PCE or enabling cron.

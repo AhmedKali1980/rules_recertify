@@ -17,6 +17,7 @@ class ProductionInstallerTest(unittest.TestCase):
             subprocess.run(["bash", "scripts/install-prod.sh"], check=True, env=environment,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             self.assertTrue((target / "src/rules_recertify/cli.py").is_file())
+            self.assertTrue((target / "setup.py").is_file())
             self.assertEqual((target / ".env").stat().st_mode & 0o777, 0o600)
             (target / ".env").write_text("PCE=preserved\n", encoding="utf-8")
             (target / "config/local.json").write_text('{"preserved": true}\n', encoding="utf-8")

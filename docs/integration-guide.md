@@ -68,14 +68,58 @@ During an upgrade it preserves `.env`, `config/local.json`, `.venv`, and the ent
 cd /DATA/mco/illumio-mco/rules_recertify
 python3.9 -m venv .venv
 . .venv/bin/activate
+python -m pip --version
 python -m pip install --no-index --no-deps -e .
 # Use the approved internal wheel directory when openpyxl is not preinstalled:
 python -m pip install --no-index --find-links /path/to/approved/wheels openpyxl
 ```
 
-For a completely offline editable installation, the host must already contain a
-compatible setuptools build backend. Otherwise use `PYTHONPATH=src` through the
-provided script without installing the package.
+The repository includes both modern `pyproject.toml` metadata and a compatibility
+`setup.py`. The latter is required by older pip releases which report that
+editable mode requires a setup.py-based build. The virtual environment must still
+contain setuptools; verify it without contacting an index:
+
+```bash
+python -c 'import setuptools; print(setuptools.__version__)'
+```
+
+If setuptools is unavailable, install an approved internal RPM/wheel, or skip the
+editable installation. The supplied `scripts/rules-recertify` launcher sets
+`PYTHONPATH` itself and works directly from the deployed source tree:
+
+```bash
+./scripts/rules-recertify --config config/local.json validate-config
+./scripts/rules-recertify --config config/local.json init-db
+```
+
+Do not use the network to upgrade pip/setuptools on production.
+
+### 2.4 Troubleshoot the legacy editable-mode error
+
+The following message is a packaging-tool compatibility error, unrelated to
+SQLite, Workloader, PCE credentials, or the application configuration:
+
+```text
+File "setup.py" not found. Directory cannot be installed in editable mode.
+A pyproject.toml file was found, but editable mode currently requires a
+setup.py based build.
+```
+
+It means the installed pip predates PEP 660 editable `pyproject.toml` support.
+Deploy a revision containing `setup.py`, reactivate the virtualenv, confirm
+setuptools, and retry:
+
+```bash
+cd /DATA/mco/illumio-mco/rules_recertify
+. .venv/bin/activate
+test -f setup.py
+python -m pip --version
+python -c 'import setuptools; print(setuptools.__version__)'
+python -m pip install --no-index --no-deps -e .
+```
+
+If the approved production environment intentionally has no setuptools, do not
+block initialization on editable installation. Use the source launcher directly.
 
 ## 3. Configuration
 

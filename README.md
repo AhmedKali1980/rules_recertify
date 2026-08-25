@@ -62,3 +62,7 @@ sudo RULES_RECERTIFY_OWNER=illumio-mco \
 ```
 
 Replace the example owner/group with the actual production service account.
+
+Older RHEL 8 pip releases are supported through the repository's compatibility
+`setup.py`. If editable installation is unavailable, the supplied launcher runs
+directly from the deployed source tree without a pip installation.

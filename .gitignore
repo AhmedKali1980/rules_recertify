@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+var/raw/*
+var/state/*
+var/output/*
+var/logs/*
+!var/**/.gitkeep
+*.sqlite
+*.sqlite-*
+*.xlsx
+workloader.log

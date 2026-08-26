@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rules-recertify"
+version = "0.1.0"
+description = "Illumio rule recertification collection and reporting"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+reporting = ["openpyxl>=3.0"]
+test = []
+
+[project.scripts]
+rules-recertify = "rules_recertify.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

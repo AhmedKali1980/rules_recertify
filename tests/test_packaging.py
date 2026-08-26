@@ -15,3 +15,6 @@ class PackagingCompatibilityTest(unittest.TestCase):
         self.assertIn("package_dir", keywords)
         self.assertIn("entry_points", keywords)
         self.assertIn("python_requires", keywords)
+
+    def test_pyproject_does_not_trigger_offline_build_isolation(self):
+        self.assertFalse(Path("pyproject.toml").exists())

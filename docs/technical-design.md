@@ -317,7 +317,7 @@ silently break the downstream ingestion system.
 ```text
 rules_recertify/
 ├── README.md
-├── pyproject.toml
+├── setup.py
 ├── config/
 │   ├── example.yaml
 │   └── logging.yaml

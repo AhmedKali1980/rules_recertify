@@ -74,10 +74,12 @@ python -m pip install --no-index --no-deps -e .
 python -m pip install --no-index --find-links /path/to/approved/wheels openpyxl
 ```
 
-The repository includes both modern `pyproject.toml` metadata and a compatibility
-`setup.py`. The latter is required by older pip releases which report that
-editable mode requires a setup.py-based build. The virtual environment must still
-contain setuptools; verify it without contacting an index:
+Production uses the checked-in `setup.py`, which is compatible with pip 20.2.4
+and setuptools 50.3.2. The repository intentionally does not contain a
+`pyproject.toml`: on this offline host it activates PEP 517 build isolation and
+causes pip to search an unavailable package index for `setuptools>=61`. The
+virtual environment must contain setuptools; verify it without contacting an
+index:
 
 ```bash
 python -c 'import setuptools; print(setuptools.__version__)'
@@ -96,23 +98,29 @@ Do not use the network to upgrade pip/setuptools on production.
 
 ### 2.4 Troubleshoot the legacy editable-mode error
 
-The following message is a packaging-tool compatibility error, unrelated to
+The following messages are packaging-tool compatibility errors, unrelated to
 SQLite, Workloader, PCE credentials, or the application configuration:
 
 ```text
 File "setup.py" not found. Directory cannot be installed in editable mode.
 A pyproject.toml file was found, but editable mode currently requires a
 setup.py based build.
+
+Installing build dependencies ... error
+Could not find a version that satisfies the requirement setuptools>=61
 ```
 
-It means the installed pip predates PEP 660 editable `pyproject.toml` support.
-Deploy a revision containing `setup.py`, reactivate the virtualenv, confirm
-setuptools, and retry:
+The second error means pip 20.2.4 found `pyproject.toml`, created an isolated build
+environment and attempted to download the declared build requirement. `--no-index`
+correctly prevented that download. Deploy this revision: `install-prod.sh` removes
+the obsolete deployed `pyproject.toml` and copies `setup.py`. Then reactivate the
+virtualenv, confirm the files and retry the original command:
 
 ```bash
 cd /DATA/mco/illumio-mco/rules_recertify
 . .venv/bin/activate
 test -f setup.py
+test ! -e pyproject.toml
 python -m pip --version
 python -c 'import setuptools; print(setuptools.__version__)'
 python -m pip install --no-index --no-deps -e .

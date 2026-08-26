@@ -63,6 +63,7 @@ sudo RULES_RECERTIFY_OWNER=illumio-mco \
 
 Replace the example owner/group with the actual production service account.
 
-Older RHEL 8 pip releases are supported through the repository's compatibility
-`setup.py`. If editable installation is unavailable, the supplied launcher runs
-directly from the deployed source tree without a pip installation.
+RHEL 8 pip 20.2.4 and offline setuptools 50.3.2 are supported through `setup.py`.
+The project deliberately avoids `pyproject.toml`, which would trigger an offline
+PEP 517 build-dependency download. If editable installation is unavailable, the
+supplied launcher runs directly from the deployed source tree without pip.

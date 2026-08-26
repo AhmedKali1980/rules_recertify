@@ -22,8 +22,10 @@ class ProductionInstallerTest(unittest.TestCase):
             (target / ".env").write_text("PCE=preserved\n", encoding="utf-8")
             (target / "config/local.json").write_text('{"preserved": true}\n', encoding="utf-8")
             (target / "var/state/sentinel").write_text("state", encoding="utf-8")
+            (target / "pyproject.toml").write_text('[build-system]\nrequires=["setuptools>=61"]\n', encoding="utf-8")
             subprocess.run(["bash", "scripts/install-prod.sh"], check=True, env=environment,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             self.assertEqual((target / ".env").read_text(encoding="utf-8"), "PCE=preserved\n")
             self.assertIn("preserved", (target / "config/local.json").read_text(encoding="utf-8"))
             self.assertEqual((target / "var/state/sentinel").read_text(encoding="utf-8"), "state")
+            self.assertFalse((target / "pyproject.toml").exists())

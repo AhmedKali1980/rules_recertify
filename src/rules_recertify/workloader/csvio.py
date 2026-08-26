@@ -64,7 +64,7 @@ def parse_bool(value: str) -> Optional[bool]:
 
 
 _PORT = re.compile(r"^\s*(\d+)\s+(TCP|UDP)\s+\((\d+)\)\s*$", re.I)
-_PROTOCOL = re.compile(r"^\s*0\s+(ICMP|IGMP)\s+\((\d+)\)\s*$", re.I)
+_PROTOCOL = re.compile(r"^\s*0\s+(ICMP|IGMP|IPv6-ICMP)\s+\((\d+)\)\s*$", re.I)
 _MORE = re.compile(r"^\s*\+\s*(\d+)\s+more\s*$", re.I)
 
 

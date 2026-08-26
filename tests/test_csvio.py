@@ -27,8 +27,12 @@ class CsvIoTest(unittest.TestCase):
             self.assertEqual(list(read_rows(path, ("a", "b")))[0]["b"], "x;y")
 
     def test_flows_by_port_and_more(self):
-        rows, complete, omitted = parse_flows_by_port("5353 UDP (2); 0 ICMP (9); + 13 more")
-        self.assertEqual(rows, [{"port": 5353, "protocol": "UDP", "flows": 2}, {"port": None, "protocol": "ICMP", "flows": 9}])
+        rows, complete, omitted = parse_flows_by_port("5353 UDP (2); 0 ICMP (9); 0 IPv6-ICMP (7); + 13 more")
+        self.assertEqual(rows, [
+            {"port": 5353, "protocol": "UDP", "flows": 2},
+            {"port": None, "protocol": "ICMP", "flows": 9},
+            {"port": None, "protocol": "IPV6-ICMP", "flows": 7},
+        ])
         self.assertFalse(complete); self.assertEqual(omitted, 13)
 
     def test_boolean_spellings(self):

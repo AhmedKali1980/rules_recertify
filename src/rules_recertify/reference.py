@@ -6,13 +6,18 @@ from pathlib import Path
 from typing import Dict, List
 
 from .history.database import Database
-from .resolution.workloads import matching_nz3, ocs_name_from_ip, select_addresses, short_hostname
+from .resolution.workloads import matching_nz3, normalize_ip_list_member, ocs_name_from_ip, select_addresses, short_hostname
 from .workloader.csvio import parse_bool, read_rows
 
 
 def ingest_reference(db: Database, workloads_file: Path, ip_lists_file: Path, run_id: str) -> Dict[str, int]:
     timestamp = datetime.now(timezone.utc).isoformat()
-    ip_rows = list(read_rows(ip_lists_file, ("name", "include")))
+    raw_ip_rows = list(read_rows(ip_lists_file, ("name", "include")))
+    ip_rows = []
+    for row in raw_ip_rows:
+        normalized = normalize_ip_list_member(row["include"])
+        if normalized:
+            ip_rows.append({**row, "include": normalized})
     workload_rows = list(read_rows(workloads_file, ("href", "hostname", "interfaces", "ip_with_default_gw", "app", "env", "managed")))
     quality = []
     with db.connect() as connection:

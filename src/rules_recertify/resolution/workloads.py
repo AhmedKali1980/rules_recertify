@@ -55,11 +55,24 @@ def ocs_name_from_ip(address: str) -> str:
     return str(parsed).replace(".", "-") if parsed.version == 4 else ""
 
 
+def normalize_ip_list_member(value: str) -> str:
+    """Remove an Illumio inline comment from an IP-list member.
+
+    Illumio comments start with ``#``. Workloader 12 exports the same delimiter
+    as ``$`` in some PCE data, so both representations are accepted.
+    """
+    normalized = value.strip()
+    for delimiter in ("#", "$"):
+        normalized = normalized.partition(delimiter)[0].strip()
+    return normalized
+
+
 def matching_nz3(address: str, ip_lists: Iterable[Mapping[str, str]]) -> List[Tuple[str, str]]:
     parsed = ipaddress.ip_address(address)
     matches: List[Tuple[str, str]] = []
     for row in ip_lists:
-        name, member = row.get("name", ""), row.get("include", row.get("member", ""))
+        name = row.get("name", "")
+        member = normalize_ip_list_member(row.get("include", row.get("member", "")))
         if not name.startswith("NZ3_"):
             continue
         try:

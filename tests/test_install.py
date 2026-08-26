@@ -19,6 +19,7 @@ class ProductionInstallerTest(unittest.TestCase):
             self.assertTrue((target / "src/rules_recertify/cli.py").is_file())
             self.assertTrue((target / "setup.py").is_file())
             self.assertEqual((target / ".env").stat().st_mode & 0o777, 0o600)
+            self.assertEqual((target / "scripts/rules-recertify").stat().st_mode & 0o777, 0o755)
             (target / ".env").write_text("PCE=preserved\n", encoding="utf-8")
             (target / "config/local.json").write_text('{"preserved": true}\n', encoding="utf-8")
             (target / "var/state/sentinel").write_text("state", encoding="utf-8")

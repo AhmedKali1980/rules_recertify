@@ -1,0 +1,19 @@
+{
+  "pce": "pce-prd-l3.wr",
+  "workloader_dir": "/DATA/WORKLOADER/ver12",
+  "state_db": "var/state/rules_recertify.sqlite",
+  "raw_dir": "var/raw",
+  "output_dir": "var/output",
+  "log_dir": "var/logs",
+  "traffic_window_days": 1,
+  "traffic_batch_size": 500,
+  "traffic_max_results": 10000,
+  "query_initial_delay_minutes": 30,
+  "query_poll_interval_minutes": 10,
+  "query_deadline_minutes": 1380,
+  "batch_cooldown_seconds": 0,
+  "retention_days": 200,
+  "default_lookback_days": 180,
+  "policy_version": "draft",
+  "smtp_enabled": false
+}

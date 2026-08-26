@@ -55,7 +55,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         configure_logging(log_path, args.verbose)
         db = Database(Path(settings.state_db))
         if args.command == "validate-config":
-            print(json.dumps({"status": "ok", "pce": settings.pce, "workloader": str(settings.workloader)}, indent=2)); return 0
+            print(json.dumps({
+                "status": "ok",
+                "pce": settings.pce,
+                "workloader": str(settings.workloader),
+                "state_db": settings.state_db,
+                "raw_dir": settings.raw_dir,
+                "output_dir": settings.output_dir,
+                "log_dir": settings.log_dir,
+                "traffic_batch_size": settings.traffic_batch_size,
+                "smtp_enabled": settings.smtp_enabled,
+            }, indent=2)); return 0
         if args.command == "init-db":
             db.initialize(); print(settings.state_db); return 0
         if args.command == "collect":

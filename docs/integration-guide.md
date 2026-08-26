@@ -149,6 +149,19 @@ Edit `config/local.json`. Important settings are:
 Edit `.env` for PCE/Workloader environment overrides and SMTP values. The parser
 never evaluates shell syntax. Do not run `source .env`; do not commit it.
 
+`PCE`, `WORKLOADER_DIR`, and `STATE_DB` in `.env` override values from
+`config/local.json`. They are commented out in new installations to avoid an
+accidental override. For an installation created from an earlier template, check
+only these non-secret keys:
+
+```bash
+grep -E '^(PCE|WORKLOADER_DIR|STATE_DB)=' .env || true
+```
+
+Remove an unintended `STATE_DB=var/state/rules_recertify.sqlite` line, or replace
+it with the absolute production path. `validate-config` prints all effective paths;
+the displayed `state_db` is authoritative.
+
 Validate and initialize:
 
 ```bash

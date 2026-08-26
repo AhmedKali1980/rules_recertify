@@ -12,6 +12,12 @@ class CsvContractError(ValueError):
     pass
 
 
+# Workloader query bodies and expanded service definitions can exceed Python's
+# conservative 128 KiB CSV field default. Keep a finite ceiling so malformed
+# inputs cannot request unbounded memory while accepting realistic exports.
+MAX_CSV_FIELD_SIZE = 16 * 1024 * 1024
+
+
 def detect_delimiter(sample: str) -> str:
     try:
         return csv.Sniffer().sniff(sample, delimiters=",;").delimiter
@@ -21,6 +27,7 @@ def detect_delimiter(sample: str) -> str:
 
 
 def read_rows(path: Path, required: Iterable[str] = ()) -> Iterator[Dict[str, str]]:
+    csv.field_size_limit(MAX_CSV_FIELD_SIZE)
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         sample = handle.read(8192)
         handle.seek(0)

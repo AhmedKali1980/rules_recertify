@@ -1,3 +1,4 @@
+import csv
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,19 @@ from rules_recertify.workloader.csvio import CsvContractError, parse_bool, parse
 
 
 class CsvIoTest(unittest.TestCase):
+    def test_large_workloader_query_body(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "usage.csv"
+            query_body = "x" * 200_000
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["rule_href", "query_body"])
+                writer.writerow(["/rules/1", query_body])
+
+            rows = list(read_rows(path, ("rule_href", "query_body")))
+
+        self.assertEqual(rows[0]["query_body"], query_body)
+
     def test_semicolon_and_quoted_json(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "a.csv"

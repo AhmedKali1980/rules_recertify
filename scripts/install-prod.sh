@@ -44,6 +44,11 @@ if [[ ! -e "$TARGET/.env" ]]; then
   install -m 0600 "$TARGET/.env.example" "$TARGET/.env"
 fi
 
+if grep -q '^STATE_DB=var/state/rules_recertify\.sqlite$' "$TARGET/.env"; then
+  printf '%s\n' 'WARNING: .env overrides the absolute production state_db with a relative path.' >&2
+  printf '%s\n' 'Remove STATE_DB from .env or set its absolute /DATA path before collection.' >&2
+fi
+
 if [[ $(id -u) -eq 0 ]]; then
   chown -R "$OWNER:$GROUP" "$TARGET"
 else

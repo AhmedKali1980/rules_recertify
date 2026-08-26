@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from .history.database import Database
-from .resolution.workloads import matching_nz3, normalize_ip_list_member, ocs_name_from_ip, select_addresses, short_hostname
+from .resolution.workloads import matching_prepared_nz3, normalize_ip_list_member, ocs_name_from_ip, prepare_nz3_members, select_addresses, short_hostname
 from .workloader.csvio import parse_bool, read_rows
 
 
@@ -19,6 +19,7 @@ def ingest_reference(db: Database, workloads_file: Path, ip_lists_file: Path, ru
         if normalized:
             ip_rows.append({**row, "include": normalized})
     workload_rows = list(read_rows(workloads_file, ("href", "hostname", "interfaces", "ip_with_default_gw", "app", "env", "managed")))
+    prepared_nz3 = prepare_nz3_members(ip_rows)
     quality = []
     with db.connect() as connection:
         connection.execute("DELETE FROM ip_lists")
@@ -36,7 +37,7 @@ def ingest_reference(db: Database, workloads_file: Path, ip_lists_file: Path, ru
             enriched["short_hostname"] = short_hostname(row["hostname"])
             enriched["address_details"] = []
             for address in addresses:
-                matches = matching_nz3(address, ip_rows)
+                matches = matching_prepared_nz3(address, prepared_nz3)
                 enriched["address_details"].append({"ip": address, "ocs_name_from_IP": ocs_name_from_ip(address),
                                                      "IPLIST": [m[0] for m in matches], "SUBNET": [m[1] for m in matches]})
             connection.execute("""INSERT INTO workloads VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Sequence, Tuple, Union
 
 HOSTNAME_EMPTY = "[hostname_empty]"
+IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
+PreparedNz3Member = Tuple[str, str, IPAddress, IPAddress]
 
 
 def parse_interfaces(value: str) -> Tuple[List[str], List[str]]:
@@ -67,9 +69,8 @@ def normalize_ip_list_member(value: str) -> str:
     return normalized
 
 
-def matching_nz3(address: str, ip_lists: Iterable[Mapping[str, str]]) -> List[Tuple[str, str]]:
-    parsed = ipaddress.ip_address(address)
-    matches: List[Tuple[str, str]] = []
+def prepare_nz3_members(ip_lists: Iterable[Mapping[str, str]]) -> List[PreparedNz3Member]:
+    prepared: List[PreparedNz3Member] = []
     for row in ip_lists:
         name = row.get("name", "")
         member = normalize_ip_list_member(row.get("include", row.get("member", "")))
@@ -78,8 +79,33 @@ def matching_nz3(address: str, ip_lists: Iterable[Mapping[str, str]]) -> List[Tu
         try:
             network = ipaddress.ip_network(member, strict=False)
         except ValueError:
+            start_text, separator, end_text = member.partition("-")
+            if not separator:
+                continue
+            try:
+                start = ipaddress.ip_address(start_text.strip())
+                end = ipaddress.ip_address(end_text.strip())
+            except ValueError:
+                continue
+            if start.version != end.version or int(start) > int(end):
+                continue
+            prepared.append((name, member, start, end))
+        else:
+            prepared.append((name, str(network), network.network_address, network.broadcast_address))
+    return prepared
+
+
+def matching_prepared_nz3(address: str, prepared: Iterable[PreparedNz3Member]) -> List[Tuple[str, str]]:
+    parsed = ipaddress.ip_address(address)
+    matches: List[Tuple[str, str]] = []
+    for name, member, start, end in prepared:
+        if parsed.version != start.version:
             continue
-        value = (name, str(network))
-        if parsed in network and value not in matches:
+        value = (name, member)
+        if int(start) <= int(parsed) <= int(end) and value not in matches:
             matches.append(value)
     return sorted(matches)
+
+
+def matching_nz3(address: str, ip_lists: Iterable[Mapping[str, str]]) -> List[Tuple[str, str]]:
+    return matching_prepared_nz3(address, prepare_nz3_members(ip_lists))

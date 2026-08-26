@@ -1,5 +1,5 @@
 import unittest
-from rules_recertify.resolution.workloads import matching_nz3, normalize_ip_list_member, ocs_name_from_ip, parse_interfaces, select_addresses, short_hostname
+from rules_recertify.resolution.workloads import matching_nz3, matching_prepared_nz3, normalize_ip_list_member, ocs_name_from_ip, parse_interfaces, prepare_nz3_members, select_addresses, short_hostname
 
 class WorkloadTest(unittest.TestCase):
     def test_interfaces_are_parsed_and_deduplicated(self):
@@ -16,3 +16,9 @@ class WorkloadTest(unittest.TestCase):
         self.assertEqual(normalize_ip_list_member("10.20.30.0/24# production"), "10.20.30.0/24")
         self.assertEqual(normalize_ip_list_member("10.20.30.40$SERVER01"), "10.20.30.40")
         self.assertEqual(matching_nz3("10.20.30.40", [{"name":"NZ3_A","include":"10.20.30.0/24# production"}]), [("NZ3_A", "10.20.30.0/24")])
+    def test_prepared_nz3_members_support_ranges(self):
+        prepared = prepare_nz3_members([
+            {"name": "NZ3_RANGE", "include": "10.20.30.10-10.20.30.50# servers"},
+            {"name": "APP_NZ3_IGNORED", "include": "10.20.30.0/24"},
+        ])
+        self.assertEqual(matching_prepared_nz3("10.20.30.40", prepared), [("NZ3_RANGE", "10.20.30.10-10.20.30.50")])

@@ -1,6 +1,7 @@
 {
   "pce": "pce-prd-l3.wr",
   "workloader_dir": "/DATA/WORKLOADER/ver12",
+  "workloader_config_file": "/DATA/WORKLOADER/ver12/pce.yaml",
   "state_db": "/DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite",
   "raw_dir": "/DATA/mco/illumio-mco/rules_recertify/var/raw",
   "output_dir": "/DATA/mco/illumio-mco/rules_recertify/var/output",

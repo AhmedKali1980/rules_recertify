@@ -30,7 +30,8 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
     db = Database(Path(settings.state_db)); db.initialize()
     details: Dict[str, object] = {"run_id": run_id, "traffic_start": traffic_start.isoformat(), "traffic_end": traffic_end.isoformat(), "batches": []}
     db.begin_run(run_id, "COLLECTION", details)
-    runner = WorkloaderRunner(settings.workloader, settings.pce, run_dir / "workloader.log")
+    config_file = Path(settings.workloader_config_file) if settings.workloader_config_file else None
+    runner = WorkloaderRunner(settings.workloader, settings.pce, run_dir / "workloader.log", config_file)
     status = "ERROR"
     try:
         rulesets_file = run_dir / "rulesets.csv"

@@ -43,6 +43,7 @@ def load_dotenv(path: Optional[Path]) -> Dict[str, str]:
 class Settings:
     pce: str
     workloader_dir: str = "/DATA/WORKLOADER/ver12"
+    workloader_config_file: str = ""
     state_db: str = "var/state/rules_recertify.sqlite"
     raw_dir: str = "var/raw"
     output_dir: str = "var/output"
@@ -94,7 +95,12 @@ def load_settings(path: Path, dotenv: Optional[Path] = None) -> Settings:
     unknown = set(data) - allowed
     if unknown:
         raise ConfigurationError(f"Unknown configuration keys: {', '.join(sorted(unknown))}")
-    env_map = {"pce": "PCE", "workloader_dir": "WORKLOADER_DIR", "state_db": "STATE_DB"}
+    env_map = {
+        "pce": "PCE",
+        "workloader_dir": "WORKLOADER_DIR",
+        "workloader_config_file": "WORKLOADER_CONFIG_FILE",
+        "state_db": "STATE_DB",
+    }
     for key, env_name in env_map.items():
         if os.getenv(env_name):
             data[key] = os.environ[env_name]

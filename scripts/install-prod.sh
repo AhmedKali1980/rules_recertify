@@ -14,11 +14,6 @@ fi
 
 install -d -m 0750 "$TARGET"
 
-# Migration from the first packaging layout: pip 20.2 on the offline RHEL 8 host
-# treats pyproject.toml as a PEP 517 trigger and tries to download setuptools>=61.
-# Production uses the checked-in legacy setup.py with its installed setuptools.
-rm -f "$TARGET/pyproject.toml"
-
 # Overlay version-controlled application files while preserving local secrets,
 # configuration, virtualenv, and runtime state during upgrades.
 tar \
@@ -30,6 +25,11 @@ tar \
   --exclude='*.sqlite' \
   --exclude='*.sqlite-*' \
   -C "$SOURCE" -cf - . | tar -C "$TARGET" -xf -
+
+# Migration from the first packaging layout: pip 20.2 on the offline RHEL 8 host
+# treats pyproject.toml as a PEP 517 trigger and tries to download setuptools>=61.
+# Remove it after the overlay as archives can contain an untracked copy.
+rm -f "$TARGET/pyproject.toml"
 
 install -d -m 0750 \
   "$TARGET/var/state" \

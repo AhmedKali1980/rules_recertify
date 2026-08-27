@@ -61,6 +61,9 @@ and `var/logs` with mode `0750`. On a first install it creates
 `config/local.json` from the production example and `.env` with mode `0600`.
 During an upgrade it preserves `.env`, `config/local.json`, `.venv`, and the entire
 `var` tree. It does not install RPMs, credentials, cron, or Python wheels.
+Set `workloader_config_file` in `config/local.json` to the absolute Workloader
+`pce.yaml` path. Every managed Workloader invocation passes it with
+`--config-file`, so execution does not depend on the cron working directory.
 
 ### 2.3 Create the Python environment
 

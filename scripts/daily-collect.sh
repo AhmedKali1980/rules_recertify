@@ -15,5 +15,5 @@ if [[ -x "${VENV}/bin/python" ]]; then
 fi
 END="$(date -u +%F)"
 START="$(date -u -d 'yesterday' +%F)"
-exec "${ROOT}/scripts/rules-recertify" --config "$CONFIG" collect \
+exec "${ROOT}/scripts/rules-recertify" --config "$CONFIG" --env-file "${ROOT}/.env" collect \
   --traffic-start "$START" --traffic-end "$END"

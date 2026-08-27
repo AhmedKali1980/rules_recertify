@@ -26,11 +26,14 @@ class CommandResult:
 
 
 class WorkloaderRunner:
-    def __init__(self, binary: Path, pce: str, log_file: Path):
-        self.binary, self.pce, self.log_file = binary, pce, log_file
+    def __init__(self, binary: Path, pce: str, log_file: Path, config_file: Optional[Path] = None):
+        self.binary, self.pce, self.log_file, self.config_file = binary, pce, log_file, config_file
 
     def run(self, args: Sequence[str], timeout: Optional[int] = None) -> CommandResult:
-        command = [str(self.binary), "--pce", self.pce, "--log-file", str(self.log_file), *map(str, args)]
+        command = [str(self.binary)]
+        if self.config_file:
+            command.extend(["--config-file", str(self.config_file)])
+        command.extend(["--pce", self.pce, "--log-file", str(self.log_file), *map(str, args)])
         LOG.info("Executing Workloader command: %s", " ".join(command))
         started = time.monotonic()
         try:

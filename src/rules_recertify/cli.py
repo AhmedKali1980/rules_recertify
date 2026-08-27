@@ -59,6 +59,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "status": "ok",
                 "pce": settings.pce,
                 "workloader": str(settings.workloader),
+                "workloader_config_file": settings.workloader_config_file,
                 "state_db": settings.state_db,
                 "raw_dir": settings.raw_dir,
                 "output_dir": settings.output_dir,

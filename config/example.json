@@ -1,6 +1,7 @@
 {
   "pce": "pce-prd-l3.wr",
   "workloader_dir": "/DATA/WORKLOADER/ver12",
+  "workloader_config_file": "/DATA/WORKLOADER/ver12/pce.yaml",
   "state_db": "var/state/rules_recertify.sqlite",
   "raw_dir": "var/raw",
   "output_dir": "var/output",

@@ -47,6 +47,9 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         details["rules"] = db.upsert_rules(inventory, datetime.now(timezone.utc).isoformat())
         batches = bin_pack_rulesets(count_rules_by_ruleset(inventory), settings.traffic_batch_size)
         for index, batch in enumerate(batches, 1):
+            details["current_batch"] = index
+            details["current_stage"] = "SUBMITTING"
+            details["batch_count"] = len(batches)
             hrefs = run_dir / f"batch_{index:04d}_hrefs.csv"
             write_rows(hrefs, ["href"], ({"href": item.href} for item in batch))
             submitted = run_dir / f"batch_{index:04d}_submitted.csv"
@@ -54,6 +57,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                         "--expand-svcs", "--traffic-count", "--traffic-start", traffic_start.isoformat(),
                         "--traffic-end", traffic_end.isoformat(), "--traffic-max-results", str(settings.traffic_max_results),
                         "--traffic-rule-limit", str(settings.traffic_batch_size), "--output-file", str(submitted)])
+            details["current_stage"] = "POLLING"
             batch_result = _poll_batch(runner, submitted, run_dir, index, settings, no_wait)
             cast_batches = details["batches"]
             assert isinstance(cast_batches, list)
@@ -61,9 +65,12 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
             if batch_result["output"]:
                 usage_rows = list(read_rows(Path(str(batch_result["output"])), USAGE_REQUIRED))
                 _validate_windows(usage_rows, traffic_start, traffic_end)
+                details["current_stage"] = "INGESTING"
                 db.upsert_usage(run_id, usage_rows)
             if settings.batch_cooldown_seconds and index < len(batches):
                 time.sleep(settings.batch_cooldown_seconds)
+        details.pop("current_batch", None)
+        details.pop("current_stage", None)
         summary = _summarize_batches(details["batches"])
         details.update(summary)
         artifacts = []

@@ -41,7 +41,8 @@ install -d -m 0750 \
 # them. Reapply the operational script permissions on every installation.
 chmod 0755 "$TARGET/scripts/install-prod.sh" \
   "$TARGET/scripts/rules-recertify" \
-  "$TARGET/scripts/daily-collect.sh"
+  "$TARGET/scripts/daily-collect.sh" \
+  "$TARGET/scripts/check-collection.sh"
 
 if [[ ! -e "$TARGET/config/local.json" ]]; then
   install -m 0640 "$TARGET/config/production.example.json" "$TARGET/config/local.json"

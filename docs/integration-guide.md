@@ -229,6 +229,15 @@ The collector:
 8. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
 9. sends one non-blocking SMTP summary.
 
+Check the latest collection with a single concise status line:
+
+```bash
+./scripts/check-collection.sh
+```
+
+Exit code `0` means a complete success, `1` means running or warning, `2` means
+failure or inconsistency, and `3` means the status could not be determined.
+
 If one ruleset alone exceeds 500 rules, collection stops with an explicit error.
 Do not raise the limit until the PCE owner approves it.
 

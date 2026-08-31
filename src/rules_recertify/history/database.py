@@ -99,6 +99,14 @@ class Database:
             db.execute("UPDATE runs SET status=?,finished_at=?,details_json=? WHERE run_id=?",
                        (status, _now(), json.dumps(details, sort_keys=True), run_id))
 
+    def update_run_details(self, run_id: str, details: Mapping[str, object]) -> None:
+        """Publish progress without marking an active run as finished."""
+        with self.connect() as db:
+            db.execute(
+                "UPDATE runs SET details_json=? WHERE run_id=? AND status='RUNNING'",
+                (json.dumps(details, sort_keys=True), run_id),
+            )
+
     def add_quality(self, run_id: str, category: str, object_id: str, message: str) -> None:
         with self.connect() as db:
             db.execute("INSERT OR IGNORE INTO data_quality VALUES(?,?,?,?)", (run_id, category, object_id, message))

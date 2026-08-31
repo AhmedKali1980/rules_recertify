@@ -5,6 +5,20 @@ from rules_recertify.history.database import Database, ensure_sqlite_compatible
 from rules_recertify.history.metrics import summarize_usage
 
 class HistoryTest(unittest.TestCase):
+    def test_progress_update_does_not_finish_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(Path(directory) / "db.sqlite")
+            db.initialize()
+            db.begin_run("progress", "COLLECTION", {"current_stage": "STARTING"})
+            db.update_run_details("progress", {"current_stage": "POLLING", "current_batch": 2})
+            with db.connect() as connection:
+                row = connection.execute(
+                    "SELECT status, finished_at, details_json FROM runs WHERE run_id='progress'"
+                ).fetchone()
+            self.assertEqual(row["status"], "RUNNING")
+            self.assertIsNone(row["finished_at"])
+            self.assertEqual(json.loads(row["details_json"])["current_batch"], 2)
+
     def test_production_sqlite_version_is_supported(self):
         ensure_sqlite_compatible((3, 26, 0))
         with self.assertRaises(RuntimeError):

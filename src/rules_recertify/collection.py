@@ -28,7 +28,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
     run_dir = Path(settings.raw_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     db = Database(Path(settings.state_db)); db.initialize()
-    details: Dict[str, object] = {"run_id": run_id, "traffic_start": traffic_start.isoformat(), "traffic_end": traffic_end.isoformat(), "batches": []}
+    details: Dict[str, object] = {"run_id": run_id, "traffic_start": traffic_start.isoformat(), "traffic_end": traffic_end.isoformat(), "batches": [], "current_stage": "EXPORTING_RULESETS"}
     db.begin_run(run_id, "COLLECTION", details)
     config_file = Path(settings.workloader_config_file) if settings.workloader_config_file else None
     runner = WorkloaderRunner(settings.workloader, settings.pce, run_dir / "workloader.log", config_file)
@@ -41,6 +41,8 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         href_file = run_dir / "ruleset_hrefs_all.csv"
         write_rows(href_file, ["href"], all_hrefs)
 
+        details["current_stage"] = "EXPORTING_RULE_INVENTORY"
+        db.update_run_details(run_id, details)
         inventory_file = run_dir / "rules_inventory.csv"
         runner.run(["rule-export", "--ruleset-hrefs", str(href_file), "--policy-version", settings.policy_version, "--output-file", str(inventory_file)])
         inventory = list(read_rows(inventory_file, RULE_REQUIRED))
@@ -50,6 +52,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
             details["current_batch"] = index
             details["current_stage"] = "SUBMITTING"
             details["batch_count"] = len(batches)
+            db.update_run_details(run_id, details)
             hrefs = run_dir / f"batch_{index:04d}_hrefs.csv"
             write_rows(hrefs, ["href"], ({"href": item.href} for item in batch))
             submitted = run_dir / f"batch_{index:04d}_submitted.csv"
@@ -58,6 +61,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                         "--traffic-end", traffic_end.isoformat(), "--traffic-max-results", str(settings.traffic_max_results),
                         "--traffic-rule-limit", str(settings.traffic_batch_size), "--output-file", str(submitted)])
             details["current_stage"] = "POLLING"
+            db.update_run_details(run_id, details)
             batch_result = _poll_batch(runner, submitted, run_dir, index, settings, no_wait)
             cast_batches = details["batches"]
             assert isinstance(cast_batches, list)
@@ -66,7 +70,9 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                 usage_rows = list(read_rows(Path(str(batch_result["output"])), USAGE_REQUIRED))
                 _validate_windows(usage_rows, traffic_start, traffic_end)
                 details["current_stage"] = "INGESTING"
+                db.update_run_details(run_id, details)
                 db.upsert_usage(run_id, usage_rows)
+            db.update_run_details(run_id, details)
             if settings.batch_cooldown_seconds and index < len(batches):
                 time.sleep(settings.batch_cooldown_seconds)
         details.pop("current_batch", None)

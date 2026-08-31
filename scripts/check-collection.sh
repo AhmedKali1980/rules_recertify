@@ -81,12 +81,22 @@ except (OSError, json.JSONDecodeError) as exc:
     stop(2, f"CRITICAL run={run_id} manifest_invalid={type(exc).__name__}")
 
 manifest_status = str(manifest.get("status", "UNKNOWN")).upper()
-total = int(manifest.get("total", 0) or 0)
-completed = int(manifest.get("completed", 0) or 0)
-pending = int(manifest.get("pending", 0) or 0)
-expired = int(manifest.get("expired", 0) or 0)
-unknown = int(manifest.get("unknown", 0) or 0)
-batches = len(manifest.get("batches", []))
+batch_values = manifest.get("batches", [])
+batches = len(batch_values)
+
+
+def count(name):
+    value = manifest.get(name)
+    if value is not None:
+        return int(value or 0)
+    return sum(int(batch.get(name, 0) or 0) for batch in batch_values)
+
+
+total = count("total")
+completed = count("completed")
+pending = count("pending")
+expired = count("expired")
+unknown = count("unknown")
 expected_batches = int(manifest.get("batch_count", batches) or batches)
 
 duration = "?"
@@ -103,6 +113,13 @@ common = (
     f"batches={batches}/{expected_batches} completed={completed}/{total} "
     f"pending={pending} expired={expired} unknown={unknown} duration={duration}"
 )
+
+failed_at = ""
+if manifest.get("current_batch") or manifest.get("current_stage"):
+    failed_at = (
+        f" failed_at={manifest.get('current_batch', '?')}/"
+        f"{manifest.get('current_stage', '?')}"
+    )
 
 if (
     status == "SUCCESS"
@@ -122,5 +139,5 @@ if status == "WARNING" or manifest_status == "WARNING":
 error = " ".join(str(manifest.get("error", "unspecified")).split())
 if len(error) > 180:
     error = error[:177] + "..."
-stop(2, f"CRITICAL {common} error={error}")
+stop(2, f"CRITICAL {common}{failed_at} error={error}")
 PY

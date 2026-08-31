@@ -85,3 +85,47 @@ class CheckCollectionTest(unittest.TestCase):
         self.assertEqual(len(result.stdout.splitlines()), 1)
         self.assertIn("CRITICAL run=run-interrupted", result.stdout)
         self.assertIn("interrupted_collection", result.stdout)
+
+    def test_error_summarizes_completed_batches_and_failure_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite"
+            raw_dir = root / "raw"
+            config = root / "config.json"
+            env_file = root / ".env"
+            config.write_text(json.dumps({
+                "pce": "pce", "state_db": str(database_path),
+                "raw_dir": str(raw_dir),
+            }), encoding="utf-8")
+            env_file.write_text("", encoding="utf-8")
+            env_file.chmod(0o600)
+            details = {
+                "status": "ERROR", "batch_count": 32,
+                "current_batch": 5, "current_stage": "SUBMITTING",
+                "batches": [
+                    {"batch": number, "total": 500, "completed": 500}
+                    for number in range(1, 5)
+                ],
+                "error": "Workloader was terminated by SIGKILL",
+            }
+            database = Database(database_path)
+            database.initialize()
+            database.begin_run("run-error", "COLLECTION", details)
+            database.finish_run("run-error", "ERROR", details)
+            run_dir = raw_dir / "run-error"
+            run_dir.mkdir(parents=True)
+            (run_dir / "manifest.json").write_text(json.dumps(details), encoding="utf-8")
+            environment = dict(os.environ)
+            environment.update({
+                "RULES_RECERTIFY_CONFIG": str(config),
+                "RULES_RECERTIFY_ENV_FILE": str(env_file),
+                "RULES_RECERTIFY_LOCK": str(root / "collect.lock"),
+            })
+            result = subprocess.run(
+                ["bash", "scripts/check-collection.sh"], env=environment,
+                check=False, capture_output=True, text=True,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("batches=4/32 completed=2000/2000", result.stdout)
+        self.assertIn("failed_at=5/SUBMITTING", result.stdout)

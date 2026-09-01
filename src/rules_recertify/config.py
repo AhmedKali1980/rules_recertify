@@ -49,12 +49,12 @@ class Settings:
     output_dir: str = "var/output"
     log_dir: str = "var/logs"
     traffic_window_days: int = 1
-    traffic_batch_size: int = 500
+    traffic_batch_size: int = 100
     traffic_max_results: int = 10000
     query_initial_delay_minutes: int = 30
     query_poll_interval_minutes: int = 10
     query_deadline_minutes: int = 1380
-    batch_cooldown_seconds: int = 0
+    batch_cooldown_seconds: int = 60
     retention_days: int = 200
     default_lookback_days: int = 180
     policy_version: str = "draft"

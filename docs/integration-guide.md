@@ -221,7 +221,7 @@ The collector:
 
 1. exports all enabled and disabled rulesets;
 2. inventories rules without traffic expansion;
-3. counts and bin-packs whole rulesets into at most 500 rules;
+3. counts and bin-packs whole eligible rulesets up to the configured rule limit;
 4. submits sequential `rule-export --traffic-count --expand-svcs` batches;
 5. polls `rule-usage` and logs completion progress;
 6. never replaces a completed usage window with a later pending result;
@@ -238,8 +238,11 @@ Check the latest collection with a single concise status line:
 Exit code `0` means a complete success, `1` means running or warning, `2` means
 failure or inconsistency, and `3` means the status could not be determined.
 
-If one ruleset alone exceeds 500 rules, collection stops with an explicit error.
-Do not raise the limit until the PCE owner approves it.
+Rulesets above `traffic_batch_size` are not submitted for traffic analysis. They
+remain in the rule inventory, are listed in the manifest under
+`skipped_oversized_rulesets`, create `RULESET_SKIPPED_OVERSIZED` data-quality
+records, and force the collection status to `WARNING`. This makes deliberate
+partial collection auditable instead of silently omitting policy.
 
 ### 5.2 Initial backfill
 

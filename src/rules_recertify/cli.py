@@ -65,6 +65,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "output_dir": settings.output_dir,
                 "log_dir": settings.log_dir,
                 "traffic_batch_size": settings.traffic_batch_size,
+                "batch_cooldown_seconds": settings.batch_cooldown_seconds,
                 "smtp_enabled": settings.smtp_enabled,
             }, indent=2)); return 0
         if args.command == "init-db":

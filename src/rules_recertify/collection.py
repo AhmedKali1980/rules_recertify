@@ -12,7 +12,7 @@ from typing import Dict, List, Mapping, Optional, Sequence
 from .config import Settings
 from .history.database import Database
 from .notifications import send_summary
-from .workloader.batching import bin_pack_rulesets, count_rules_by_ruleset
+from .workloader.batching import count_rules_by_ruleset, partition_and_pack_rulesets
 from .workloader.csvio import query_window, read_rows, write_rows
 from .workloader.runner import WorkloaderRunner, sha256_file
 
@@ -47,7 +47,32 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         runner.run(["rule-export", "--ruleset-hrefs", str(href_file), "--policy-version", settings.policy_version, "--output-file", str(inventory_file)])
         inventory = list(read_rows(inventory_file, RULE_REQUIRED))
         details["rules"] = db.upsert_rules(inventory, datetime.now(timezone.utc).isoformat())
-        batches = bin_pack_rulesets(count_rules_by_ruleset(inventory), settings.traffic_batch_size)
+        batches, oversized = partition_and_pack_rulesets(
+            count_rules_by_ruleset(inventory), settings.traffic_batch_size
+        )
+        details["skipped_oversized_rulesets"] = [
+            {"ruleset_href": item.href, "rule_count": item.count}
+            for item in oversized
+        ]
+        details["skipped_oversized_ruleset_count"] = len(oversized)
+        details["skipped_oversized_rule_count"] = sum(item.count for item in oversized)
+        if oversized:
+            LOG.warning(
+                "Skipping rulesets above the traffic batch limit",
+                extra={
+                    "traffic_batch_size": settings.traffic_batch_size,
+                    "skipped_rulesets": len(oversized),
+                    "skipped_rules": details["skipped_oversized_rule_count"],
+                },
+            )
+        for item in oversized:
+            db.add_quality(
+                run_id,
+                "RULESET_SKIPPED_OVERSIZED",
+                item.href,
+                f"Ruleset has {item.count} rules, above traffic batch limit "
+                f"{settings.traffic_batch_size}",
+            )
         for index, batch in enumerate(batches, 1):
             details["current_batch"] = index
             details["current_stage"] = "SUBMITTING"
@@ -86,7 +111,12 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                 artifacts.append(record)
                 db.add_artifact(run_id, path.suffix.lstrip(".") or "file", str(path), record["sha256"])
         details["artifacts"] = artifacts
-        status = "SUCCESS" if not summary["pending"] and not summary["expired"] and not summary["unknown"] else "WARNING"
+        status = "SUCCESS" if (
+            not oversized
+            and not summary["pending"]
+            and not summary["expired"]
+            and not summary["unknown"]
+        ) else "WARNING"
         details["pruned_usage_windows"] = db.prune(settings.retention_days)
     except Exception as exc:
         details["error"] = str(exc)

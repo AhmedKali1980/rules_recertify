@@ -41,3 +41,15 @@ def bin_pack_rulesets(items: Sequence[RulesetCount], limit: int = 500) -> List[L
         else:
             bins.append((item.count, [item]))
     return [values for _, values in bins]
+
+
+def partition_and_pack_rulesets(
+    items: Sequence[RulesetCount], limit: int
+) -> Tuple[List[List[RulesetCount]], List[RulesetCount]]:
+    """Pack eligible whole rulesets and return oversized ones for audit."""
+    eligible = [item for item in items if item.count <= limit]
+    oversized = sorted(
+        (item for item in items if item.count > limit),
+        key=lambda item: item.href,
+    )
+    return bin_pack_rulesets(eligible, limit), oversized

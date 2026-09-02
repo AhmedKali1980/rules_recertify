@@ -53,6 +53,7 @@ class CheckCollectionTest(unittest.TestCase):
         self.assertEqual(len(result.stdout.splitlines()), 1)
         self.assertIn("OK run=run-1", result.stdout)
         self.assertIn("completed=2/2", result.stdout)
+        self.assertIn("scope_skipped=0 oversized_skipped=0", result.stdout)
 
     def test_unlocked_running_run_is_critical(self):
         with tempfile.TemporaryDirectory() as directory:

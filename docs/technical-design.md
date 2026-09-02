@@ -132,16 +132,20 @@ they give exact day-level last-hit reporting and make recovery inexpensive.
 
 ### 4.3 Rule selection semantics
 
-The confirmed policy is **touching application**: include a rule when, after applying ruleset scope, its effective source or destination can
-select a workload carrying one requested `app` label and the requested `env`
-label. Include rules scoped directly to that app/environment even when an endpoint
-uses Any. The workbook must state the selection mode.
+Traffic expansion is deliberately restricted before batching. A ruleset is
+eligible only when every inventory row exposes one identical, non-empty scope in
+the exact `app:<application_label>;env:<environment>` form and the application
+value exists as `key=app` in the label export from the same collection run.
+Empty scopes, label-group scopes, additional scope dimensions, malformed scopes,
+unknown application values, and inconsistent scopes are excluded. This prevents
+large label-group expansion from exhausting Workloader memory while constructing
+Explorer requests.
 
-Do not filter only on `ruleset_scope`: rules can reference the application from a
-differently scoped ruleset. Conversely, simple string matching can include rules
-whose label conjunction is impossible. Selection and expansion must evaluate
-selectors as Boolean expressions: OR between include groups, AND within a group,
-then exclusions and scope constraints.
+The metadata-only inventory remains auditable even for excluded rulesets. Each
+exclusion is written to the run manifest and Data Quality with a deterministic
+reason. Endpoint-based "touching application" selection may still be used by
+reporting within the resulting eligible policy population; it must not cause an
+excluded ruleset to be submitted for traffic expansion.
 
 Enabled and disabled rules are included, as are rules of disabled parent rulesets,
 allow/deny rules, custom-iptables rules, unscoped consumers, and rules without

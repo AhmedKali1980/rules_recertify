@@ -80,7 +80,7 @@ or approaches result limits.
 
 ### DEC-007 — Batching and polling defaults
 
-- Maximum traffic batch: 500 rules.
+- Maximum traffic batch: 100 rules.
 - Submission: sequential, no concurrent batches.
 - Cooldown: configurable.
 - Initial result delay: 30 minutes.
@@ -93,8 +93,14 @@ or approaches result limits.
   be supplied to the next poll.
 
 Because Workloader cannot accept rule hrefs, rulesets are bin-packed using the
-metadata inventory. If one ruleset exceeds 500 traffic-eligible rules, fail with a
-clear message unless an operator explicitly overrides `--traffic-rule-limit`.
+metadata inventory. Rulesets above the configured limit are excluded and audited
+rather than partially submitted.
+
+Before bin-packing, export labels and admit only rulesets with one consistent
+scope matching `app:<application_label>;env:<environment>`, where the application
+value exists under `key=app` in that label export. Empty, malformed, label-group,
+unknown-application, and inconsistent scopes remain in the raw inventory but are
+excluded from traffic expansion and recorded in the manifest and Data Quality.
 
 ### DEC-008 — Service representation
 

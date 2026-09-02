@@ -220,14 +220,17 @@ Run after the previous UTC day has closed:
 The collector:
 
 1. exports all enabled and disabled rulesets;
-2. inventories rules without traffic expansion;
-3. counts and bin-packs whole eligible rulesets up to the configured rule limit;
-4. submits sequential `rule-export --traffic-count --expand-svcs` batches;
-5. polls `rule-usage` and logs completion progress;
-6. never replaces a completed usage window with a later pending result;
-7. commits usage and port observations to SQLite;
-8. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
-9. sends one non-blocking SMTP summary.
+2. exports labels and builds the authoritative set of `app` label values;
+3. inventories rules without traffic expansion;
+4. admits only rulesets whose complete scope is `app:<value>;env:<value>` and
+   whose application value exists in the label export;
+5. counts and bin-packs whole eligible rulesets up to the configured rule limit;
+6. submits sequential `rule-export --traffic-count --expand-svcs` batches;
+7. polls `rule-usage` and logs completion progress;
+8. never replaces a completed usage window with a later pending result;
+9. commits usage and port observations to SQLite;
+10. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
+11. sends one non-blocking SMTP summary.
 
 Check the latest collection with a single concise status line:
 
@@ -243,6 +246,22 @@ remain in the rule inventory, are listed in the manifest under
 `skipped_oversized_rulesets`, create `RULESET_SKIPPED_OVERSIZED` data-quality
 records, and force the collection status to `WARNING`. This makes deliberate
 partial collection auditable instead of silently omitting policy.
+
+Rulesets with an empty scope, a scope other than the strict
+`app:<application_label>;env:<environment>` form, or an application value absent
+from the current `label-export` are also excluded from traffic expansion. The
+manifest records them in `excluded_scope_rulesets` with a reason, and the
+collector writes a corresponding `RULESET_SKIPPED_*` data-quality entry. The
+unexpanded inventory is still retained for audit.
+
+The structured application log emits one `Traffic ruleset selected` or
+`Traffic ruleset excluded` record per ruleset. Each record carries
+`selection`, `ruleset_href`, `ruleset_name`, `ruleset_scope`, `rule_count`, and,
+when applicable, `batch` or `reason`. For a concise post-run selection audit:
+
+```bash
+grep -E 'Traffic ruleset (selected|excluded)' var/logs/rules-recertify-*.jsonl
+```
 
 ### 5.2 Initial backfill
 

@@ -15,7 +15,22 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("run_id", "batch", "completed", "pending", "expired", "unknown", "total", "percent"):
+        for key in (
+            "run_id",
+            "batch",
+            "completed",
+            "pending",
+            "expired",
+            "unknown",
+            "total",
+            "percent",
+            "selection",
+            "reason",
+            "ruleset_href",
+            "ruleset_name",
+            "ruleset_scope",
+            "rule_count",
+        ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
         return json.dumps(payload, ensure_ascii=False)

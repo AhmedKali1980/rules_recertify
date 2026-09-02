@@ -12,13 +12,17 @@ from typing import Dict, List, Mapping, Optional, Sequence
 from .config import Settings
 from .history.database import Database
 from .notifications import send_summary
-from .workloader.batching import count_rules_by_ruleset, partition_and_pack_rulesets
+from .workloader.batching import (
+    partition_and_pack_rulesets,
+    select_application_scoped_rulesets,
+)
 from .workloader.csvio import query_window, read_rows, write_rows
 from .workloader.runner import WorkloaderRunner, sha256_file
 
 LOG = logging.getLogger(__name__)
 RULE_REQUIRED = ("ruleset_href", "rule_href")
 USAGE_REQUIRED = (*RULE_REQUIRED, "async_query_status", "flows", "flows_by_port", "query_body")
+LABEL_REQUIRED = ("key", "value")
 
 
 def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False) -> Dict[str, object]:
@@ -41,14 +45,60 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         href_file = run_dir / "ruleset_hrefs_all.csv"
         write_rows(href_file, ["href"], all_hrefs)
 
+        details["current_stage"] = "EXPORTING_LABELS"
+        db.update_run_details(run_id, details)
+        labels_file = run_dir / "labels.csv"
+        runner.run(["label-export", "--output-file", str(labels_file)])
+        labels = list(read_rows(labels_file, LABEL_REQUIRED))
+        application_labels = {
+            row["value"] for row in labels if row["key"].strip().lower() == "app"
+        }
+        details["application_label_count"] = len(application_labels)
+
         details["current_stage"] = "EXPORTING_RULE_INVENTORY"
         db.update_run_details(run_id, details)
         inventory_file = run_dir / "rules_inventory.csv"
         runner.run(["rule-export", "--ruleset-hrefs", str(href_file), "--policy-version", settings.policy_version, "--output-file", str(inventory_file)])
         inventory = list(read_rows(inventory_file, RULE_REQUIRED))
+        ruleset_metadata = _ruleset_metadata(inventory)
         details["rules"] = db.upsert_rules(inventory, datetime.now(timezone.utc).isoformat())
+        scoped_rulesets, scope_exclusions = select_application_scoped_rulesets(
+            inventory, application_labels
+        )
+        details["excluded_scope_rulesets"] = [asdict(item) for item in scope_exclusions]
+        details["excluded_scope_ruleset_count"] = len(scope_exclusions)
+        details["excluded_scope_rule_count"] = sum(
+            item.count for item in scope_exclusions
+        )
+        for item in scope_exclusions:
+            metadata = ruleset_metadata[item.href]
+            db.add_quality(
+                run_id,
+                f"RULESET_SKIPPED_{item.reason}",
+                item.href,
+                f"Ruleset excluded from traffic collection: scope={item.scope!r}",
+            )
+            LOG.info(
+                "Traffic ruleset excluded",
+                extra={
+                    "selection": "EXCLUDED",
+                    "reason": item.reason,
+                    "ruleset_href": item.href,
+                    "ruleset_name": metadata["name"],
+                    "ruleset_scope": item.scope,
+                    "rule_count": item.count,
+                },
+            )
+        if scope_exclusions:
+            LOG.info(
+                "Excluded rulesets without a valid application scope",
+                extra={
+                    "excluded_rulesets": len(scope_exclusions),
+                    "excluded_rules": details["excluded_scope_rule_count"],
+                },
+            )
         batches, oversized = partition_and_pack_rulesets(
-            count_rules_by_ruleset(inventory), settings.traffic_batch_size
+            scoped_rulesets, settings.traffic_batch_size
         )
         details["skipped_oversized_rulesets"] = [
             {"ruleset_href": item.href, "rule_count": item.count}
@@ -66,12 +116,24 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                 },
             )
         for item in oversized:
+            metadata = ruleset_metadata[item.href]
             db.add_quality(
                 run_id,
                 "RULESET_SKIPPED_OVERSIZED",
                 item.href,
                 f"Ruleset has {item.count} rules, above traffic batch limit "
                 f"{settings.traffic_batch_size}",
+            )
+            LOG.info(
+                "Traffic ruleset excluded",
+                extra={
+                    "selection": "EXCLUDED",
+                    "reason": "OVERSIZED",
+                    "ruleset_href": item.href,
+                    "ruleset_name": metadata["name"],
+                    "ruleset_scope": metadata["scope"],
+                    "rule_count": item.count,
+                },
             )
         for index, batch in enumerate(batches, 1):
             details["current_batch"] = index
@@ -80,6 +142,19 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
             db.update_run_details(run_id, details)
             hrefs = run_dir / f"batch_{index:04d}_hrefs.csv"
             write_rows(hrefs, ["href"], ({"href": item.href} for item in batch))
+            for item in batch:
+                metadata = ruleset_metadata[item.href]
+                LOG.info(
+                    "Traffic ruleset selected",
+                    extra={
+                        "selection": "SELECTED",
+                        "batch": index,
+                        "ruleset_href": item.href,
+                        "ruleset_name": metadata["name"],
+                        "ruleset_scope": metadata["scope"],
+                        "rule_count": item.count,
+                    },
+                )
             submitted = run_dir / f"batch_{index:04d}_submitted.csv"
             runner.run(["rule-export", "--ruleset-hrefs", str(hrefs), "--policy-version", settings.policy_version,
                         "--expand-svcs", "--traffic-count", "--traffic-start", traffic_start.isoformat(),
@@ -113,6 +188,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         details["artifacts"] = artifacts
         status = "SUCCESS" if (
             not oversized
+            and summary["total"] > 0
             and not summary["pending"]
             and not summary["expired"]
             and not summary["unknown"]
@@ -164,6 +240,20 @@ def _poll_batch(runner: WorkloaderRunner, original: Path, run_dir: Path, index: 
 def _summarize_batches(batches: object) -> Dict[str, int]:
     values = batches if isinstance(batches, list) else []
     return {key: sum(int(batch.get(key, 0)) for batch in values) for key in ("total", "completed", "pending", "expired", "unknown")}
+
+
+def _ruleset_metadata(rows: Sequence[Mapping[str, str]]) -> Dict[str, Dict[str, str]]:
+    metadata: Dict[str, Dict[str, str]] = {}
+    for row in rows:
+        href = row["ruleset_href"].strip()
+        metadata.setdefault(
+            href,
+            {
+                "name": row.get("ruleset_name", "").strip(),
+                "scope": row.get("ruleset_scope", "").strip(),
+            },
+        )
+    return metadata
 
 
 def _validate_windows(rows: Sequence[Mapping[str, str]], expected_start: date, expected_end: date) -> None:

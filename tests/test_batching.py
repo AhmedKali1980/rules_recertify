@@ -1,9 +1,11 @@
 import unittest
 from rules_recertify.workloader.batching import (
+    ExcludedRuleset,
     RulesetCount,
     OversizedRulesetError,
     bin_pack_rulesets,
     partition_and_pack_rulesets,
+    select_application_scoped_rulesets,
 )
 
 class BatchingTest(unittest.TestCase):
@@ -31,4 +33,26 @@ class BatchingTest(unittest.TestCase):
         self.assertEqual(
             {item.href for batch in batches for item in batch},
             {"exact", "small-a", "small-b"},
+        )
+
+    def test_only_known_application_scopes_are_selected(self):
+        eligible, excluded = select_application_scoped_rulesets(
+            [
+                {"ruleset_href": "/valid", "ruleset_scope": "app:APP_A;env:PRD"},
+                {"ruleset_href": "/empty", "ruleset_scope": ""},
+                {"ruleset_href": "/group", "ruleset_scope": "label_group:1"},
+                {"ruleset_href": "/unknown", "ruleset_scope": "app:APP_X;env:PRD"},
+            ],
+            ["APP_A"],
+        )
+        self.assertEqual(eligible, [RulesetCount("/valid", 1)])
+        self.assertEqual(
+            excluded,
+            [
+                ExcludedRuleset("/empty", 1, "", "EMPTY_SCOPE"),
+                ExcludedRuleset("/group", 1, "label_group:1", "INVALID_SCOPE_FORMAT"),
+                ExcludedRuleset(
+                    "/unknown", 1, "app:APP_X;env:PRD", "UNKNOWN_APPLICATION_LABEL"
+                ),
+            ],
         )

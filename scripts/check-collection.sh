@@ -97,6 +97,8 @@ completed = count("completed")
 pending = count("pending")
 expired = count("expired")
 unknown = count("unknown")
+scope_skipped = int(manifest.get("excluded_scope_ruleset_count", 0) or 0)
+oversized_skipped = int(manifest.get("skipped_oversized_ruleset_count", 0) or 0)
 expected_batches = int(manifest.get("batch_count", batches) or batches)
 
 duration = "?"
@@ -111,7 +113,9 @@ if run["finished_at"]:
 common = (
     f"run={run_id} status={status}/{manifest_status} "
     f"batches={batches}/{expected_batches} completed={completed}/{total} "
-    f"pending={pending} expired={expired} unknown={unknown} duration={duration}"
+    f"pending={pending} expired={expired} unknown={unknown} "
+    f"scope_skipped={scope_skipped} oversized_skipped={oversized_skipped} "
+    f"duration={duration}"
 )
 
 failed_at = ""

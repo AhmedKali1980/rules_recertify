@@ -248,6 +248,13 @@ remain in the rule inventory, are listed in the manifest under
 records, and force the collection status to `WARNING`. This makes deliberate
 partial collection auditable instead of silently omitting policy.
 
+Workloader can occasionally count more rules than the metadata inventory. If a
+traffic submission reports that `--traffic-rule-limit` was exceeded, the
+collector splits a multi-ruleset batch to isolate the offending ruleset. A
+ruleset that still exceeds the limit on its own is excluded with reason
+`TRAFFIC_RULE_LIMIT_EXCEEDED`; the remaining batches continue and the run ends
+with status `WARNING` rather than `ERROR`.
+
 Rulesets with an empty scope, a scope other than exactly the
 `app:<application_label>` and `env:<environment>` dimensions (in either order),
 or an application value absent

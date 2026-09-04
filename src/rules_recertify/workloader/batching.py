@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 class OversizedRulesetError(ValueError):
@@ -23,7 +22,19 @@ class ExcludedRuleset:
     reason: str
 
 
-_APPLICATION_SCOPE = re.compile(r"^app:([^;]+);env:([^;]+)$")
+def _parse_application_scope(scope: str) -> Optional[Dict[str, str]]:
+    """Return an application/environment scope without relying on key order."""
+    dimensions: Dict[str, str] = {}
+    for component in scope.split(";"):
+        key, separator, value = component.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if not separator or not key or not value or key in dimensions:
+            return None
+        dimensions[key] = value
+    if set(dimensions) != {"app", "env"}:
+        return None
+    return dimensions
 
 
 def count_rules_by_ruleset(rows: Iterable[Mapping[str, str]]) -> List[RulesetCount]:
@@ -59,10 +70,10 @@ def select_application_scoped_rulesets(
         elif not scope:
             reason = "EMPTY_SCOPE"
         else:
-            match = _APPLICATION_SCOPE.fullmatch(scope)
-            if match is None:
+            dimensions = _parse_application_scope(scope)
+            if dimensions is None:
                 reason = "INVALID_SCOPE_FORMAT"
-            elif match.group(1).strip() not in known_apps:
+            elif dimensions["app"] not in known_apps:
                 reason = "UNKNOWN_APPLICATION_LABEL"
         if reason:
             excluded.append(ExcludedRuleset(href, len(scopes), scope, reason))

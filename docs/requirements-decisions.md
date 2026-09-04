@@ -97,8 +97,9 @@ metadata inventory. Rulesets above the configured limit are excluded and audited
 rather than partially submitted.
 
 Before bin-packing, export labels and admit only rulesets with one consistent
-scope matching `app:<application_label>;env:<environment>`, where the application
-value exists under `key=app` in that label export. Empty, malformed, label-group,
+scope containing exactly `app:<application_label>` and `env:<environment>` (in
+either order), where the application value exists under `key=app` in that label
+export. Empty, malformed, label-group,
 unknown-application, and inconsistent scopes remain in the raw inventory but are
 excluded from traffic expansion and recorded in the manifest and Data Quality.
 

@@ -222,8 +222,9 @@ The collector:
 1. exports all enabled and disabled rulesets;
 2. exports labels and builds the authoritative set of `app` label values;
 3. inventories rules without traffic expansion;
-4. admits only rulesets whose complete scope is `app:<value>;env:<value>` and
-   whose application value exists in the label export;
+4. admits only rulesets whose complete scope contains exactly `app:<value>` and
+   `env:<value>` (in either order) and whose application value exists in the
+   label export;
 5. counts and bin-packs whole eligible rulesets up to the configured rule limit;
 6. submits sequential `rule-export --traffic-count --expand-svcs` batches;
 7. polls `rule-usage` and logs completion progress;
@@ -247,8 +248,9 @@ remain in the rule inventory, are listed in the manifest under
 records, and force the collection status to `WARNING`. This makes deliberate
 partial collection auditable instead of silently omitting policy.
 
-Rulesets with an empty scope, a scope other than the strict
-`app:<application_label>;env:<environment>` form, or an application value absent
+Rulesets with an empty scope, a scope other than exactly the
+`app:<application_label>` and `env:<environment>` dimensions (in either order),
+or an application value absent
 from the current `label-export` are also excluded from traffic expansion. The
 manifest records them in `excluded_scope_rulesets` with a reason, and the
 collector writes a corresponding `RULESET_SKIPPED_*` data-quality entry. The

@@ -41,6 +41,27 @@ elif cmd=='rule-export' and '--traffic-count' not in args:
 else:
  raise SystemExit('oversized ruleset must not be submitted')
 '''
+FAKE_RUNTIME_OVERSIZED = r'''#!/usr/bin/env python3
+import csv,sys
+args=sys.argv
+cmd=next(x for x in ('ruleset-export','label-export','rule-export','rule-usage') if x in args)
+out=args[args.index('--output-file')+1]
+def write(headers, rows):
+ with open(out,'w',newline='') as f:
+  w=csv.DictWriter(f,fieldnames=headers); w.writeheader(); w.writerows(rows)
+if cmd=='ruleset-export':
+ write(['ruleset_name','enabled','href'],[{'ruleset_name':'BIG','enabled':'true','href':'/rs/big'}])
+elif cmd=='label-export':
+ write(['key','value'],[{'key':'app','value':'BIG'}])
+elif cmd=='rule-export' and '--traffic-count' not in args:
+ headers=['ruleset_name','ruleset_scope','ruleset_enabled','rule_type','rule_enabled','ruleset_href','rule_href','services']
+ write(headers,[{'ruleset_name':'BIG','ruleset_scope':'app:BIG;env:PRD','ruleset_enabled':'true','rule_type':'allow','rule_enabled':'true','ruleset_href':'/rs/big','rule_href':f'/r/{i}','services':'443 TCP'} for i in range(100)])
+elif cmd=='rule-export':
+ print('traffic-rule-limit set to 100 and total rules is 101')
+ raise SystemExit(1)
+else:
+ raise SystemExit('excluded ruleset must not be polled')
+'''
 class CollectionTest(unittest.TestCase):
  def test_end_to_end_with_fake_workloader(self):
   with tempfile.TemporaryDirectory() as d:
@@ -64,3 +85,15 @@ class CollectionTest(unittest.TestCase):
    with sqlite3.connect(root/'db.sqlite') as connection:
     category=connection.execute('SELECT category FROM data_quality').fetchone()[0]
    self.assertEqual(category,'RULESET_SKIPPED_OVERSIZED')
+
+ def test_workloader_rule_limit_error_excludes_ruleset_without_aborting(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'; binary.write_text(FAKE_RUNTIME_OVERSIZED); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
+   settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),traffic_batch_size=100,query_initial_delay_minutes=0)
+   result=collect(settings,date(2026,8,20),date(2026,8,21),no_wait=True)
+   self.assertEqual(result['status'],'WARNING')
+   self.assertEqual(result['runtime_oversized_ruleset_count'],1)
+   self.assertEqual(result['runtime_oversized_rulesets'],[{'ruleset_href':'/rs/big','inventory_rule_count':100,'reported_rule_count':101,'reason':'TRAFFIC_RULE_LIMIT_EXCEEDED'}])
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    category=connection.execute('SELECT category FROM data_quality').fetchone()[0]
+   self.assertEqual(category,'RULESET_SKIPPED_TRAFFIC_RULE_LIMIT_EXCEEDED')

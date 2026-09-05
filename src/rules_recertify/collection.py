@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import asdict
@@ -17,7 +18,7 @@ from .workloader.batching import (
     select_application_scoped_rulesets,
 )
 from .workloader.csvio import query_window, read_rows, write_rows
-from .workloader.runner import WorkloaderRunner, sha256_file
+from .workloader.runner import WorkloaderError, WorkloaderRunner, sha256_file
 
 LOG = logging.getLogger(__name__)
 RULE_REQUIRED = ("ruleset_href", "rule_href")
@@ -35,7 +36,14 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
     details: Dict[str, object] = {"run_id": run_id, "traffic_start": traffic_start.isoformat(), "traffic_end": traffic_end.isoformat(), "batches": [], "current_stage": "EXPORTING_RULESETS"}
     db.begin_run(run_id, "COLLECTION", details)
     config_file = Path(settings.workloader_config_file) if settings.workloader_config_file else None
-    runner = WorkloaderRunner(settings.workloader, settings.pce, run_dir / "workloader.log", config_file)
+    runner = WorkloaderRunner(
+        settings.workloader,
+        settings.pce,
+        run_dir / "workloader.log",
+        config_file,
+        rate_limit_retry_delay_minutes=settings.rate_limit_retry_delay_minutes,
+        rate_limit_max_retries=settings.rate_limit_max_retries,
+    )
     status = "ERROR"
     try:
         rulesets_file = run_dir / "rulesets.csv"
@@ -135,13 +143,60 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                     "rule_count": item.count,
                 },
             )
-        for index, batch in enumerate(batches, 1):
+        pending_batches = list(batches)
+        runtime_oversized = []
+        index = 0
+        while pending_batches:
+            batch = pending_batches.pop(0)
+            index += 1
             details["current_batch"] = index
             details["current_stage"] = "SUBMITTING"
-            details["batch_count"] = len(batches)
+            details["batch_count"] = index + len(pending_batches)
             db.update_run_details(run_id, details)
             hrefs = run_dir / f"batch_{index:04d}_hrefs.csv"
             write_rows(hrefs, ["href"], ({"href": item.href} for item in batch))
+            submitted = run_dir / f"batch_{index:04d}_submitted.csv"
+            try:
+                runner.run(["rule-export", "--ruleset-hrefs", str(hrefs), "--policy-version", settings.policy_version,
+                            "--expand-svcs", "--traffic-count", "--traffic-start", traffic_start.isoformat(),
+                            "--traffic-end", traffic_end.isoformat(), "--traffic-max-results", str(settings.traffic_max_results),
+                            "--traffic-rule-limit", str(settings.traffic_batch_size), "--output-file", str(submitted)])
+            except WorkloaderError as exc:
+                reported_rule_count = _traffic_rule_limit_count(exc)
+                if reported_rule_count is None:
+                    raise
+                if len(batch) > 1:
+                    midpoint = len(batch) // 2
+                    pending_batches[0:0] = [batch[:midpoint], batch[midpoint:]]
+                    LOG.warning(
+                        "Workloader counted more rules than the inventory; splitting batch",
+                        extra={"batch": index, "rulesets": len(batch)},
+                    )
+                    continue
+                item = batch[0]
+                metadata = ruleset_metadata[item.href]
+                runtime_oversized.append((item, reported_rule_count))
+                db.add_quality(
+                    run_id,
+                    "RULESET_SKIPPED_TRAFFIC_RULE_LIMIT_EXCEEDED",
+                    item.href,
+                    f"Workloader counted {reported_rule_count} rules, above the configured "
+                    f"traffic rule limit {settings.traffic_batch_size}",
+                )
+                LOG.warning(
+                    "Traffic ruleset excluded",
+                    extra={
+                        "selection": "EXCLUDED",
+                        "reason": "TRAFFIC_RULE_LIMIT_EXCEEDED",
+                        "ruleset_href": item.href,
+                        "ruleset_name": metadata["name"],
+                        "ruleset_scope": metadata["scope"],
+                        "rule_count": item.count,
+                        "reported_rule_count": reported_rule_count,
+                        "traffic_rule_limit": settings.traffic_batch_size,
+                    },
+                )
+                continue
             for item in batch:
                 metadata = ruleset_metadata[item.href]
                 LOG.info(
@@ -155,11 +210,6 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                         "rule_count": item.count,
                     },
                 )
-            submitted = run_dir / f"batch_{index:04d}_submitted.csv"
-            runner.run(["rule-export", "--ruleset-hrefs", str(hrefs), "--policy-version", settings.policy_version,
-                        "--expand-svcs", "--traffic-count", "--traffic-start", traffic_start.isoformat(),
-                        "--traffic-end", traffic_end.isoformat(), "--traffic-max-results", str(settings.traffic_max_results),
-                        "--traffic-rule-limit", str(settings.traffic_batch_size), "--output-file", str(submitted)])
             details["current_stage"] = "POLLING"
             db.update_run_details(run_id, details)
             batch_result = _poll_batch(runner, submitted, run_dir, index, settings, no_wait)
@@ -173,8 +223,18 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                 db.update_run_details(run_id, details)
                 db.upsert_usage(run_id, usage_rows)
             db.update_run_details(run_id, details)
-            if settings.batch_cooldown_seconds and index < len(batches):
+            if settings.batch_cooldown_seconds and pending_batches:
                 time.sleep(settings.batch_cooldown_seconds)
+        details["runtime_oversized_rulesets"] = [
+            {
+                "ruleset_href": item.href,
+                "inventory_rule_count": item.count,
+                "reported_rule_count": reported_rule_count,
+                "reason": "TRAFFIC_RULE_LIMIT_EXCEEDED",
+            }
+            for item, reported_rule_count in runtime_oversized
+        ]
+        details["runtime_oversized_ruleset_count"] = len(runtime_oversized)
         details.pop("current_batch", None)
         details.pop("current_stage", None)
         summary = _summarize_batches(details["batches"])
@@ -188,6 +248,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         details["artifacts"] = artifacts
         status = "SUCCESS" if (
             not oversized
+            and not runtime_oversized
             and summary["total"] > 0
             and not summary["pending"]
             and not summary["expired"]
@@ -208,6 +269,13 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         except Exception:
             LOG.exception("SMTP summary failed without changing collection status")
     return details
+
+
+def _traffic_rule_limit_count(exc: WorkloaderError) -> Optional[int]:
+    match = re.search(
+        r"traffic-rule-limit.*?total rules is\s+(\d+)", str(exc), re.IGNORECASE | re.DOTALL
+    )
+    return int(match.group(1)) if match else None
 
 
 def _poll_batch(runner: WorkloaderRunner, original: Path, run_dir: Path, index: int, settings: Settings, no_wait: bool) -> Dict[str, object]:

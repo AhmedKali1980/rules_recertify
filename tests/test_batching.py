@@ -56,3 +56,45 @@ class BatchingTest(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_scope_dimension_order_does_not_affect_selection(self):
+        eligible, excluded = select_application_scoped_rulesets(
+            [
+                {
+                    "ruleset_href": "/env-first",
+                    "ruleset_scope": "env:PRD;app:APP_A",
+                },
+                {
+                    "ruleset_href": "/app-first",
+                    "ruleset_scope": "app:APP_A;env:PRD",
+                },
+            ],
+            ["APP_A"],
+        )
+        self.assertEqual(
+            eligible,
+            [RulesetCount("/app-first", 1), RulesetCount("/env-first", 1)],
+        )
+        self.assertEqual(excluded, [])
+
+    def test_scope_still_requires_exactly_application_and_environment(self):
+        eligible, excluded = select_application_scoped_rulesets(
+            [
+                {"ruleset_href": "/app-only", "ruleset_scope": "app:APP_A"},
+                {
+                    "ruleset_href": "/extra",
+                    "ruleset_scope": "env:PRD;app:APP_A;loc:PAR",
+                },
+            ],
+            ["APP_A"],
+        )
+        self.assertEqual(eligible, [])
+        self.assertEqual(
+            excluded,
+            [
+                ExcludedRuleset("/app-only", 1, "app:APP_A", "INVALID_SCOPE_FORMAT"),
+                ExcludedRuleset(
+                    "/extra", 1, "env:PRD;app:APP_A;loc:PAR", "INVALID_SCOPE_FORMAT"
+                ),
+            ],
+        )

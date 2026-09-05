@@ -30,7 +30,10 @@ class WorkloaderRunnerTest(unittest.TestCase):
     def test_sigkill_has_actionable_bounded_error(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            runner = WorkloaderRunner(root / "workloader", "pce", root / "workloader.log")
+            runner = WorkloaderRunner(
+                root / "workloader", "pce", root / "workloader.log",
+                rate_limit_max_retries=0,
+            )
             completed = subprocess.CompletedProcess([], -9, None, None)
 
             def killed(*args, **kwargs):
@@ -51,7 +54,10 @@ class WorkloaderRunnerTest(unittest.TestCase):
     def test_http_429_has_rate_limit_hint(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            runner = WorkloaderRunner(root / "workloader", "pce", root / "workloader.log")
+            runner = WorkloaderRunner(
+                root / "workloader", "pce", root / "workloader.log",
+                rate_limit_max_retries=0,
+            )
             completed = subprocess.CompletedProcess([], 1, None, None)
 
             def rate_limited(*args, **kwargs):
@@ -67,3 +73,26 @@ class WorkloaderRunnerTest(unittest.TestCase):
 
         self.assertIn("PCE/API rate limit HTTP 429", str(raised.exception))
         self.assertIn("wait before submitting more queries", str(raised.exception))
+
+    def test_http_429_retries_same_command_after_ten_minutes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkloaderRunner(root / "workloader", "pce", root / "workloader.log")
+            rate_limited = subprocess.CompletedProcess([], 1, None, None)
+            succeeded = subprocess.CompletedProcess([], 0, None, None)
+
+            def run_once(*args, **kwargs):
+                if run.call_count == 1:
+                    kwargs["stdout"].write(b"GetTrafficAnalysisAPI response status code: 429\n")
+                    return rate_limited
+                return succeeded
+
+            with patch("subprocess.run", side_effect=run_once) as run, patch(
+                "time.sleep"
+            ) as sleep:
+                result = runner.run(["rule-export"])
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(run.call_count, 2)
+        sleep.assert_called_once_with(600)
+        self.assertEqual(run.call_args_list[0].args[0], run.call_args_list[1].args[0])

@@ -36,7 +36,14 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
     details: Dict[str, object] = {"run_id": run_id, "traffic_start": traffic_start.isoformat(), "traffic_end": traffic_end.isoformat(), "batches": [], "current_stage": "EXPORTING_RULESETS"}
     db.begin_run(run_id, "COLLECTION", details)
     config_file = Path(settings.workloader_config_file) if settings.workloader_config_file else None
-    runner = WorkloaderRunner(settings.workloader, settings.pce, run_dir / "workloader.log", config_file)
+    runner = WorkloaderRunner(
+        settings.workloader,
+        settings.pce,
+        run_dir / "workloader.log",
+        config_file,
+        rate_limit_retry_delay_minutes=settings.rate_limit_retry_delay_minutes,
+        rate_limit_max_retries=settings.rate_limit_max_retries,
+    )
     status = "ERROR"
     try:
         rulesets_file = run_dir / "rulesets.csv"

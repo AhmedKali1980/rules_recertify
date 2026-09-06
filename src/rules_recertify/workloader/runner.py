@@ -27,8 +27,18 @@ class CommandResult:
 
 
 class WorkloaderRunner:
-    def __init__(self, binary: Path, pce: str, log_file: Path, config_file: Optional[Path] = None):
+    def __init__(
+        self,
+        binary: Path,
+        pce: str,
+        log_file: Path,
+        config_file: Optional[Path] = None,
+        rate_limit_retry_delay_minutes: int = 10,
+        rate_limit_max_retries: int = 12,
+    ):
         self.binary, self.pce, self.log_file, self.config_file = binary, pce, log_file, config_file
+        self.rate_limit_retry_delay_minutes = rate_limit_retry_delay_minutes
+        self.rate_limit_max_retries = rate_limit_max_retries
 
     def run(self, args: Sequence[str], timeout: Optional[int] = None) -> CommandResult:
         command = [str(self.binary)]
@@ -36,35 +46,49 @@ class WorkloaderRunner:
             command.extend(["--config-file", str(self.config_file)])
         command.extend(["--pce", self.pce, "--log-file", str(self.log_file), *map(str, args)])
         LOG.info("Executing Workloader command: %s", " ".join(command))
-        started = time.monotonic()
         process_output = self.log_file.with_name("workloader-output.log")
         process_output.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with process_output.open("a+b") as output:
-                output.write((f"\n=== {' '.join(command)} ===\n").encode("utf-8"))
-                output.flush()
-                output_start = output.tell()
-                completed = subprocess.run(
-                    command,
-                    stdout=output,
-                    stderr=subprocess.STDOUT,
-                    timeout=timeout,
-                    check=False,
-                )
-                output.flush()
-                output_end = output.tell()
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise WorkloaderError(f"Could not execute Workloader: {exc}") from exc
-        result = CommandResult(command, completed.returncode, "", "", time.monotonic() - started)
-        if result.returncode:
+        rate_limit_retries = 0
+        while True:
+            started = time.monotonic()
+            try:
+                with process_output.open("a+b") as output:
+                    output.write((f"\n=== {' '.join(command)} ===\n").encode("utf-8"))
+                    output.flush()
+                    output_start = output.tell()
+                    completed = subprocess.run(
+                        command,
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                        timeout=timeout,
+                        check=False,
+                    )
+                    output.flush()
+                    output_end = output.tell()
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise WorkloaderError(f"Could not execute Workloader: {exc}") from exc
+            result = CommandResult(command, completed.returncode, "", "", time.monotonic() - started)
+            if not result.returncode:
+                return result
             output_text = _bounded_file_output(process_output, output_start, output_end)
             reason = _returncode_reason(result.returncode)
             hint = _failure_hint(output_text)
-            raise WorkloaderError(
+            error = WorkloaderError(
                 f"Workloader {reason} after {result.elapsed_seconds:.1f}s{hint}: "
                 f"{output_text} (full output: {process_output})"
             )
-        return result
+            if not is_rate_limit_error(error) or rate_limit_retries >= self.rate_limit_max_retries:
+                raise error
+            rate_limit_retries += 1
+            delay_seconds = self.rate_limit_retry_delay_minutes * 60
+            LOG.warning(
+                "Workloader HTTP 429; retrying the same command in %s minutes "
+                "(%s/%s)",
+                self.rate_limit_retry_delay_minutes,
+                rate_limit_retries,
+                self.rate_limit_max_retries,
+            )
+            time.sleep(delay_seconds)
 
 
 def sha256_file(path: Path) -> str:
@@ -94,6 +118,11 @@ def _failure_hint(output: str) -> str:
     if "status code: 429" in normalized or "received a 429" in normalized:
         return " (PCE/API rate limit HTTP 429; wait before submitting more queries)"
     return ""
+
+
+def is_rate_limit_error(exc: WorkloaderError) -> bool:
+    normalized = str(exc).lower()
+    return "status code: 429" in normalized or "received a 429" in normalized
 
 
 def _bounded_file_output(path: Path, start: int, end: int, limit: int = 12000) -> str:

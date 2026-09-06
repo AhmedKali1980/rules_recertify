@@ -98,3 +98,27 @@ class BatchingTest(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_configured_ruleset_name_admits_an_empty_scope(self):
+        eligible, excluded = select_application_scoped_rulesets(
+            [
+                {
+                    "ruleset_href": "/outbound",
+                    "ruleset_name": "GLOBAL_OUTBOUND2APA_PRD",
+                    "ruleset_scope": "",
+                },
+                {
+                    "ruleset_href": "/other",
+                    "ruleset_name": "GLOBAL_OTHER",
+                    "ruleset_scope": "",
+                },
+            ],
+            [],
+            ["outbound2apa"],
+        )
+
+        self.assertEqual(eligible, [RulesetCount("/outbound", 1)])
+        self.assertEqual(
+            excluded,
+            [ExcludedRuleset("/other", 1, "", "EMPTY_SCOPE")],
+        )

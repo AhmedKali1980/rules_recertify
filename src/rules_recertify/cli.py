@@ -68,6 +68,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "batch_cooldown_seconds": settings.batch_cooldown_seconds,
                 "rate_limit_retry_delay_minutes": settings.rate_limit_retry_delay_minutes,
                 "rate_limit_max_retries": settings.rate_limit_max_retries,
+                "empty_scope_ruleset_name_patterns": settings.empty_scope_ruleset_name_patterns,
                 "smtp_enabled": settings.smtp_enabled,
             }, indent=2)); return 0
         if args.command == "init-db":

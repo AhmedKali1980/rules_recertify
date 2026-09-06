@@ -71,7 +71,9 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         ruleset_metadata = _ruleset_metadata(inventory)
         details["rules"] = db.upsert_rules(inventory, datetime.now(timezone.utc).isoformat())
         scoped_rulesets, scope_exclusions = select_application_scoped_rulesets(
-            inventory, application_labels
+            inventory,
+            application_labels,
+            settings.empty_scope_ruleset_name_patterns,
         )
         details["excluded_scope_rulesets"] = [asdict(item) for item in scope_exclusions]
         details["excluded_scope_ruleset_count"] = len(scope_exclusions)

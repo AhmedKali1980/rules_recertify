@@ -17,3 +17,8 @@ class ConfigTest(unittest.TestCase):
             path=Path(directory)/"c.json"
             path.write_text(json.dumps({"pce":"p","rate_limit_retry_delay_minutes":9}))
             with self.assertRaises(ConfigurationError): load_settings(path)
+    def test_empty_scope_patterns_must_be_non_empty_strings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"c.json"
+            path.write_text(json.dumps({"pce":"p","empty_scope_ruleset_name_patterns":[""]}))
+            with self.assertRaises(ConfigurationError): load_settings(path)

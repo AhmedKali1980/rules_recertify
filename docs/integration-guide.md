@@ -271,6 +271,16 @@ manifest records them in `excluded_scope_rulesets` with a reason, and the
 collector writes a corresponding `RULESET_SKIPPED_*` data-quality entry. The
 unexpanded inventory is still retained for audit.
 
+Specific empty-scope rulesets can be admitted by a case-insensitive substring
+match on `ruleset_name`. Configure one or more explicit sequences, for example:
+
+```json
+"empty_scope_ruleset_name_patterns": ["OUTBOUND2APA"]
+```
+
+Only empty scopes receive this exception. An empty list keeps the default strict
+behavior, and additional name sequences can be added without changing code.
+
 The structured application log emits one `Traffic ruleset selected` or
 `Traffic ruleset excluded` record per ruleset. Each record carries
 `selection`, `ruleset_href`, `ruleset_name`, `ruleset_scope`, `rule_count`, and,

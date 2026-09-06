@@ -15,6 +15,7 @@
   "batch_cooldown_seconds": 60,
   "rate_limit_retry_delay_minutes": 10,
   "rate_limit_max_retries": 12,
+  "empty_scope_ruleset_name_patterns": ["OUTBOUND2APA"],
   "retention_days": 200,
   "default_lookback_days": 180,
   "policy_version": "draft",

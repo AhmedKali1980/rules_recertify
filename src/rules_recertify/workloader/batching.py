@@ -48,16 +48,25 @@ def count_rules_by_ruleset(rows: Iterable[Mapping[str, str]]) -> List[RulesetCou
 
 
 def select_application_scoped_rulesets(
-    rows: Iterable[Mapping[str, str]], application_labels: Iterable[str]
+    rows: Iterable[Mapping[str, str]],
+    application_labels: Iterable[str],
+    empty_scope_ruleset_name_patterns: Iterable[str] = (),
 ) -> Tuple[List[RulesetCount], List[ExcludedRuleset]]:
-    """Select whole rulesets with a strict app/value;env/value scope."""
+    """Select application scopes and configured name-based empty-scope exceptions."""
     known_apps = {value.strip() for value in application_labels if value.strip()}
+    empty_scope_patterns = {
+        value.strip().casefold()
+        for value in empty_scope_ruleset_name_patterns
+        if value.strip()
+    }
     rulesets: Dict[str, List[str]] = {}
+    ruleset_names: Dict[str, List[str]] = {}
     for row in rows:
         href = row.get("ruleset_href", "").strip()
         if not href:
             raise ValueError("Rule inventory row has no ruleset_href")
         rulesets.setdefault(href, []).append(row.get("ruleset_scope", "").strip())
+        ruleset_names.setdefault(href, []).append(row.get("ruleset_name", "").strip())
 
     eligible: List[RulesetCount] = []
     excluded: List[ExcludedRuleset] = []
@@ -67,9 +76,13 @@ def select_application_scoped_rulesets(
         reason = ""
         if len(unique_scopes) != 1:
             reason = "INCONSISTENT_SCOPE"
-        elif not scope:
+        elif not scope and not any(
+            pattern in name.casefold()
+            for name in ruleset_names[href]
+            for pattern in empty_scope_patterns
+        ):
             reason = "EMPTY_SCOPE"
-        else:
+        elif scope:
             dimensions = _parse_application_scope(scope)
             if dimensions is None:
                 reason = "INVALID_SCOPE_FORMAT"

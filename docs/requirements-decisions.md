@@ -112,6 +112,9 @@ either order), where the application value exists under `key=app` in that label
 export. Empty, malformed, label-group,
 unknown-application, and inconsistent scopes remain in the raw inventory but are
 excluded from traffic expansion and recorded in the manifest and Data Quality.
+Named exceptions may admit empty-scope rulesets when `ruleset_name` contains a
+configured `empty_scope_ruleset_name_patterns` value (case-insensitive). This
+exception does not admit malformed non-empty scopes.
 
 ### DEC-008 — Service representation
 

@@ -96,3 +96,48 @@ class WorkloaderRunnerTest(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
         sleep.assert_called_once_with(600)
         self.assertEqual(run.call_args_list[0].args[0], run.call_args_list[1].args[0])
+
+    def test_http_504_after_successful_responses_is_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkloaderRunner(root / "workloader", "pce", root / "workloader.log")
+            gateway_timeout = subprocess.CompletedProcess([], 1, None, None)
+            succeeded = subprocess.CompletedProcess([], 0, None, None)
+
+            def run_once(*args, **kwargs):
+                if run.call_count == 1:
+                    kwargs["stdout"].write(
+                        b"GetAsyncQueries response status code: 200\n"
+                        b"GetResults response code body: 504\n"
+                        b"http status code of 504\n"
+                    )
+                    return gateway_timeout
+                return succeeded
+
+            with patch("subprocess.run", side_effect=run_once) as run, patch(
+                "time.sleep"
+            ) as sleep:
+                result = runner.run(["rule-usage", "submitted.csv"])
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(run.call_count, 2)
+        sleep.assert_called_once_with(600)
+        self.assertEqual(run.call_args_list[0].args[0], run.call_args_list[1].args[0])
+
+    def test_non_retryable_workloader_error_is_not_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkloaderRunner(root / "workloader", "pce", root / "workloader.log")
+            failed = subprocess.CompletedProcess([], 1, None, None)
+
+            def invalid_request(*args, **kwargs):
+                kwargs["stdout"].write(b"response status code: 400\n")
+                return failed
+
+            with patch("subprocess.run", side_effect=invalid_request) as run, patch(
+                "time.sleep"
+            ) as sleep, self.assertRaises(WorkloaderError):
+                runner.run(["rule-export"])
+
+        self.assertEqual(run.call_count, 1)
+        sleep.assert_not_called()

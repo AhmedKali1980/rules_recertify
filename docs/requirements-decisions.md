@@ -100,11 +100,13 @@ If Workloader's submission-time count exceeds the inventory count, recursively
 split the batch. Exclude a ruleset that exceeds `--traffic-rule-limit` when
 submitted alone, record `TRAFFIC_RULE_LIMIT_EXCEEDED`, and continue the run.
 
-If Workloader exits after an HTTP 429, retry the identical command rather than
-aborting the collection. Enforce at least ten minutes between collector-level
-attempts and cap the retry count through configuration. Previously completed
-batches remain committed; rule-level resume is unavailable because Workloader's
-selection interface accepts ruleset hrefs, not rule hrefs.
+If Workloader exits after HTTP 429, 500, 502, 503, or 504, retry the identical
+command rather than aborting the collection. Enforce at least ten minutes
+between collector-level attempts and cap the retry count through configuration.
+Previously completed batches remain committed; rule-level resume is unavailable
+because Workloader's selection interface accepts ruleset hrefs, not rule hrefs.
+Do not retry deterministic failures such as invalid input, authentication,
+authorization, or local configuration errors.
 
 Before bin-packing, export labels and admit only rulesets with one consistent
 scope containing exactly `app:<application_label>` and `env:<environment>` (in

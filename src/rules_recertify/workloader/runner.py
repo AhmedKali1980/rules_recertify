@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import signal
 import subprocess
 import time
@@ -48,7 +49,7 @@ class WorkloaderRunner:
         LOG.info("Executing Workloader command: %s", " ".join(command))
         process_output = self.log_file.with_name("workloader-output.log")
         process_output.parent.mkdir(parents=True, exist_ok=True)
-        rate_limit_retries = 0
+        transient_retries = 0
         while True:
             started = time.monotonic()
             try:
@@ -77,15 +78,17 @@ class WorkloaderRunner:
                 f"Workloader {reason} after {result.elapsed_seconds:.1f}s{hint}: "
                 f"{output_text} (full output: {process_output})"
             )
-            if not is_rate_limit_error(error) or rate_limit_retries >= self.rate_limit_max_retries:
+            http_status = retryable_http_status(error)
+            if http_status is None or transient_retries >= self.rate_limit_max_retries:
                 raise error
-            rate_limit_retries += 1
+            transient_retries += 1
             delay_seconds = self.rate_limit_retry_delay_minutes * 60
             LOG.warning(
-                "Workloader HTTP 429; retrying the same command in %s minutes "
+                "Workloader transient HTTP %s; retrying the same command in %s minutes "
                 "(%s/%s)",
+                http_status,
                 self.rate_limit_retry_delay_minutes,
-                rate_limit_retries,
+                transient_retries,
                 self.rate_limit_max_retries,
             )
             time.sleep(delay_seconds)
@@ -114,15 +117,35 @@ def _returncode_reason(returncode: int) -> str:
 
 
 def _failure_hint(output: str) -> str:
-    normalized = output.lower()
-    if "status code: 429" in normalized or "received a 429" in normalized:
+    status = _http_status(output)
+    if status == 429:
         return " (PCE/API rate limit HTTP 429; wait before submitting more queries)"
+    if status in {500, 502, 503, 504}:
+        return f" (transient PCE/API HTTP {status}; the command can be retried)"
     return ""
 
 
 def is_rate_limit_error(exc: WorkloaderError) -> bool:
-    normalized = str(exc).lower()
-    return "status code: 429" in normalized or "received a 429" in normalized
+    return _http_status(str(exc)) == 429
+
+
+def retryable_http_status(exc: WorkloaderError) -> Optional[int]:
+    status = _http_status(str(exc))
+    return status if status in {429, 500, 502, 503, 504} else None
+
+
+def _http_status(output: str) -> Optional[int]:
+    patterns = (
+        r"(?:response\s+)?status code:\s*(\d{3})",
+        r"http status code of\s+(\d{3})",
+        r"received (?:an?\s+)?(?:http\s+)?(\d{3})",
+    )
+    matches = [
+        (match.start(), int(match.group(1)))
+        for pattern in patterns
+        for match in re.finditer(pattern, output, re.IGNORECASE)
+    ]
+    return max(matches)[1] if matches else None
 
 
 def _bounded_file_output(path: Path, start: int, end: int, limit: int = 12000) -> str:

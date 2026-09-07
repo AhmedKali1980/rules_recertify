@@ -255,13 +255,19 @@ ruleset that still exceeds the limit on its own is excluded with reason
 `TRAFFIC_RULE_LIMIT_EXCEEDED`; the remaining batches continue and the run ends
 with status `WARNING` rather than `ERROR`.
 
-An HTTP 429 returned after Workloader's own short retries is retried by the
-collector after `rate_limit_retry_delay_minutes` (10 minutes minimum). The same
-Workloader command and href file are retried, so collection resumes at the
-failed batch instead of advancing past it or restarting the 28 batches already
-ingested. `rate_limit_max_retries` bounds this recovery (12 retries by default).
-Workloader accepts ruleset hrefs rather than individual rule hrefs, so the safe
-recovery boundary is the current batch, not the precise rule shown in its log.
+An HTTP 429, 500, 502, 503, or 504 returned after Workloader's own retries is
+retried by the collector after `rate_limit_retry_delay_minutes` (10 minutes
+minimum). The same Workloader command and input file are retried, so collection
+resumes at the failed batch or poll instead of advancing past it or restarting
+the batches already ingested. `rate_limit_max_retries` bounds this recovery (12
+retries by default). Workloader accepts ruleset hrefs rather than individual
+rule hrefs, so the safe submission recovery boundary is the current batch, not
+the precise rule shown in its log.
+
+Other failures are deliberately not retried automatically. Authentication and
+authorization failures, invalid arguments, malformed exports, and local file or
+configuration errors require correction; repeatedly issuing the same request
+would hide the cause and may increase load on the PCE.
 
 Rulesets with an empty scope, a scope other than exactly the
 `app:<application_label>` and `env:<environment>` dimensions (in either order),

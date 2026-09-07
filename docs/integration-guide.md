@@ -269,6 +269,10 @@ authorization failures, invalid arguments, malformed exports, and local file or
 configuration errors require correction; repeatedly issuing the same request
 would hide the cause and may increase load on the PCE.
 
+Workloader may summarize rate limiting as `received N 429 errors with ...`
+instead of printing a final `status code: 429`. Both forms are recognized as the
+same retryable HTTP 429 condition.
+
 Rulesets with an empty scope, a scope other than exactly the
 `app:<application_label>` and `env:<environment>` dimensions (in either order),
 or an application value absent

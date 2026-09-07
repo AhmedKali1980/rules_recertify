@@ -97,6 +97,30 @@ class WorkloaderRunnerTest(unittest.TestCase):
         sleep.assert_called_once_with(600)
         self.assertEqual(run.call_args_list[0].args[0], run.call_args_list[1].args[0])
 
+    def test_workloader_aggregate_429_message_is_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkloaderRunner(root / "workloader", "pce", root / "workloader.log")
+            failed = subprocess.CompletedProcess([], 1, None, None)
+            succeeded = subprocess.CompletedProcess([], 0, None, None)
+
+            def run_once(*args, **kwargs):
+                if run.call_count == 1:
+                    kwargs["stdout"].write(
+                        b"received 6 429 errors with 30 second pauses between attempts\n"
+                    )
+                    return failed
+                return succeeded
+
+            with patch("subprocess.run", side_effect=run_once) as run, patch(
+                "time.sleep"
+            ) as sleep:
+                result = runner.run(["rule-export"])
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(run.call_count, 2)
+        sleep.assert_called_once_with(600)
+
     def test_http_504_after_successful_responses_is_retried(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

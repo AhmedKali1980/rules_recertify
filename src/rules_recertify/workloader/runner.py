@@ -138,6 +138,7 @@ def _http_status(output: str) -> Optional[int]:
     patterns = (
         r"(?:response\s+)?status code:\s*(\d{3})",
         r"http status code of\s+(\d{3})",
+        r"received\s+\d+\s+(\d{3})\s+errors?",
         r"received (?:an?\s+)?(?:http\s+)?(\d{3})",
     )
     matches = [

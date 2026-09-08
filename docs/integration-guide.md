@@ -273,6 +273,14 @@ Workloader may summarize rate limiting as `received N 429 errors with ...`
 instead of printing a final `status code: 429`. Both forms are recognized as the
 same retryable HTTP 429 condition.
 
+Some non-terminal or expired Workloader rows can lack a valid `query_body` and
+therefore have no usable `start_date`/`end_date`. Such rows remain preserved in
+the raw batch CSV, are skipped during SQLite ingestion, and create a
+`USAGE_SKIPPED_INVALID_QUERY_BODY` Data Quality record. The collector continues
+with subsequent batches and finishes with `WARNING`; a valid but unexpected
+window remains a hard error to prevent data from being attributed to the wrong
+day.
+
 Rulesets with an empty scope, a scope other than exactly the
 `app:<application_label>` and `env:<environment>` dimensions (in either order),
 or an application value absent

@@ -108,6 +108,10 @@ because Workloader's selection interface accepts ruleset hrefs, not rule hrefs.
 Do not retry deterministic failures such as invalid input, authentication,
 authorization, or local configuration errors.
 
+Skip and audit individual usage rows whose `query_body` has no parseable
+`start_date`/`end_date`, while continuing the collection and retaining the raw
+CSV. Continue to reject parseable windows that differ from the requested period.
+
 Before bin-packing, export labels and admit only rulesets with one consistent
 scope containing exactly `app:<application_label>` and `env:<environment>` (in
 either order), where the application value exists under `key=app` in that label

@@ -8,7 +8,7 @@ import uuid
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .config import Settings
 from .history.database import Database
@@ -17,7 +17,7 @@ from .workloader.batching import (
     partition_and_pack_rulesets,
     select_application_scoped_rulesets,
 )
-from .workloader.csvio import query_window, read_rows, write_rows
+from .workloader.csvio import CsvContractError, query_window, read_rows, write_rows
 from .workloader.runner import WorkloaderError, WorkloaderRunner, sha256_file
 
 LOG = logging.getLogger(__name__)
@@ -220,10 +220,30 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
             cast_batches.append(batch_result)
             if batch_result["output"]:
                 usage_rows = list(read_rows(Path(str(batch_result["output"])), USAGE_REQUIRED))
-                _validate_windows(usage_rows, traffic_start, traffic_end)
+                valid_usage_rows, invalid_usage_rows = _validated_usage_rows(
+                    usage_rows, traffic_start, traffic_end
+                )
+                batch_result["invalid_query_body"] = len(invalid_usage_rows)
+                for row in invalid_usage_rows:
+                    rule_href = row.get("rule_href", "")
+                    db.add_quality(
+                        run_id,
+                        "USAGE_SKIPPED_INVALID_QUERY_BODY",
+                        rule_href,
+                        "Workloader usage row has no valid start_date/end_date",
+                    )
+                    LOG.warning(
+                        "Skipping Workloader usage row with invalid query_body",
+                        extra={
+                            "batch": index,
+                            "ruleset_href": row.get("ruleset_href", ""),
+                            "rule_href": rule_href,
+                            "async_query_status": row.get("async_query_status", ""),
+                        },
+                    )
                 details["current_stage"] = "INGESTING"
                 db.update_run_details(run_id, details)
-                db.upsert_usage(run_id, usage_rows)
+                db.upsert_usage(run_id, valid_usage_rows)
             db.update_run_details(run_id, details)
             if settings.batch_cooldown_seconds and pending_batches:
                 time.sleep(settings.batch_cooldown_seconds)
@@ -241,6 +261,9 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         details.pop("current_stage", None)
         summary = _summarize_batches(details["batches"])
         details.update(summary)
+        details["invalid_query_body_count"] = sum(
+            int(batch.get("invalid_query_body", 0)) for batch in details["batches"]
+        )
         artifacts = []
         for path in sorted(run_dir.iterdir()):
             if path.is_file() and path.name != "manifest.json":
@@ -255,6 +278,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
             and not summary["pending"]
             and not summary["expired"]
             and not summary["unknown"]
+            and not details["invalid_query_body_count"]
         ) else "WARNING"
         details["pruned_usage_windows"] = db.prune(settings.retention_days)
     except Exception as exc:
@@ -326,13 +350,23 @@ def _ruleset_metadata(rows: Sequence[Mapping[str, str]]) -> Dict[str, Dict[str, 
     return metadata
 
 
-def _validate_windows(rows: Sequence[Mapping[str, str]], expected_start: date, expected_end: date) -> None:
+def _validated_usage_rows(
+    rows: Sequence[Mapping[str, str]], expected_start: date, expected_end: date
+) -> Tuple[List[Mapping[str, str]], List[Mapping[str, str]]]:
+    valid: List[Mapping[str, str]] = []
+    invalid: List[Mapping[str, str]] = []
     for row in rows:
-        start, end = query_window(row["query_body"])
-        actual_start = datetime.fromisoformat(start.replace("Z", "+00:00")).date()
-        actual_end = datetime.fromisoformat(end.replace("Z", "+00:00")).date()
+        try:
+            start, end = query_window(row["query_body"])
+            actual_start = datetime.fromisoformat(start.replace("Z", "+00:00")).date()
+            actual_end = datetime.fromisoformat(end.replace("Z", "+00:00")).date()
+        except (CsvContractError, ValueError):
+            invalid.append(row)
+            continue
         if (actual_start, actual_end) != (expected_start, expected_end):
             raise ValueError(
                 f"Workloader query window {actual_start}/{actual_end} does not match "
                 f"requested {expected_start}/{expected_end}"
             )
+        valid.append(row)
+    return valid, invalid

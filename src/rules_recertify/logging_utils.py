@@ -30,6 +30,10 @@ class JsonFormatter(logging.Formatter):
             "ruleset_name",
             "ruleset_scope",
             "rule_count",
+            "rule_href",
+            "async_query_status",
+            "reported_rule_count",
+            "traffic_rule_limit",
         ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)

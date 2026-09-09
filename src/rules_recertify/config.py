@@ -5,7 +5,7 @@ import json
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 class ConfigurationError(ValueError):
@@ -55,6 +55,9 @@ class Settings:
     query_poll_interval_minutes: int = 10
     query_deadline_minutes: int = 1380
     batch_cooldown_seconds: int = 60
+    rate_limit_retry_delay_minutes: int = 10
+    rate_limit_max_retries: int = 12
+    empty_scope_ruleset_name_patterns: Tuple[str, ...] = ()
     retention_days: int = 200
     default_lookback_days: int = 180
     policy_version: str = "draft"
@@ -75,6 +78,19 @@ class Settings:
             raise ConfigurationError("traffic_max_results must be positive")
         if self.query_deadline_minutes >= 1440 or self.query_deadline_minutes < 1:
             raise ConfigurationError("query_deadline_minutes must be between 1 and 1439")
+        if self.rate_limit_retry_delay_minutes < 10:
+            raise ConfigurationError("rate_limit_retry_delay_minutes must be at least 10")
+        if self.rate_limit_max_retries < 1:
+            raise ConfigurationError("rate_limit_max_retries must be positive")
+        if not isinstance(self.empty_scope_ruleset_name_patterns, (list, tuple)):
+            raise ConfigurationError("empty_scope_ruleset_name_patterns must be a list")
+        if any(
+            not isinstance(pattern, str) or not pattern.strip()
+            for pattern in self.empty_scope_ruleset_name_patterns
+        ):
+            raise ConfigurationError(
+                "empty_scope_ruleset_name_patterns must contain non-empty strings"
+            )
         if self.retention_days < 200:
             raise ConfigurationError("retention_days must be at least 200")
         if not 1 <= self.default_lookback_days <= self.retention_days:

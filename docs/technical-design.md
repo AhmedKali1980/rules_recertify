@@ -134,12 +134,17 @@ they give exact day-level last-hit reporting and make recovery inexpensive.
 
 Traffic expansion is deliberately restricted before batching. A ruleset is
 eligible only when every inventory row exposes one identical, non-empty scope in
-the exact `app:<application_label>;env:<environment>` form and the application
-value exists as `key=app` in the label export from the same collection run.
+the exact `app:<application_label>` and `env:<environment>` dimensions, in either
+order, and the application value exists as `key=app` in the label export from
+the same collection run.
 Empty scopes, label-group scopes, additional scope dimensions, malformed scopes,
 unknown application values, and inconsistent scopes are excluded. This prevents
 large label-group expansion from exhausting Workloader memory while constructing
 Explorer requests.
+
+An explicit, configurable case-insensitive substring allowlist on `ruleset_name`
+may admit known empty-scope rulesets. It does not relax validation for non-empty
+scopes and defaults to no exceptions.
 
 The metadata-only inventory remains auditable even for excluded rulesets. Each
 exclusion is written to the run manifest and Data Quality with a deterministic

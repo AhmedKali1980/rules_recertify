@@ -35,6 +35,15 @@ class CsvIoTest(unittest.TestCase):
         ])
         self.assertFalse(complete); self.assertEqual(omitted, 13)
 
+    def test_named_ip_protocol_without_port(self):
+        rows, complete, omitted = parse_flows_by_port("0 VRRP (1)")
+        self.assertEqual(
+            rows,
+            [{"port": None, "protocol": "VRRP", "flows": 1}],
+        )
+        self.assertTrue(complete)
+        self.assertEqual(omitted, 0)
+
     def test_boolean_spellings(self):
         self.assertTrue(parse_bool("TRUE")); self.assertFalse(parse_bool("false")); self.assertIsNone(parse_bool(""))
         with self.assertRaises(CsvContractError): parse_bool("maybe")

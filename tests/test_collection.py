@@ -2,7 +2,7 @@ import json, os, sqlite3, stat, tempfile, unittest
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
-from rules_recertify.collection import collect
+from rules_recertify.collection import _validated_usage_rows, collect
 from rules_recertify.config import Settings
 
 FAKE = r'''#!/usr/bin/env python3
@@ -67,6 +67,16 @@ else:
  raise SystemExit('excluded ruleset must not be polled')
 '''
 class CollectionTest(unittest.TestCase):
+ def test_malformed_port_detail_is_isolated_with_rule_identity(self):
+  query='{"start_date":"2026-08-20T00:00:00Z","end_date":"2026-08-21T00:00:00Z"}'
+  valid, invalid_query, invalid_ports=_validated_usage_rows(
+   [{'rule_href':'/r/bad','query_body':query,'flows_by_port':'not a protocol'}],
+   date(2026,8,20),date(2026,8,21)
+  )
+  self.assertEqual(valid,[])
+  self.assertEqual(invalid_query,[])
+  self.assertEqual(invalid_ports[0]['rule_href'],'/r/bad')
+
  def test_end_to_end_with_fake_workloader(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'; binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)

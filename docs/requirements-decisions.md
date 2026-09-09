@@ -112,6 +112,10 @@ Skip and audit individual usage rows whose `query_body` has no parseable
 `start_date`/`end_date`, while continuing the collection and retaining the raw
 CSV. Continue to reject parseable windows that differ from the requested period.
 
+Accept named IP protocols in Workloader's portless `0 NAME (flows)` form, not
+only ICMP/IGMP. Skip and audit an individual row if its expanded port detail is
+still malformed rather than rolling back ingestion for the entire batch.
+
 Before bin-packing, export labels and admit only rulesets with one consistent
 scope containing exactly `app:<application_label>` and `env:<environment>` (in
 either order), where the application value exists under `key=app` in that label

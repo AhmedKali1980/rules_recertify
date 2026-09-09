@@ -100,6 +100,7 @@ unknown = count("unknown")
 scope_skipped = int(manifest.get("excluded_scope_ruleset_count", 0) or 0)
 oversized_skipped = int(manifest.get("skipped_oversized_ruleset_count", 0) or 0)
 invalid_query_body = int(manifest.get("invalid_query_body_count", 0) or 0)
+invalid_flows_by_port = int(manifest.get("invalid_flows_by_port_count", 0) or 0)
 expected_batches = int(manifest.get("batch_count", batches) or batches)
 
 duration = "?"
@@ -117,6 +118,7 @@ common = (
     f"pending={pending} expired={expired} unknown={unknown} "
     f"scope_skipped={scope_skipped} oversized_skipped={oversized_skipped} "
     f"invalid_query_body={invalid_query_body} "
+    f"invalid_flows_by_port={invalid_flows_by_port} "
     f"duration={duration}"
 )
 

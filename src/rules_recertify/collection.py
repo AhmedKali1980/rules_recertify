@@ -17,7 +17,13 @@ from .workloader.batching import (
     partition_and_pack_rulesets,
     select_application_scoped_rulesets,
 )
-from .workloader.csvio import CsvContractError, query_window, read_rows, write_rows
+from .workloader.csvio import (
+    CsvContractError,
+    parse_flows_by_port,
+    query_window,
+    read_rows,
+    write_rows,
+)
 from .workloader.runner import WorkloaderError, WorkloaderRunner, sha256_file
 
 LOG = logging.getLogger(__name__)
@@ -220,10 +226,11 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
             cast_batches.append(batch_result)
             if batch_result["output"]:
                 usage_rows = list(read_rows(Path(str(batch_result["output"])), USAGE_REQUIRED))
-                valid_usage_rows, invalid_usage_rows = _validated_usage_rows(
+                valid_usage_rows, invalid_usage_rows, invalid_port_rows = _validated_usage_rows(
                     usage_rows, traffic_start, traffic_end
                 )
                 batch_result["invalid_query_body"] = len(invalid_usage_rows)
+                batch_result["invalid_flows_by_port"] = len(invalid_port_rows)
                 for row in invalid_usage_rows:
                     rule_href = row.get("rule_href", "")
                     db.add_quality(
@@ -239,6 +246,23 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                             "ruleset_href": row.get("ruleset_href", ""),
                             "rule_href": rule_href,
                             "async_query_status": row.get("async_query_status", ""),
+                        },
+                    )
+                for row in invalid_port_rows:
+                    rule_href = row.get("rule_href", "")
+                    db.add_quality(
+                        run_id,
+                        "USAGE_SKIPPED_INVALID_FLOWS_BY_PORT",
+                        rule_href,
+                        f"Unsupported flows_by_port value: {row.get('flows_by_port', '')!r}",
+                    )
+                    LOG.warning(
+                        "Skipping Workloader usage row with invalid flows_by_port",
+                        extra={
+                            "batch": index,
+                            "ruleset_href": row.get("ruleset_href", ""),
+                            "rule_href": rule_href,
+                            "flows_by_port": row.get("flows_by_port", ""),
                         },
                     )
                 details["current_stage"] = "INGESTING"
@@ -264,6 +288,9 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         details["invalid_query_body_count"] = sum(
             int(batch.get("invalid_query_body", 0)) for batch in details["batches"]
         )
+        details["invalid_flows_by_port_count"] = sum(
+            int(batch.get("invalid_flows_by_port", 0)) for batch in details["batches"]
+        )
         artifacts = []
         for path in sorted(run_dir.iterdir()):
             if path.is_file() and path.name != "manifest.json":
@@ -279,6 +306,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
             and not summary["expired"]
             and not summary["unknown"]
             and not details["invalid_query_body_count"]
+            and not details["invalid_flows_by_port_count"]
         ) else "WARNING"
         details["pruned_usage_windows"] = db.prune(settings.retention_days)
     except Exception as exc:
@@ -352,9 +380,14 @@ def _ruleset_metadata(rows: Sequence[Mapping[str, str]]) -> Dict[str, Dict[str, 
 
 def _validated_usage_rows(
     rows: Sequence[Mapping[str, str]], expected_start: date, expected_end: date
-) -> Tuple[List[Mapping[str, str]], List[Mapping[str, str]]]:
+) -> Tuple[
+    List[Mapping[str, str]],
+    List[Mapping[str, str]],
+    List[Mapping[str, str]],
+]:
     valid: List[Mapping[str, str]] = []
     invalid: List[Mapping[str, str]] = []
+    invalid_ports: List[Mapping[str, str]] = []
     for row in rows:
         try:
             start, end = query_window(row["query_body"])
@@ -368,5 +401,10 @@ def _validated_usage_rows(
                 f"Workloader query window {actual_start}/{actual_end} does not match "
                 f"requested {expected_start}/{expected_end}"
             )
+        try:
+            parse_flows_by_port(row.get("flows_by_port", ""))
+        except CsvContractError:
+            invalid_ports.append(row)
+            continue
         valid.append(row)
-    return valid, invalid
+    return valid, invalid, invalid_ports

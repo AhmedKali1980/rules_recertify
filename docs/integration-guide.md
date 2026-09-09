@@ -281,6 +281,12 @@ with subsequent batches and finishes with `WARNING`; a valid but unexpected
 window remains a hard error to prevent data from being attributed to the wrong
 day.
 
+Portless IP protocols exported as `0 <PROTOCOL> (<flows>)`, including VRRP, are
+stored with their protocol name and no port. If Workloader emits a genuinely
+malformed `flows_by_port` item, only that usage row is skipped: the raw CSV is
+retained, `USAGE_SKIPPED_INVALID_FLOWS_BY_PORT` identifies its `rule_href`, the
+manifest increments `invalid_flows_by_port_count`, and later batches continue.
+
 Rulesets with an empty scope, a scope other than exactly the
 `app:<application_label>` and `env:<environment>` dimensions (in either order),
 or an application value absent

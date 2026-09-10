@@ -47,6 +47,55 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 See the integration guide before contacting a PCE or enabling cron.
 
+## Import des workloads et IP Lists
+
+La commande `collect` importe désormais les référentiels avant les exports de
+règles. Workloader doit être installé et les variables `EXECUTABLE` (binaire)
+et `CFG` (`pce.yaml`) doivent être définies dans l'environnement ou dans le
+`.env` du projet. Les credentials sont lus par Workloader dans `CFG` : aucune
+copie de clé API dans `.env` n'est requise.
+
+Les profils peuvent être sélectionnés explicitement avec `PCE_L1_NAME` et
+`PCE_L3SM_NAME`. À défaut, `PCE_L1_FQDN` et `PCE_L3SM_FQDN` permettent de
+retrouver la clé du profil dans `CFG` à partir du hostname. L1 peut utiliser le
+profil Workloader par défaut ; L3SM échoue si aucun profil sûr n'est déterminé.
+
+L'ordre live est strict : (1) tous les workloads L1, (2) workloads managés
+L3SM, (3) fusion CSV, (4) IP Lists L1, (5) dérivations. Le répertoire raw de
+l'exécution contient `export_wkld.csv`, `export_wkld.l3sm.m.csv`,
+`export_iplists.csv`, `export_wkld.derived.csv` et
+`export_iplists.derived.csv`. La fusion conserve toutes les lignes sans
+déduplication et exige des en-têtes strictement identiques.
+
+```bash
+EXECUTABLE=/opt/workloader CFG=/secure/pce.yaml \
+PCE_L1_NAME=l1 PCE_L3SM_NAME=l3sm \
+./scripts/rules-recertify --config config/local.json collect
+```
+
+Le mode stub ne contacte jamais Workloader. Son répertoire exige
+`export_wkld.csv` et `export_iplists.csv`; un
+`export_wkld.l3sm.m.csv` non vide est facultatif et est fusionné avec les mêmes
+contrôles que le mode live. On peut employer l'option ou la variable :
+
+```bash
+./scripts/rules-recertify --config config/local.json collect \
+  --pce-stub-dir '/tmp/reference stubs'
+# équivalent : PCE_STUB_DIR='/tmp/reference stubs' ... collect
+```
+
+`--skip-pce-import` conserve explicitement le comportement de collecte sans
+actualisation du référentiel (utile pour une reprise contrôlée).
+
+Les dérivations préservent les colonnes source, insèrent `short_hostname`
+(préfixe DNS en majuscules) après `hostname`, puis ajoutent
+`ocs_name_from_IP`, `IPLIST` et `SUBNET`. `ocs_name_from_IP` utilise l'IP de
+passerelle pour un workload managé (préfixe `IP-`, sauf Windows), la première
+IPv4 d'interface pour une source non managée `AUTOMATION GEN2`, et reste vide
+sinon. Seules les IP Lists `NZ3_*` et leurs réseaux IPv4 valides sont corrélés.
+La priorité est **première IPv4, puis première IP List/réseau dans l'ordre
+source**. Le fichier IP Lists dérivé ne conserve que `name` et `include`.
+
 The standard production installation root is:
 
 ```text

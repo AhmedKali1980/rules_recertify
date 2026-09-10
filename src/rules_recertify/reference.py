@@ -15,9 +15,10 @@ def ingest_reference(db: Database, workloads_file: Path, ip_lists_file: Path, ru
     raw_ip_rows = list(read_rows(ip_lists_file, ("name", "include")))
     ip_rows = []
     for row in raw_ip_rows:
-        normalized = normalize_ip_list_member(row["include"])
-        if normalized:
-            ip_rows.append({**row, "include": normalized})
+        for member in row["include"].split(";"):
+            normalized = normalize_ip_list_member(member)
+            if normalized:
+                ip_rows.append({**row, "include": normalized})
     workload_rows = list(read_rows(workloads_file, ("href", "hostname", "interfaces", "ip_with_default_gw", "app", "env", "managed")))
     prepared_nz3 = prepare_nz3_members(ip_rows)
     quality = []

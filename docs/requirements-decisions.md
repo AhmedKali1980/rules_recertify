@@ -186,6 +186,11 @@ affected rule from being marked fully resolved.
 Label expressions use AND within a selector group, OR between groups, then apply
 exclusions and ruleset scope.
 
+Expand `All Workloads` against the ruleset scope rather than displaying the
+literal selector. For `app:X;env:Y`, include only reference workloads whose
+`app=X` and `env=Y`, formatted one `hostname (selected_ip)` per line. For
+`env:NULL`, use the environment requested for the report.
+
 ### DEC-011 — Workload address selection
 
 - Managed workload (`managed=TRUE`): use `ip_with_default_gw`.

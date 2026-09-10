@@ -352,6 +352,12 @@ The output is written atomically below `output_dir`, with KEAR ID and Environmen
 in its filename. Inspect `Presentation`, `Raw Rules`, `Expanded Rules`,
 `Rule Usage`, and `Data Quality`. The KEAR ID is present on every sheet.
 
+In `Expanded Rules`, an `All Workloads` source or destination is resolved from
+the ingested workload reference and the ruleset scope. For example,
+`app:APM_PAYMENT;env:PRD` produces one `hostname (ip_with_default_gw)` line for
+each matching PRD workload. Managed workloads use `ip_with_default_gw`; the
+reference ingestion's selected addresses are used for other workload types.
+
 ## 7. Test procedure
 
 ### 7.1 Offline automated suite

@@ -6,7 +6,7 @@ import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from ..history.database import Database
 from ..history.metrics import summarize_usage
@@ -101,7 +101,23 @@ def _contains_app(raw: Mapping[str, object], label: str) -> bool:
 
 def _expand_side(raw: Mapping[str, object], side: str, workloads: Sequence[Mapping[str, object]], environment: str) -> str:
     values: List[str] = []
-    if str(raw.get(f"{side}_all_workloads", "")).lower() == "true": values.append("All Workloads")
+    if str(raw.get(f"{side}_all_workloads", "")).lower() == "true":
+        scope = _scope_dimensions(str(raw.get("ruleset_scope", "")))
+        scope_app = scope.get("app", "")
+        scope_env = scope.get("env", "")
+        target_env = environment if scope_env.upper() == "NULL" else scope_env
+        if scope_app and target_env:
+            values.extend(
+                _workload_entries(
+                    workloads,
+                    lambda workload: (
+                        str(workload.get("app", "")).casefold() == scope_app.casefold()
+                        and str(workload.get("env", "")).casefold() == target_env.casefold()
+                    ),
+                )
+            )
+        else:
+            values.append("All Workloads")
     ip_lists = str(raw.get(f"{side}_iplists", ""));
     if ip_lists: values.extend(f"IP List: {item.strip()}" for item in ip_lists.split(";") if item.strip())
     explicit = str(raw.get(f"{side}_workloads", ""));
@@ -117,6 +133,29 @@ def _expand_side(raw: Mapping[str, object], side: str, workloads: Sequence[Mappi
                     values.append(f"{workload.get('hostname') or workload.get('name')} ({address})")
     if "Any (0.0.0.0/0 and ::/0)" in ip_lists: values.extend(["0.0.0.0/0", "::/0"])
     return "\n".join(dict.fromkeys(values))
+
+
+def _scope_dimensions(scope: str) -> Dict[str, str]:
+    dimensions: Dict[str, str] = {}
+    for component in scope.split(";"):
+        key, separator, value = component.partition(":")
+        if separator and key.strip() and value.strip():
+            dimensions[key.strip().casefold()] = value.strip()
+    return dimensions
+
+
+def _workload_entries(
+    workloads: Sequence[Mapping[str, object]],
+    predicate: Callable[[Mapping[str, object]], bool],
+) -> List[str]:
+    entries: List[str] = []
+    for workload in workloads:
+        if not predicate(workload):
+            continue
+        hostname = str(workload.get("hostname") or workload.get("name") or "").strip()
+        for address in json.loads(str(workload.get("addresses_json", "[]"))):
+            entries.append(f"{hostname} ({address})")
+    return entries
 
 
 def _sheet(workbook: object, name: str, rows: List[Mapping[str, object]]) -> None:

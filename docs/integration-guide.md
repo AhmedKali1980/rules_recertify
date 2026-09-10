@@ -222,8 +222,9 @@ The collector:
 1. exports all enabled and disabled rulesets;
 2. exports labels and builds the authoritative set of `app` label values;
 3. inventories rules without traffic expansion;
-4. admits only rulesets whose complete scope is `app:<value>;env:<value>` and
-   whose application value exists in the label export;
+4. admits only rulesets whose complete scope contains exactly `app:<value>` and
+   `env:<value>` (in either order) and whose application value exists in the
+   label export;
 5. counts and bin-packs whole eligible rulesets up to the configured rule limit;
 6. submits sequential `rule-export --traffic-count --expand-svcs` batches;
 7. polls `rule-usage` and logs completion progress;
@@ -247,12 +248,62 @@ remain in the rule inventory, are listed in the manifest under
 records, and force the collection status to `WARNING`. This makes deliberate
 partial collection auditable instead of silently omitting policy.
 
-Rulesets with an empty scope, a scope other than the strict
-`app:<application_label>;env:<environment>` form, or an application value absent
+Workloader can occasionally count more rules than the metadata inventory. If a
+traffic submission reports that `--traffic-rule-limit` was exceeded, the
+collector splits a multi-ruleset batch to isolate the offending ruleset. A
+ruleset that still exceeds the limit on its own is excluded with reason
+`TRAFFIC_RULE_LIMIT_EXCEEDED`; the remaining batches continue and the run ends
+with status `WARNING` rather than `ERROR`.
+
+An HTTP 429, 500, 502, 503, or 504 returned after Workloader's own retries is
+retried by the collector after `rate_limit_retry_delay_minutes` (10 minutes
+minimum). The same Workloader command and input file are retried, so collection
+resumes at the failed batch or poll instead of advancing past it or restarting
+the batches already ingested. `rate_limit_max_retries` bounds this recovery (12
+retries by default). Workloader accepts ruleset hrefs rather than individual
+rule hrefs, so the safe submission recovery boundary is the current batch, not
+the precise rule shown in its log.
+
+Other failures are deliberately not retried automatically. Authentication and
+authorization failures, invalid arguments, malformed exports, and local file or
+configuration errors require correction; repeatedly issuing the same request
+would hide the cause and may increase load on the PCE.
+
+Workloader may summarize rate limiting as `received N 429 errors with ...`
+instead of printing a final `status code: 429`. Both forms are recognized as the
+same retryable HTTP 429 condition.
+
+Some non-terminal or expired Workloader rows can lack a valid `query_body` and
+therefore have no usable `start_date`/`end_date`. Such rows remain preserved in
+the raw batch CSV, are skipped during SQLite ingestion, and create a
+`USAGE_SKIPPED_INVALID_QUERY_BODY` Data Quality record. The collector continues
+with subsequent batches and finishes with `WARNING`; a valid but unexpected
+window remains a hard error to prevent data from being attributed to the wrong
+day.
+
+Portless IP protocols exported as `0 <PROTOCOL> (<flows>)`, including VRRP, are
+stored with their protocol name and no port. If Workloader emits a genuinely
+malformed `flows_by_port` item, only that usage row is skipped: the raw CSV is
+retained, `USAGE_SKIPPED_INVALID_FLOWS_BY_PORT` identifies its `rule_href`, the
+manifest increments `invalid_flows_by_port_count`, and later batches continue.
+
+Rulesets with an empty scope, a scope other than exactly the
+`app:<application_label>` and `env:<environment>` dimensions (in either order),
+or an application value absent
 from the current `label-export` are also excluded from traffic expansion. The
 manifest records them in `excluded_scope_rulesets` with a reason, and the
 collector writes a corresponding `RULESET_SKIPPED_*` data-quality entry. The
 unexpanded inventory is still retained for audit.
+
+Specific empty-scope rulesets can be admitted by a case-insensitive substring
+match on `ruleset_name`. Configure one or more explicit sequences, for example:
+
+```json
+"empty_scope_ruleset_name_patterns": ["OUTBOUND2APA"]
+```
+
+Only empty scopes receive this exception. An empty list keeps the default strict
+behavior, and additional name sequences can be added without changing code.
 
 The structured application log emits one `Traffic ruleset selected` or
 `Traffic ruleset excluded` record per ruleset. Each record carries
@@ -300,6 +351,12 @@ under the service account only after the PCE integration test succeeds.
 The output is written atomically below `output_dir`, with KEAR ID and Environment
 in its filename. Inspect `Presentation`, `Raw Rules`, `Expanded Rules`,
 `Rule Usage`, and `Data Quality`. The KEAR ID is present on every sheet.
+
+In `Expanded Rules`, an `All Workloads` source or destination is resolved from
+the ingested workload reference and the ruleset scope. For example,
+`app:APM_PAYMENT;env:PRD` produces one `hostname (ip_with_default_gw)` line for
+each matching PRD workload. Managed workloads use `ip_with_default_gw`; the
+reference ingestion's selected addresses are used for other workload types.
 
 ## 7. Test procedure
 

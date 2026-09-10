@@ -96,11 +96,35 @@ Because Workloader cannot accept rule hrefs, rulesets are bin-packed using the
 metadata inventory. Rulesets above the configured limit are excluded and audited
 rather than partially submitted.
 
+If Workloader's submission-time count exceeds the inventory count, recursively
+split the batch. Exclude a ruleset that exceeds `--traffic-rule-limit` when
+submitted alone, record `TRAFFIC_RULE_LIMIT_EXCEEDED`, and continue the run.
+
+If Workloader exits after HTTP 429, 500, 502, 503, or 504, retry the identical
+command rather than aborting the collection. Enforce at least ten minutes
+between collector-level attempts and cap the retry count through configuration.
+Previously completed batches remain committed; rule-level resume is unavailable
+because Workloader's selection interface accepts ruleset hrefs, not rule hrefs.
+Do not retry deterministic failures such as invalid input, authentication,
+authorization, or local configuration errors.
+
+Skip and audit individual usage rows whose `query_body` has no parseable
+`start_date`/`end_date`, while continuing the collection and retaining the raw
+CSV. Continue to reject parseable windows that differ from the requested period.
+
+Accept named IP protocols in Workloader's portless `0 NAME (flows)` form, not
+only ICMP/IGMP. Skip and audit an individual row if its expanded port detail is
+still malformed rather than rolling back ingestion for the entire batch.
+
 Before bin-packing, export labels and admit only rulesets with one consistent
-scope matching `app:<application_label>;env:<environment>`, where the application
-value exists under `key=app` in that label export. Empty, malformed, label-group,
+scope containing exactly `app:<application_label>` and `env:<environment>` (in
+either order), where the application value exists under `key=app` in that label
+export. Empty, malformed, label-group,
 unknown-application, and inconsistent scopes remain in the raw inventory but are
 excluded from traffic expansion and recorded in the manifest and Data Quality.
+Named exceptions may admit empty-scope rulesets when `ruleset_name` contains a
+configured `empty_scope_ruleset_name_patterns` value (case-insensitive). This
+exception does not admit malformed non-empty scopes.
 
 ### DEC-008 — Service representation
 
@@ -161,6 +185,11 @@ affected rule from being marked fully resolved.
 
 Label expressions use AND within a selector group, OR between groups, then apply
 exclusions and ruleset scope.
+
+Expand `All Workloads` against the ruleset scope rather than displaying the
+literal selector. For `app:X;env:Y`, include only reference workloads whose
+`app=X` and `env=Y`, formatted one `hostname (selected_ip)` per line. For
+`env:NULL`, use the environment requested for the report.
 
 ### DEC-011 — Workload address selection
 

@@ -15,6 +15,7 @@ from rules_recertify.workloader.reference_exports import (
 
 
 HEADER = ["href", "hostname", "interfaces", "ip_with_default_gw", "os_id", "managed", "external_data_set"]
+WORKLOADER_HEADERS = "href,hostname,name,external_data_set,created_at,interfaces,public_ip,ip_with_default_gw,app,env,loc,role,managed,enforcement,external_data_reference,OS,os_id"
 
 
 def write_csv(path, header, rows):
@@ -106,9 +107,18 @@ class WorkloaderShellTest(unittest.TestCase):
             cfg = root / "pce config.yaml"; cfg.write_text("l1-profile:\n  fqdn: l1.example.net\nl3-profile:\n  fqdn: l3.example.net\n")
             env = {**os.environ, "EXECUTABLE": str(executable), "CFG": str(cfg), "CALLS": str(calls), "PCE_L1_FQDN": "l1.example.net", "PCE_L3SM_FQDN": "l3.example.net", "MAX_ATTEMPTS": "2", "BASE_SLEEP": "0", "POST_SUCCESS_PAUSE_SEC": "0", "POST_FAILURE_PAUSE_SEC": "0"}
             result = self._run("workloader-wkld-export.sh", env, root / "out file.csv")
-            self.assertEqual(result.returncode, 0, result.stderr); self.assertIn("l1-profile", calls.read_text())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = calls.read_text().splitlines()
+            self.assertIn("l1-profile", arguments)
+            self.assertEqual(arguments[arguments.index("--headers") + 1], WORKLOADER_HEADERS)
+            self.assertNotIn("--columns", arguments)
             calls.write_text(""); result = self._run("workloader-wkld-l3sm-managed-export.sh", env, root / "managed file.csv")
-            self.assertEqual(result.returncode, 0, result.stderr); self.assertIn("l3-profile", calls.read_text())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = calls.read_text().splitlines()
+            self.assertIn("l3-profile", arguments)
+            self.assertIn("-m", arguments)
+            self.assertEqual(arguments[arguments.index("--headers") + 1], WORKLOADER_HEADERS)
+            self.assertNotIn("--columns", arguments)
             env.update({"NO_OUTPUT": "1"}); calls.write_text("")
             result = self._run("workloader-ipl-export.sh", env, root / "empty.csv")
             self.assertNotEqual(result.returncode, 0); self.assertEqual(calls.read_text().count("--config-file\n"), 2)

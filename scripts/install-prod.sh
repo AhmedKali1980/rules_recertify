@@ -42,7 +42,12 @@ install -d -m 0750 \
 chmod 0755 "$TARGET/scripts/install-prod.sh" \
   "$TARGET/scripts/rules-recertify" \
   "$TARGET/scripts/daily-collect.sh" \
-  "$TARGET/scripts/check-collection.sh"
+  "$TARGET/scripts/check-collection.sh" \
+  "$TARGET/scripts/import-pce-reference.sh" \
+  "$TARGET/scripts/workloader_common.sh" \
+  "$TARGET/scripts/workloader-wkld-export.sh" \
+  "$TARGET/scripts/workloader-wkld-l3sm-managed-export.sh" \
+  "$TARGET/scripts/workloader-ipl-export.sh"
 
 if [[ ! -e "$TARGET/config/local.json" ]]; then
   install -m 0640 "$TARGET/config/production.example.json" "$TARGET/config/local.json"

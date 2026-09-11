@@ -113,6 +113,33 @@ class WorkloaderShellTest(unittest.TestCase):
             result = self._run("workloader-ipl-export.sh", env, root / "empty.csv")
             self.assertNotEqual(result.returncode, 0); self.assertEqual(calls.read_text().count("--config-file\n"), 2)
 
+    def test_profiles_are_read_from_workloader_yaml_without_env_duplication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); calls = root / "calls"; executable = root / "workloader"
+            executable.write_text(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" >> \"$CALLS\"\n"
+                "while (($#)); do [[ $1 == --output-file ]] && { shift; printf 'header\\n' > \"$1\"; }; shift || :; done\n"
+            )
+            executable.chmod(0o755)
+            cfg = root / "pce.yaml"
+            cfg.write_text(
+                "default_pce_name: pce-prod-l2\n"
+                "pce-l3-sm:\n  fqdn: l3sm.example.invalid\n"
+                "pce-prod-l3:\n  fqdn: l3.example.invalid\n  wr:\n    fqdn: l1.example.invalid\n"
+                "pce-prod-l2:\n  fqdn: l2.example.invalid\n"
+                "target_pce: pce-prod-l3.wr\n"
+            )
+            env = {**os.environ, "EXECUTABLE": str(executable), "CFG": str(cfg), "CALLS": str(calls),
+                   "POST_SUCCESS_PAUSE_SEC": "0"}
+            for key in ("PCE_L1_NAME", "PCE_L3SM_NAME", "PCE_L1_FQDN", "PCE_L3SM_FQDN"):
+                env.pop(key, None)
+            l1 = self._run("workloader-wkld-export.sh", env, root / "l1.csv")
+            l3sm = self._run("workloader-wkld-l3sm-managed-export.sh", env, root / "l3sm.csv")
+            self.assertEqual((l1.returncode, l3sm.returncode), (0, 0), l1.stderr + l3sm.stderr)
+            arguments = calls.read_text().splitlines()
+            self.assertIn("pce-prod-l2", arguments)
+            self.assertIn("pce-l3-sm", arguments)
+
     def test_l3sm_without_resolvable_profile_fails_before_execution(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); executable = root / "never"
@@ -121,6 +148,18 @@ class WorkloaderShellTest(unittest.TestCase):
             env = {**os.environ, "EXECUTABLE": str(executable), "CFG": str(cfg), "POST_FAILURE_PAUSE_SEC": "0"}
             result = self._run("workloader-wkld-l3sm-managed-export.sh", env, root / "out.csv")
             self.assertEqual(result.returncode, 64)
+
+    def test_ambiguous_l3sm_profiles_fail_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); executable = root / "never"
+            executable.write_text("#!/bin/sh\nexit 99\n"); executable.chmod(0o755)
+            cfg = root / "pce.yaml"; cfg.write_text("pce-l3-sm:\n  fqdn: one.invalid\nbackup-l3sm:\n  fqdn: two.invalid\n")
+            env = {**os.environ, "EXECUTABLE": str(executable), "CFG": str(cfg)}
+            for key in ("PCE_L3SM_NAME", "PCE_L3SM_FQDN"):
+                env.pop(key, None)
+            result = self._run("workloader-wkld-l3sm-managed-export.sh", env, root / "out.csv")
+            self.assertEqual(result.returncode, 64)
+            self.assertIn("Several L3SM profiles", result.stderr)
 
 
 if __name__ == "__main__": unittest.main()

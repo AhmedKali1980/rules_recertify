@@ -25,6 +25,7 @@ load_project_env
 
 resolve_pce_profile() {
   local explicit="$1" fqdn="$2" required="$3" host resolved=""
+  local -a candidates=()
   if [[ -n "$explicit" ]]; then printf '%s\n' "$explicit"; return; fi
   host="${fqdn%%.*}"
   if [[ -n "$host" && -r "$CFG" ]]; then
@@ -33,6 +34,34 @@ resolve_pce_profile() {
       index(tolower($0), tolower(needle)) { if (key != "") { print key; exit } }
     ' "$CFG")"
     if [[ -n "$resolved" ]]; then printf '%s\n' "$resolved"; return; fi
+  fi
+  if [[ -r "$CFG" && "$required" == 0 ]]; then
+    # The L1 profile is Workloader's configured default.  This is the source of
+    # truth used by the production pce.yaml and avoids duplicating it in .env.
+    resolved="$(awk '
+      /^[[:space:]]*default_pce_name:[[:space:]]*/ {
+        value=$0; sub(/^[^:]*:[[:space:]]*/, "", value)
+        sub(/[[:space:]]+#.*/, "", value); gsub(/^[[:space:]"'\''"]+|[[:space:]"'\''"]+$/, "", value)
+        print value; exit
+      }
+    ' "$CFG")"
+    if [[ -n "$resolved" ]]; then printf '%s\n' "$resolved"; return; fi
+  fi
+  if [[ -r "$CFG" && "$required" == 1 ]]; then
+    # Profile keys are top-level YAML mappings.  Accept the established
+    # pce-l3-sm / pce_l3sm naming convention, but never guess from credentials.
+    mapfile -t candidates < <(awk '
+      /^[[:alnum:]_.-]+:[[:space:]]*$/ {
+        key=$0; sub(/:.*/, "", key); normalized=tolower(key)
+        gsub(/[^[:alnum:]]/, "", normalized)
+        if (normalized ~ /l3sm$/) { print key }
+      }
+    ' "$CFG")
+    if (( ${#candidates[@]} == 1 )); then printf '%s\n' "${candidates[0]}"; return; fi
+    if (( ${#candidates[@]} > 1 )); then
+      printf 'Several L3SM profiles found in %s; use an explicit override\n' "$CFG" >&2
+      return 64
+    fi
   fi
   if [[ "$required" == 1 ]]; then
     printf 'Unable to resolve the required L3SM PCE profile\n' >&2; return 64

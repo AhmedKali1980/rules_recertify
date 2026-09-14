@@ -7,7 +7,8 @@ from pathlib import Path
 
 from rules_recertify.history.database import Database
 from rules_recertify.reporting.workbook import (
-    _count_ports, _expand_side, _expand_side_details, _rule_matches, _scope_pairs,
+    _count_addresses, _count_ports, _excel_safe_count, _expand_side,
+    _expand_side_details, _rule_matches, _scope_pairs,
     generate_workbook,
 )
 
@@ -221,6 +222,14 @@ class WorkbookExpansionTest(unittest.TestCase):
         self.assertEqual(_count_ports("443 TCP; 80-82 TCP; 53 UDP; 443 TCP"), 5)
         self.assertEqual(_count_ports("All Services; 0 ICMP"), 0)
 
+    def test_address_count_uses_network_cardinality_and_removes_overlap(self):
+        self.assertEqual(_count_addresses(["192.168.19.0/24", "192.168.19.1", "10.0.0.1-10.0.0.3"]), 259)
+
+    def test_any_counts_complete_ipv4_and_ipv6_address_spaces_exactly(self):
+        count = _count_addresses(["0.0.0.0/0", "::/0"])
+        self.assertEqual(count, (2 ** 32) + (2 ** 128))
+        self.assertEqual(_excel_safe_count(count), "340282366920938463463374607436063178752")
+
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is optional")
     def test_expanded_rules_contains_address_and_port_count_columns(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -244,5 +253,5 @@ class WorkbookExpansionTest(unittest.TestCase):
             sheet = load_workbook(target)["Expanded Rules"]
             values = {cell.value: sheet.cell(2, cell.column).value for cell in sheet[1]}
             self.assertEqual(values["nb_src_ips"], 2)
-            self.assertEqual(values["nb_dst_ip"], 1)
+            self.assertEqual(values["nb_dst_ip"], 256)
             self.assertEqual(values["nb_ports"], 3)

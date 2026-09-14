@@ -10,7 +10,7 @@ The `scripts/rules-recertify` entrypoint exposes:
 | `init-db` | Create/upgrade the local SQLite schema |
 | `collect` | Export policy, submit/poll traffic queries, and persist usage |
 | `ingest-usage` | Ingest an existing Workloader `rule-usage` CSV |
-| `ingest-reference` | Ingest derived workload and IP-list CSVs |
+| `ingest-reference` | Ingest derived workloads and the complete raw IP-list CSV |
 | `report` | Generate an application workbook on demand |
 
 Collection and report delivery are deliberately separate. Cron runs `collect`;
@@ -191,13 +191,13 @@ Expected schema version is `1`; integrity must return `ok`.
 
 ## 4. Reference-data ingestion
 
-Produce `export_wkld.derived.csv` and `export_iplists.derived.csv` with the existing
-approved extraction/derivation process, then run:
+Produce the reference exports with the approved extraction/derivation process,
+then ingest derived workloads and the complete IP-list export:
 
 ```bash
 ./scripts/rules-recertify --config config/local.json ingest-reference \
   --workloads /data/export_wkld.derived.csv \
-  --ip-lists /data/export_iplists.derived.csv
+  --ip-lists /data/export_iplists.csv
 ```
 
 The adapter accepts comma or semicolon CSV delimiters and UTF-8 with or without a
@@ -358,7 +358,7 @@ without an environment label (meaning every requested environment for that
 application).
 
 In `Expanded Rules`, sources and destinations are resolved from the ingested
-`export_wkld.derived.csv` and `export_iplists.derived.csv` references. Label,
+`export_wkld.derived.csv` and complete `export_iplists.csv` references. Label,
 explicit-workload, and `All Workloads` selectors render one entry as
 `short_hostname (ip1;ip2)`; `name` is used when `short_hostname` is empty.
 Managed workloads use `ip_with_default_gw`, while unmanaged workloads use the
@@ -368,12 +368,19 @@ IP-list selectors render as `IP List: name (member1;member2)`. Members are
 split on `;` during reference ingestion and inline `#comment` suffixes are
 removed. An IP List that cannot be resolved remains visibly marked
 `[unresolved]` rather than being silently discarded.
+Reporting resolves these selectors from the complete raw `export_iplists.csv`;
+the `NZ3_*`-only derived export remains dedicated to workload/subnet
+correlation.
 
 The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ip`, and
-`nb_ports`. Address counts use the distinct expanded workload addresses and
-IP-list members. The port count is the number of distinct explicit TCP/UDP
-ports; inclusive ranges are expanded, while protocols without a port and
-`All Services` do not invent an arbitrary numeric cardinality.
+`nb_ports`. Address counts represent the union cardinality of workload IPs,
+IP-list addresses, ranges, and subnets rather than the number of displayed
+items. Consequently, `Any` (`0.0.0.0/0` plus `::/0`) is
+`340282366920938463463374607436063178752`; this exact value is stored as text
+because it exceeds Excel's numeric precision. The port count is the number of
+distinct explicit TCP/UDP ports; inclusive ranges are expanded, while
+protocols without a port and `All Services` do not invent an arbitrary numeric
+cardinality.
 
 ## 7. Test procedure
 

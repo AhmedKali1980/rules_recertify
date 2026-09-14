@@ -33,3 +33,14 @@ class ReferenceTest(unittest.TestCase):
    with db.connect() as connection:
     rows=list(connection.execute('select short_hostname,name from workloads order by href'))
    self.assertEqual([tuple(row) for row in rows], [('HOST','host-name'), ('','fallback-name')])
+
+ def test_complete_raw_ip_list_export_keeps_non_nz3_members_for_reporting(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); wk=root/'wk.csv'; ip=root/'ip.csv'
+   wk.write_text('href;hostname;name;interfaces;ip_with_default_gw;app;env;managed\n/w/1;host;h;aut0:10.0.0.1;;APP;PRD;FALSE\n')
+   ip.write_text('name;include\nBUSINESS_IPL;"192.168.19.0/24#GEN1;192.168.20.1#GEN2"\n')
+   db=Database(root/'db'); db.initialize(); db.begin_run('r','REFERENCE',{})
+   ingest_reference(db,wk,ip,'r')
+   with db.connect() as connection:
+    members=list(connection.execute('select name,member from ip_lists order by member'))
+   self.assertEqual([tuple(row) for row in members], [('BUSINESS_IPL','192.168.19.0/24'),('BUSINESS_IPL','192.168.20.1')])

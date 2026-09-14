@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import ipaddress
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -62,8 +63,8 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         expanded_destinations, destination_addresses = _expand_side_details(raw, "dst", workloads, rule_pairs, ip_lists)
         expanded["Expanded Sources"] = expanded_sources
         expanded["Expanded Destinations"] = expanded_destinations
-        expanded["nb_src_ips"] = len(source_addresses)
-        expanded["nb_dst_ip"] = len(destination_addresses)
+        expanded["nb_src_ips"] = _excel_safe_count(_count_addresses(source_addresses))
+        expanded["nb_dst_ip"] = _excel_safe_count(_count_addresses(destination_addresses))
         expanded["nb_ports"] = _count_ports(str(rule["services"]))
         expanded_rows.append(expanded)
         for usage in usage_by_rule[rule["rule_href"]]:
@@ -317,6 +318,41 @@ def _count_ports(services: str) -> int:
         if 0 <= start <= end <= 65535:
             ports.update((match.group(3).upper(), port) for port in range(start, end + 1))
     return len(ports)
+
+
+def _count_addresses(addresses: Iterable[str]) -> int:
+    """Count the union of represented IPv4/IPv6 addresses without overlap."""
+    networks: Dict[int, List[object]] = {4: [], 6: []}
+    for raw in addresses:
+        value = str(raw).partition("#")[0].strip()
+        if not value:
+            continue
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            start_text, separator, end_text = value.partition("-")
+            if not separator:
+                continue
+            try:
+                start = ipaddress.ip_address(start_text.strip())
+                end = ipaddress.ip_address(end_text.strip())
+            except ValueError:
+                continue
+            if start.version != end.version or int(start) > int(end):
+                continue
+            networks[start.version].extend(ipaddress.summarize_address_range(start, end))
+        else:
+            networks[network.version].append(network)
+    return sum(
+        network.num_addresses
+        for version_networks in networks.values()
+        for network in ipaddress.collapse_addresses(version_networks)
+    )
+
+
+def _excel_safe_count(value: int) -> object:
+    """Preserve integers beyond Excel's 15-digit numeric precision as text."""
+    return str(value) if value > 999_999_999_999_999 else value
 
 
 def _sheet(workbook: object, name: str, rows: List[Mapping[str, object]]) -> None:

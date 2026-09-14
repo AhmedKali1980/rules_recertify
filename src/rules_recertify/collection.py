@@ -74,7 +74,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
             import_pce_exports(run_dir, pce_stub_dir, import_environment)
             details["reference_ingest"] = ingest_reference(
                 db, run_dir / "export_wkld.derived.csv",
-                run_dir / "export_iplists.derived.csv", run_id,
+                run_dir / "export_iplists.csv", run_id,
             )
             details["reference_exports"] = [
                 "export_wkld.csv", "export_iplists.csv",

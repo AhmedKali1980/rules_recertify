@@ -229,6 +229,10 @@ Bulk reporting reads the active sheet of a Microcosmos XLSX and groups rows by
 labels by the exact, case-insensitive suffix after their second underscore. The
 timestamped output tree separates PRD from NONPRD before sanitized Entity
 directories; each group delegates to the same single-workbook generator.
+The latest timestamped `labels.csv` supplements labels observed in SQLite, but
+only pairs matching at least one SQLite rule enter a report. Non-actionable rows
+do not abort the batch: a preserved copy of the input workbook receives a
+per-row `Rules Recertify Status` audit column under the timestamp root.
 
 ## 5. Historical accumulation and 180-day guarantee
 

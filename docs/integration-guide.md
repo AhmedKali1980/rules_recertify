@@ -370,13 +370,21 @@ non-empty `Kear Id` in the active sheet. The workbook must expose `Kear Id`,
 becomes the logical report name. A Microcosmos module matches application labels
 whose suffix after the second underscore equals that module, case-insensitively
 (for example, `APM_RBS_FACTOBOT` maps to `FACTOBOT`). Unknown modules and
-inconsistent application names fail explicitly.
+inconsistent application names are skipped and recorded in the audit workbook.
 
 The batch root is `output_dir/<UTC timestamp>`. Reports are grouped below
 `PRD/<sanitized Entity>` and `NONPRD/<sanitized Entity>`. Rows for the same KEAR
 and category are consolidated into one report; NONPRD preserves each original
 environment in its application/environment pairs while using `NONPRD` in the
-filename.
+filename. Labels are also discovered from the newest timestamped `labels.csv`.
+A known label with no matching rule in SQLite is skipped rather than aborting
+the batch.
+
+The timestamp root contains a copy named
+`<input>.rules-recertify-status.xlsx`. Its appended `Rules Recertify Status`
+column records either the relative generated report path or the reason the row
+was skipped (empty KEAR/environment, unknown module, missing rule, or
+inconsistent application name).
 
 In `Expanded Rules`, sources and destinations are resolved from the ingested
 `export_wkld.derived.csv` and complete `export_iplists.csv` references. Label,

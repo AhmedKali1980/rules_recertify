@@ -136,13 +136,19 @@ traitées. `Application Name` alimente le nom logique et `Environment` le scope.
 Le module est rapproché des labels applicatifs connus en comparant sa valeur à
 la partie située après le deuxième underscore : `APM_RBS_FACTOBOT` correspond
 ainsi au module `FACTOBOT`. Un module sans label correspondant provoque une
-erreur explicite plutôt qu'un rapport incomplet.
+ligne `SKIPPED`. Un label existant dans le dernier `labels.csv`, mais sans règle
+correspondante dans SQLite pour l'environnement demandé, est également ignoré
+sans interrompre les autres rapports.
 
 Les fichiers sont écrits sous
 `output/<timestamp>/{PRD,NONPRD}/<Entity>/`. Pour un même KEAR, les lignes PRD
 sont réunies dans un rapport suffixé `PRD`; tous les autres environnements sont
 réunis dans un second rapport suffixé `NONPRD`. Les noms d'entités sont assainis
 pour rester des composants de chemin sûrs.
+Une copie du fichier Microcosmos est créée directement sous
+`output/<timestamp>/` avec le suffixe `.rules-recertify-status.xlsx`. La colonne
+supplémentaire `Rules Recertify Status` indique pour chaque ligne le rapport
+produit (`PROCESSED`) ou la raison précise du `SKIPPED`.
 
 Dans `Expanded Rules`, les workloads sont résolus depuis
 `export_wkld.derived.csv` et affichés comme `short_hostname (ip1;ip2)`, avec

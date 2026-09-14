@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import ipaddress
+import logging
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from ..history.database import Database
 from ..history.metrics import summarize_usage
+from ..workloader.csvio import read_rows
+
+LOG = logging.getLogger(__name__)
 
 
 class ReportingDependencyError(RuntimeError):
@@ -17,11 +22,12 @@ class ReportingDependencyError(RuntimeError):
 
 
 def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name: str,
-                      application_labels: Sequence[str], environment: str,
-                      lookback_days: int, as_of: date) -> Path:
+                      application_labels: Sequence[str], environments: Sequence[str],
+                      lookback_days: int, as_of: date, raw_dir: Optional[Path] = None) -> Path:
+    scope_pairs = _scope_pairs(application_labels, environments)
     if not kear_id.strip():
         raise ValueError("kear_id must not be empty")
-    if not logical_name.strip() or not application_labels or not environment.strip():
+    if not logical_name.strip() or not scope_pairs:
         raise ValueError("logical name, application labels, and environment are required")
     if importlib.util.find_spec("openpyxl") is None:
         raise ReportingDependencyError("openpyxl is required for report generation; install the approved offline package")
@@ -30,20 +36,23 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
     cutoff = (as_of - timedelta(days=lookback_days)).isoformat()
     with db.connect() as connection:
         rule_rows = [dict(row) for row in connection.execute("SELECT * FROM rules ORDER BY ruleset_name,rule_href")]
-        selected = [row for row in rule_rows if _rule_matches(row, application_labels, environment)]
+        selected = [row for row in rule_rows if _rule_matches(row, scope_pairs)]
         usage_by_rule: Dict[str, List[Mapping[str, object]]] = defaultdict(list)
         for row in connection.execute("SELECT * FROM usage_windows WHERE window_end>? AND window_start<? ORDER BY window_start", (cutoff, as_of.isoformat())):
             usage_by_rule[row["rule_href"]].append(dict(row))
         workloads = [dict(row) for row in connection.execute("SELECT * FROM workloads")]
+        ip_lists, ip_list_reference = _load_report_ip_lists(connection, raw_dir)
         quality = [dict(row) for row in connection.execute("SELECT * FROM data_quality ORDER BY category,object_id")]
     raw_rows, expanded_rows, usage_rows = [], [], []
     for rule in selected:
         raw = json.loads(rule["raw_json"])
-        modules = [label for label in application_labels if _contains_app(raw, label)]
+        rule_pairs = _matching_rule_pairs(raw, scope_pairs)
+        modules = list(dict.fromkeys(label for label, _ in rule_pairs))
+        rule_environments = list(dict.fromkeys(environment for _, environment in rule_pairs))
         metrics = summarize_usage(usage_by_rule[rule["rule_href"]], as_of, lookback_days)
         base = {
             "KEAR ID": kear, "Logical Application": logical_name, "Module": "\n".join(modules),
-            "Environment": environment, "Ruleset": rule["ruleset_name"], "Rule Href": rule["rule_href"],
+            "Environment": "\n".join(rule_environments), "Ruleset": rule["ruleset_name"], "Rule Href": rule["rule_href"],
             "Ruleset Enabled": _display_bool(rule["ruleset_enabled"]), "Rule Enabled": _display_bool(rule["rule_enabled"]),
             "Rule Type": rule["rule_type"], "Source": rule["source_text"], "Destination": rule["destination_text"],
             "Service Name / Definition": rule["services"], "Description": rule["rule_description"],
@@ -54,8 +63,13 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         }
         raw_rows.append(base)
         expanded = dict(base)
-        expanded["Expanded Sources"] = _expand_side(raw, "src", workloads, environment)
-        expanded["Expanded Destinations"] = _expand_side(raw, "dst", workloads, environment)
+        expanded_sources, source_addresses = _expand_side_details(raw, "src", workloads, rule_pairs, ip_lists)
+        expanded_destinations, destination_addresses = _expand_side_details(raw, "dst", workloads, rule_pairs, ip_lists)
+        expanded["Expanded Sources"] = expanded_sources
+        expanded["Expanded Destinations"] = expanded_destinations
+        expanded["nb_src_ips"] = _excel_safe_count(_count_addresses(source_addresses))
+        expanded["nb_dst_ip"] = _excel_safe_count(_count_addresses(destination_addresses))
+        expanded["nb_ports"] = _count_ports(str(rule["services"]))
         expanded_rows.append(expanded)
         for usage in usage_by_rule[rule["rule_href"]]:
             usage_rows.append({"KEAR ID": kear, "Rule Href": rule["rule_href"], "Window Start": usage["window_start"],
@@ -64,8 +78,10 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
                                "Omitted Port Details": usage["port_details_omitted_count"]})
     workbook = Workbook(); workbook.remove(workbook.active)
     presentation = [{"Field": key, "Value": value} for key, value in (
-        ("KEAR ID", kear), ("Logical Application", logical_name), ("Application Labels", "\n".join(application_labels)),
-        ("Environment", environment), ("As Of", as_of.isoformat()), ("Lookback Days", lookback_days),
+        ("KEAR ID", kear), ("Logical Application", logical_name),
+        ("Application Scopes", "\n".join(f"{app} / {env}" for app, env in scope_pairs)),
+        ("IP List Reference", ip_list_reference),
+        ("As Of", as_of.isoformat()), ("Lookback Days", lookback_days),
         ("Rules", len(selected)), ("Generated At UTC", datetime.now(timezone.utc).isoformat()))]
     _sheet(workbook, "Presentation", presentation)
     _sheet(workbook, "Raw Rules", raw_rows)
@@ -74,19 +90,72 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
     quality_rows = [{"KEAR ID": kear, **row} for row in quality]
     _sheet(workbook, "Data Quality", quality_rows)
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_env = re.sub(r"[^A-Za-z0-9_.-]+", "_", environment)
+    safe_env = re.sub(r"[^A-Za-z0-9_.-]+", "_", "-".join(dict.fromkeys(env for _, env in scope_pairs)))
     target = output_dir / f"rules_recertify_{kear}_{safe_env}_{as_of.strftime('%Y%m%d')}.xlsx"
     temporary = target.with_suffix(".xlsx.tmp")
     workbook.save(temporary); temporary.replace(target)
     return target
 
 
-def _rule_matches(rule: Mapping[str, object], labels: Sequence[str], environment: str) -> bool:
+def _load_report_ip_lists(connection: object, raw_dir: Optional[Path]) -> Tuple[List[Dict[str, str]], str]:
+    """Prefer the newest complete raw IP-list export, with SQLite as fallback."""
+    if raw_dir:
+        candidates = sorted(
+            (path for path in raw_dir.glob("*/export_iplists.csv") if path.is_file() and path.stat().st_size),
+            key=lambda path: path.parent.name,
+            reverse=True,
+        )
+        if candidates:
+            source = candidates[0]
+            members: List[Dict[str, str]] = []
+            for row in read_rows(source, ("name", "include")):
+                for raw_member in row["include"].split(";"):
+                    member = raw_member.partition("#")[0].strip()
+                    if row["name"] and member:
+                        members.append({"name": row["name"], "member": member})
+            LOG.info("Using complete IP-list reference export: %s (%s members)", source, len(members))
+            return members, str(source)
+    rows = [dict(row) for row in connection.execute("SELECT name,member FROM ip_lists ORDER BY rowid")]
+    LOG.info("Using SQLite IP-list reference fallback (%s members)", len(rows))
+    return rows, "SQLite ip_lists fallback"
+
+
+def _scope_pairs(labels: Sequence[str], environments: Sequence[str]) -> List[Tuple[str, str]]:
+    if isinstance(environments, str):
+        environments = [environments]
+    if len(labels) != len(environments):
+        raise ValueError("application labels and environments must form one-to-one pairs")
+    pairs = [(label.strip(), environment.strip()) for label, environment in zip(labels, environments)]
+    if any(not label or not environment for label, environment in pairs):
+        raise ValueError("application labels and environments must not be empty")
+    return list(dict.fromkeys(pairs))
+
+
+def _rule_matches(rule: Mapping[str, object], scope_pairs: Sequence[Tuple[str, str]]) -> bool:
     raw = json.loads(str(rule["raw_json"]))
-    scope = str(raw.get("ruleset_scope", ""))
-    env_values = [part[4:] for part in scope.split(";") if part.lower().startswith("env:")]
-    env_match = not env_values or any(value.upper() in {"NULL", environment.upper()} for value in env_values)
-    return env_match and any(_contains_app(raw, label) for label in labels)
+    return bool(_matching_rule_pairs(raw, scope_pairs))
+
+
+def _matching_rule_pairs(raw: Mapping[str, object], scope_pairs: Sequence[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    scope_text = str(raw.get("ruleset_scope", "")).strip()
+    if scope_text:
+        scope = _scope_dimensions(scope_text)
+        app, env = scope.get("app", ""), scope.get("env", "")
+        if not app or not env:
+            return []
+        return [pair for pair in scope_pairs if pair[0].casefold() == app.casefold()
+                and (env.casefold() == "null" or pair[1].casefold() == env.casefold())]
+    matches: List[Tuple[str, str]] = []
+    for pair in scope_pairs:
+        if any(_side_matches_pair(raw, side, pair) for side in ("src", "dst")):
+            matches.append(pair)
+    return matches
+
+
+def _side_matches_pair(raw: Mapping[str, object], side: str, pair: Tuple[str, str]) -> bool:
+    labels = _label_dimensions(str(raw.get(f"{side}_labels", "")))
+    apps, environments = labels.get("app", set()), labels.get("env", set())
+    return pair[0].casefold() in apps and (not environments or pair[1].casefold() in environments)
 
 
 def _contains_app(raw: Mapping[str, object], label: str) -> bool:
@@ -99,40 +168,50 @@ def _contains_app(raw: Mapping[str, object], label: str) -> bool:
     return False
 
 
-def _expand_side(raw: Mapping[str, object], side: str, workloads: Sequence[Mapping[str, object]], environment: str) -> str:
+def _expand_side(raw: Mapping[str, object], side: str, workloads: Sequence[Mapping[str, object]],
+                 environment: object, ip_lists: Sequence[Mapping[str, object]] = ()) -> str:
+    return _expand_side_details(raw, side, workloads, environment, ip_lists)[0]
+
+
+def _expand_side_details(raw: Mapping[str, object], side: str,
+                         workloads: Sequence[Mapping[str, object]], environment: object,
+                         ip_lists: Sequence[Mapping[str, object]] = ()) -> Tuple[str, List[str]]:
+    scope_pairs = _coerce_expansion_pairs(raw, environment)
     values: List[str] = []
+    addresses: List[str] = []
     if str(raw.get(f"{side}_all_workloads", "")).lower() == "true":
         scope = _scope_dimensions(str(raw.get("ruleset_scope", "")))
-        scope_app = scope.get("app", "")
-        scope_env = scope.get("env", "")
-        target_env = environment if scope_env.upper() == "NULL" else scope_env
-        if scope_app and target_env:
-            values.extend(
-                _workload_entries(
-                    workloads,
-                    lambda workload: (
-                        str(workload.get("app", "")).casefold() == scope_app.casefold()
-                        and str(workload.get("env", "")).casefold() == target_env.casefold()
-                    ),
-                )
+        if scope:
+            scoped = _matching_workloads(
+                workloads,
+                lambda workload: _matches_scope(workload, scope, scope_pairs),
             )
+            _append_workloads(values, addresses, scoped)
         else:
             values.append("All Workloads")
-    ip_lists = str(raw.get(f"{side}_iplists", ""));
-    if ip_lists: values.extend(f"IP List: {item.strip()}" for item in ip_lists.split(";") if item.strip())
+    ip_list_selectors = str(raw.get(f"{side}_iplists", ""))
+    if ip_list_selectors:
+        ip_list_entries, ip_list_members = _ip_list_entries(ip_list_selectors, ip_lists)
+        values.extend(ip_list_entries); addresses.extend(ip_list_members)
     explicit = str(raw.get(f"{side}_workloads", ""));
-    if explicit: values.extend(f"Workload: {item.strip()}" for item in explicit.split(";") if item.strip())
+    if explicit:
+        selectors = {item.strip().casefold() for item in explicit.split(";") if item.strip()}
+        matched = _matching_workloads(workloads, lambda workload: bool(selectors & _workload_identities(workload)))
+        _append_workloads(values, addresses, matched)
     labels = str(raw.get(f"{side}_labels", ""))
     if labels:
-        wanted = {part.strip() for part in labels.split(";") if part.strip()}
-        for workload in workloads:
-            if workload.get("env") != environment: continue
-            tags = {f"app:{workload.get('app','')}", f"env:{workload.get('env','')}", f"loc:{workload.get('loc','')}", f"role:{workload.get('role','')}"}
-            if wanted.issubset(tags):
-                for address in json.loads(str(workload["addresses_json"])):
-                    values.append(f"{workload.get('hostname') or workload.get('name')} ({address})")
-    if "Any (0.0.0.0/0 and ::/0)" in ip_lists: values.extend(["0.0.0.0/0", "::/0"])
-    return "\n".join(dict.fromkeys(values))
+        wanted = {part.strip().casefold() for part in labels.split(";") if part.strip()}
+        matched = _matching_workloads(
+            workloads,
+            lambda workload: (
+                _workload_matches_pairs(workload, scope_pairs)
+                and wanted.issubset(_workload_tags(workload))
+            ),
+        )
+        _append_workloads(values, addresses, matched)
+    if "Any (0.0.0.0/0 and ::/0)" in ip_list_selectors:
+        values.extend(["0.0.0.0/0", "::/0"]); addresses.extend(["0.0.0.0/0", "::/0"])
+    return "\n".join(dict.fromkeys(values)), list(dict.fromkeys(addresses))
 
 
 def _scope_dimensions(scope: str) -> Dict[str, str]:
@@ -144,6 +223,24 @@ def _scope_dimensions(scope: str) -> Dict[str, str]:
     return dimensions
 
 
+def _label_dimensions(labels: str) -> Dict[str, set[str]]:
+    dimensions: Dict[str, set[str]] = defaultdict(set)
+    for component in labels.split(";"):
+        key, separator, value = component.partition(":")
+        if separator and key.strip() and value.strip():
+            dimensions[key.strip().casefold()].add(value.strip().casefold())
+    return dimensions
+
+
+def _coerce_expansion_pairs(raw: Mapping[str, object], environment: object) -> List[Tuple[str, str]]:
+    if isinstance(environment, str):
+        apps = _label_dimensions(str(raw.get("ruleset_scope", ""))).get("app", set())
+        if not apps:
+            apps = _label_dimensions(str(raw.get("src_labels", "")) + ";" + str(raw.get("dst_labels", ""))).get("app", set())
+        return [(app, environment) for app in apps] or [("", environment)]
+    return [(str(app), str(env)) for app, env in environment]
+
+
 def _workload_entries(
     workloads: Sequence[Mapping[str, object]],
     predicate: Callable[[Mapping[str, object]], bool],
@@ -152,10 +249,138 @@ def _workload_entries(
     for workload in workloads:
         if not predicate(workload):
             continue
-        hostname = str(workload.get("hostname") or workload.get("name") or "").strip()
-        for address in json.loads(str(workload.get("addresses_json", "[]"))):
-            entries.append(f"{hostname} ({address})")
+        display_name = str(workload.get("short_hostname") or workload.get("name") or "").strip()
+        addresses = [str(address) for address in json.loads(str(workload.get("addresses_json", "[]"))) if address]
+        if display_name and addresses:
+            entries.append(f"{display_name} ({';'.join(addresses)})")
     return entries
+
+
+def _matching_workloads(workloads: Sequence[Mapping[str, object]],
+                        predicate: Callable[[Mapping[str, object]], bool]) -> List[Mapping[str, object]]:
+    return [workload for workload in workloads if predicate(workload)]
+
+
+def _append_workloads(values: List[str], addresses: List[str],
+                      workloads: Sequence[Mapping[str, object]]) -> None:
+    values.extend(_workload_entries(workloads, lambda workload: True))
+    for workload in workloads:
+        addresses.extend(
+            str(address) for address in json.loads(str(workload.get("addresses_json", "[]"))) if address
+        )
+
+
+def _matches_scope(workload: Mapping[str, object], scope: Mapping[str, str],
+                   scope_pairs: Sequence[Tuple[str, str]]) -> bool:
+    for dimension in ("app", "env", "loc", "role"):
+        wanted = scope.get(dimension)
+        if not wanted:
+            continue
+        if dimension == "env" and wanted.casefold() == "null":
+            if not _workload_matches_pairs(workload, scope_pairs):
+                return False
+            continue
+        if str(workload.get(dimension, "")).casefold() != wanted.casefold():
+            return False
+    return True
+
+
+def _workload_matches_pairs(workload: Mapping[str, object],
+                            scope_pairs: Sequence[Tuple[str, str]]) -> bool:
+    app = str(workload.get("app", "")).casefold()
+    environment = str(workload.get("env", "")).casefold()
+    return any((not pair_app or pair_app.casefold() == app) and pair_env.casefold() == environment
+               for pair_app, pair_env in scope_pairs)
+
+
+def _workload_tags(workload: Mapping[str, object]) -> set[str]:
+    return {
+        f"app:{workload.get('app', '')}".casefold(),
+        f"env:{workload.get('env', '')}".casefold(),
+        f"loc:{workload.get('loc', '')}".casefold(),
+        f"role:{workload.get('role', '')}".casefold(),
+    }
+
+
+def _workload_identities(workload: Mapping[str, object]) -> set[str]:
+    return {
+        str(workload.get(field, "")).strip().casefold()
+        for field in ("href", "hostname", "short_hostname", "name")
+        if str(workload.get(field, "")).strip()
+    }
+
+
+def _ip_list_entries(selectors: str, ip_lists: Sequence[Mapping[str, object]]) -> Tuple[List[str], List[str]]:
+    members: Dict[str, Tuple[str, List[str]]] = {}
+    for row in ip_lists:
+        name = str(row.get("name", "")).strip()
+        for raw_member in str(row.get("member", row.get("include", ""))).split(";"):
+            member = raw_member.partition("#")[0].strip()
+            if name and member:
+                key = name.casefold()
+                members.setdefault(key, (name, []))[1].append(member)
+    entries: List[str] = []
+    addresses: List[str] = []
+    for selector in (item.strip() for item in re.split(r"[;\n]", selectors) if item.strip()):
+        selector_name = _ip_list_selector_name(selector)
+        match = members.get(selector_name.casefold())
+        if match:
+            entries.append(f"IP List: {match[0]} ({';'.join(dict.fromkeys(match[1]))})")
+            addresses.extend(match[1])
+        elif selector_name != "Any (0.0.0.0/0 and ::/0)":
+            entries.append(f"IP List: {selector_name} [unresolved]")
+    return entries, addresses
+
+
+def _ip_list_selector_name(selector: str) -> str:
+    value = re.sub(r"^IP\s*List\s*:\s*", "", selector.strip(), flags=re.IGNORECASE)
+    value = re.sub(r"\s*(?:[\[(]|:\s*)?/orgs/.*$", "", value)
+    return value.strip()
+
+
+def _count_ports(services: str) -> int:
+    """Count distinct explicit TCP/UDP ports, expanding inclusive ranges."""
+    ports = set()
+    for match in re.finditer(r"\b(\d{1,5})(?:\s*-\s*(\d{1,5}))?\s+(TCP|UDP)\b", services, re.IGNORECASE):
+        start = int(match.group(1)); end = int(match.group(2) or start)
+        if 0 <= start <= end <= 65535:
+            ports.update((match.group(3).upper(), port) for port in range(start, end + 1))
+    return len(ports)
+
+
+def _count_addresses(addresses: Iterable[str]) -> int:
+    """Count the union of represented IPv4/IPv6 addresses without overlap."""
+    networks: Dict[int, List[object]] = {4: [], 6: []}
+    for raw in addresses:
+        value = str(raw).partition("#")[0].strip()
+        if not value:
+            continue
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            start_text, separator, end_text = value.partition("-")
+            if not separator:
+                continue
+            try:
+                start = ipaddress.ip_address(start_text.strip())
+                end = ipaddress.ip_address(end_text.strip())
+            except ValueError:
+                continue
+            if start.version != end.version or int(start) > int(end):
+                continue
+            networks[start.version].extend(ipaddress.summarize_address_range(start, end))
+        else:
+            networks[network.version].append(network)
+    return sum(
+        network.num_addresses
+        for version_networks in networks.values()
+        for network in ipaddress.collapse_addresses(version_networks)
+    )
+
+
+def _excel_safe_count(value: int) -> object:
+    """Preserve integers beyond Excel's 15-digit numeric precision as text."""
+    return str(value) if value > 999_999_999_999_999 else value
 
 
 def _sheet(workbook: object, name: str, rows: List[Mapping[str, object]]) -> None:

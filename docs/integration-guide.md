@@ -144,18 +144,20 @@ chmod 600 .env
 Edit `config/local.json`. Important settings are:
 
 - `workloader_dir`: directory containing the Workloader binary;
+- `workloader_config_file`: Workloader `pce.yaml`, which owns PCE profiles,
+  FQDNs and credentials;
 - `state_db`: durable local SQLite path;
 - traffic batch/poll timing;
 - `retention_days`, which cannot be lower than 200;
 - `smtp_enabled`.
 
-Edit `.env` for PCE/Workloader environment overrides and SMTP values. The parser
-never evaluates shell syntax. Do not run `source .env`; do not commit it.
+Use `.env` primarily for optional SMTP secrets. Runtime paths and the normal PCE
+selection belong in `config/local.json` and `pce.yaml`. The parser never
+evaluates shell syntax. Do not run `source .env`; do not commit it.
 
-`PCE`, `WORKLOADER_DIR`, and `STATE_DB` in `.env` override values from
-`config/local.json`. They are commented out in new installations to avoid an
-accidental override. For an installation created from an earlier template, check
-only these non-secret keys:
+Legacy `PCE`, `WORKLOADER_DIR`, and `STATE_DB` values in `.env` still override
+`config/local.json`; new installations should not define them. For an
+installation created from an earlier template, check these non-secret keys:
 
 ```bash
 grep -E '^(PCE|WORKLOADER_DIR|STATE_DB)=' .env || true
@@ -219,19 +221,21 @@ Run after the previous UTC day has closed:
 
 The collector:
 
-1. exports all enabled and disabled rulesets;
-2. exports labels and builds the authoritative set of `app` label values;
-3. inventories rules without traffic expansion;
-4. admits only rulesets whose complete scope contains exactly `app:<value>` and
+1. exports L1 workloads, managed L3SM workloads, and the complete L1 IP Lists,
+   then produces and ingests the derived reference data;
+2. exports all enabled and disabled rulesets;
+3. exports labels and builds the authoritative set of `app` label values;
+4. inventories rules without traffic expansion;
+5. admits only rulesets whose complete scope contains exactly `app:<value>` and
    `env:<value>` (in either order) and whose application value exists in the
    label export;
-5. counts and bin-packs whole eligible rulesets up to the configured rule limit;
-6. submits sequential `rule-export --traffic-count --expand-svcs` batches;
-7. polls `rule-usage` and logs completion progress;
-8. never replaces a completed usage window with a later pending result;
-9. commits usage and port observations to SQLite;
-10. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
-11. sends one non-blocking SMTP summary.
+6. counts and bin-packs whole eligible rulesets up to the configured rule limit;
+7. submits sequential `rule-export --traffic-count --expand-svcs` batches;
+8. polls `rule-usage` and logs completion progress;
+9. never replaces a completed usage window with a later pending result;
+10. commits usage and port observations to SQLite;
+11. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
+12. sends one non-blocking SMTP summary.
 
 Check the latest collection with a single concise status line:
 

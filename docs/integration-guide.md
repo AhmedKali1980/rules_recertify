@@ -10,7 +10,7 @@ The `scripts/rules-recertify` entrypoint exposes:
 | `init-db` | Create/upgrade the local SQLite schema |
 | `collect` | Export policy, submit/poll traffic queries, and persist usage |
 | `ingest-usage` | Ingest an existing Workloader `rule-usage` CSV |
-| `ingest-reference` | Ingest derived workload and IP-list CSVs |
+| `ingest-reference` | Ingest derived workloads and the complete raw IP-list CSV |
 | `report` | Generate an application workbook on demand |
 
 Collection and report delivery are deliberately separate. Cron runs `collect`;
@@ -144,18 +144,20 @@ chmod 600 .env
 Edit `config/local.json`. Important settings are:
 
 - `workloader_dir`: directory containing the Workloader binary;
+- `workloader_config_file`: Workloader `pce.yaml`, which owns PCE profiles,
+  FQDNs and credentials;
 - `state_db`: durable local SQLite path;
 - traffic batch/poll timing;
 - `retention_days`, which cannot be lower than 200;
 - `smtp_enabled`.
 
-Edit `.env` for PCE/Workloader environment overrides and SMTP values. The parser
-never evaluates shell syntax. Do not run `source .env`; do not commit it.
+Use `.env` primarily for optional SMTP secrets. Runtime paths and the normal PCE
+selection belong in `config/local.json` and `pce.yaml`. The parser never
+evaluates shell syntax. Do not run `source .env`; do not commit it.
 
-`PCE`, `WORKLOADER_DIR`, and `STATE_DB` in `.env` override values from
-`config/local.json`. They are commented out in new installations to avoid an
-accidental override. For an installation created from an earlier template, check
-only these non-secret keys:
+Legacy `PCE`, `WORKLOADER_DIR`, and `STATE_DB` values in `.env` still override
+`config/local.json`; new installations should not define them. For an
+installation created from an earlier template, check these non-secret keys:
 
 ```bash
 grep -E '^(PCE|WORKLOADER_DIR|STATE_DB)=' .env || true
@@ -191,13 +193,13 @@ Expected schema version is `1`; integrity must return `ok`.
 
 ## 4. Reference-data ingestion
 
-Produce `export_wkld.derived.csv` and `export_iplists.derived.csv` with the existing
-approved extraction/derivation process, then run:
+Produce the reference exports with the approved extraction/derivation process,
+then ingest derived workloads and the complete IP-list export:
 
 ```bash
 ./scripts/rules-recertify --config config/local.json ingest-reference \
   --workloads /data/export_wkld.derived.csv \
-  --ip-lists /data/export_iplists.derived.csv
+  --ip-lists /data/export_iplists.csv
 ```
 
 The adapter accepts comma or semicolon CSV delimiters and UTF-8 with or without a
@@ -219,19 +221,21 @@ Run after the previous UTC day has closed:
 
 The collector:
 
-1. exports all enabled and disabled rulesets;
-2. exports labels and builds the authoritative set of `app` label values;
-3. inventories rules without traffic expansion;
-4. admits only rulesets whose complete scope contains exactly `app:<value>` and
+1. exports L1 workloads, managed L3SM workloads, and the complete L1 IP Lists,
+   then produces and ingests the derived reference data;
+2. exports all enabled and disabled rulesets;
+3. exports labels and builds the authoritative set of `app` label values;
+4. inventories rules without traffic expansion;
+5. admits only rulesets whose complete scope contains exactly `app:<value>` and
    `env:<value>` (in either order) and whose application value exists in the
    label export;
-5. counts and bin-packs whole eligible rulesets up to the configured rule limit;
-6. submits sequential `rule-export --traffic-count --expand-svcs` batches;
-7. polls `rule-usage` and logs completion progress;
-8. never replaces a completed usage window with a later pending result;
-9. commits usage and port observations to SQLite;
-10. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
-11. sends one non-blocking SMTP summary.
+6. counts and bin-packs whole eligible rulesets up to the configured rule limit;
+7. submits sequential `rule-export --traffic-count --expand-svcs` batches;
+8. polls `rule-usage` and logs completion progress;
+9. never replaces a completed usage window with a later pending result;
+10. commits usage and port observations to SQLite;
+11. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
+12. sends one non-blocking SMTP summary.
 
 Check the latest collection with a single concise status line:
 
@@ -342,21 +346,105 @@ under the service account only after the PCE integration test succeeds.
 ./scripts/rules-recertify --config config/local.json report \
   --kear-id 51be4bf9-2080-432f-9d02-1c0cf0f251d7 \
   --logical-application-name "My Consolidated Application" \
-  --application-label APP_A \
-  --application-label APP_A_LEGACY \
-  --environment PRD \
+  --application-label APP_A --environment PRD \
+  --application-label APP_A_LEGACY --environment UAT \
   --lookback-days 180
 ```
 
 The output is written atomically below `output_dir`, with KEAR ID and Environment
 in its filename. Inspect `Presentation`, `Raw Rules`, `Expanded Rules`,
 `Rule Usage`, and `Data Quality`. The KEAR ID is present on every sheet.
+Each `--application-label` is paired by position with one `--environment`; the
+two options must therefore occur the same number of times. Scoped rulesets must
+match an exact pair. An unscoped ruleset is selected only when one source or
+destination side contains that exact pair, or contains the application label
+without an environment label (meaning every requested environment for that
+application).
 
-In `Expanded Rules`, an `All Workloads` source or destination is resolved from
-the ingested workload reference and the ruleset scope. For example,
-`app:APM_PAYMENT;env:PRD` produces one `hostname (ip_with_default_gw)` line for
-each matching PRD workload. Managed workloads use `ip_with_default_gw`; the
-reference ingestion's selected addresses are used for other workload types.
+### 6.1 Bulk reports from Microcosmos
+
+Use `report-batch --microcosmos-xlsx <file.xlsx>` to generate reports for every
+non-empty `Kear Id` in the active sheet. The workbook must expose `Kear Id`,
+`Application Name`, `Module`, `Account`, `Account Leader`,
+`Microsegmentation Solution`, `Environment`, and `Entity`. The application name
+becomes the logical report name. A Microcosmos module matches application labels
+whose suffix after the second underscore equals that module, case-insensitively
+(for example, `APM_RBS_FACTOBOT` maps to `FACTOBOT`). Unknown modules and
+inconsistent application names are skipped and recorded in the audit workbook.
+
+The batch root is `output_dir/<UTC timestamp>`. Reports are grouped below
+`PRD/<sanitized Entity>` and `NONPRD/<sanitized Entity>`. Rows for the same KEAR
+and category are consolidated into one report; NONPRD preserves each original
+environment in its application/environment pairs while using `NONPRD` in the
+filename. Labels are also discovered from the newest timestamped `labels.csv`.
+A known label with no matching rule in SQLite is skipped rather than aborting
+the batch.
+
+The timestamp root contains a copy named
+`<input>.rules-recertify-status.xlsx`. Its appended `Rules Recertify Status`
+column records either the relative generated report path or the reason the row
+was skipped (empty KEAR/environment, unknown module, missing rule, or
+inconsistent application name).
+
+In `Expanded Rules`, sources and destinations are resolved from the ingested
+references, preferring the newest timestamped raw `export_wkld.derived.csv`
+over the SQLite workload snapshot and using the complete `export_iplists.csv`.
+Label,
+explicit-workload, and `All Workloads` selectors render one entry as
+`short_hostname (ip1;ip2)`; `name` is used when `short_hostname` is empty.
+Managed workloads use `ip_with_default_gw`, while unmanaged workloads use the
+ordered IPv4 values parsed from `interfaces`.
+Selectors containing both `app` and `env` are matched directly against those
+labels (plus any `loc`/`role`) on both source and destination sides. They are not
+cross-filtered by a second report pair. Selectors without `app` remain
+constrained by the requested report pairs.
+Label selector dimensions use Illumio boolean semantics: different dimensions
+are ANDed, while repeated values inside one dimension are ORed. For example,
+`app:A;env:PRD;role:PSM;role:PSMP` means app A AND PRD AND (PSM OR PSMP), on
+both source and destination sides.
+When an application label is present but `env` is absent, the selector matches
+all environments; report-level environment pairs must not add an implicit
+filter. A selector without `app` remains constrained by the report pairs.
+
+IP-list selectors render as `IP List: name (member1;member2)`. Members are
+split on `;` during reference ingestion and inline `#comment` suffixes are
+removed. An IP List that cannot be resolved remains visibly marked
+`[unresolved]` rather than being silently discarded.
+Reporting resolves these selectors from the complete raw `export_iplists.csv`;
+the `NZ3_*`-only derived export remains dedicated to workload/subnet
+correlation. At report time, the newest non-empty
+`raw_dir/<YYYYMMDDTHHMMSSZ-8hex>/export_iplists.csv` is parsed directly and takes precedence
+over the SQLite snapshot. This makes reports self-healing when SQLite was
+populated by an older release that stored only `NZ3_*` members. SQLite remains
+the fallback when no raw export exists. The `Presentation` sheet records the
+selected file path or the SQLite fallback for auditability. Technical folders
+such as `raw/preflight` are never eligible.
+
+The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ips`, and
+`nb_ports`. Address counts represent the union cardinality of workload IPs,
+IP-list addresses, ranges, and subnets rather than the number of displayed
+items. Corporate rules are IPv4-only, so `Any` (`0.0.0.0/0` plus `::/0` in the
+source selector) counts only `2^32`, or `4294967296`. The port count is the
+number of distinct explicit TCP/UDP ports and expands inclusive ranges.
+`All Services` is displayed as `0-65535 TCP;0-65535 UDP` in `Expanded Rules`
+and therefore counts `131072` protocol/port pairs.
+
+`Expanded Rules.dangerous_ports` intersects each rule's TCP/UDP ports with the
+catalogues selected by the `dangerous_port_lists` setting. Supported names are
+`PORTS_TO_CONTROL`, `PORTS_TO_ERADICATE`, and `PORTS_ADMIN`; configuration may
+use a JSON list or a comma-separated string. Output uses canonical values such
+as `TCP/22` and `TCP/5900-5906`. The unexplained `/3` and `/14` suffixes from a
+legacy spreadsheet are not protocol or port syntax and are not emitted without
+an authoritative severity mapping.
+
+The `Octoflow` sheet exposes the 24-column consumer contract. Its NZ3 zones are
+computed by full containment of expanded IPv4 addresses, ranges, or subnets;
+unmatched sides become `Any`. `permissive_rule_max_ips` (default 255) controls
+the strict-greater-than threshold for `permissive_rule`. Rule imports populate
+`rule_history`: the first observation is `creation_time`, and the latest
+content-changing observation is `last_modified`. Historical changes predating
+this schema cannot be reconstructed. `last_hit` uses the latest positive,
+completed usage window independently of the report lookback.
 
 ## 7. Test procedure
 

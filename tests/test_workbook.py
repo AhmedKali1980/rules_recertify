@@ -17,6 +17,28 @@ from rules_recertify.resolution.workloads import prepare_nz3_members
 
 
 class WorkbookExpansionTest(unittest.TestCase):
+    def test_repeated_label_dimension_is_or_while_distinct_dimensions_are_and(self):
+        workloads = [
+            {"short_hostname": "PSM-01", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",
+             "env": "PRD", "role": "PSM", "addresses_json": json.dumps(["10.0.0.1"])},
+            {"short_hostname": "PSMP-01", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",
+             "env": "PRD", "role": "PSMP", "addresses_json": json.dumps(["10.0.0.2"])},
+            {"short_hostname": "WRONG-ROLE", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",
+             "env": "PRD", "role": "CPM", "addresses_json": json.dumps(["10.0.0.3"])},
+            {"short_hostname": "WRONG-ENV", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",
+             "env": "UAT", "role": "PSM", "addresses_json": json.dumps(["10.0.0.4"])},
+        ]
+        selector = (
+            "app:CSM_RBD_CYBERARK.STANDARD.FRA.BUSU;env:PRD;role:PSM;role:PSMP"
+        )
+        raw = {"src_labels": selector, "dst_labels": selector}
+        for side in ("src", "dst"):
+            expanded = _expand_side(raw, side, workloads, [("OTHER", "PRD")])
+            self.assertEqual(
+                expanded.splitlines(),
+                ["PSM-01 (10.0.0.1)", "PSMP-01 (10.0.0.2)"],
+            )
+
     def test_complete_label_selector_expands_both_sides_without_report_pair_cross_filter(self):
         workloads = [{
             "short_hostname": "FACTO-DB-01", "name": "facto-db-01",

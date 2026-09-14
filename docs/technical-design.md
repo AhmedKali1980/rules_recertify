@@ -221,6 +221,9 @@ Workbook generation prefers the newest timestamped raw derived workload export
 over SQLite, preventing a stale reference snapshot from producing empty source
 or destination expansions. Complete side selectors (`app` plus `env`) are
 self-contained; partial selectors retain report-pair constraints.
+Selector matching stores values by dimension and evaluates AND across
+dimensions and OR within a repeated dimension, symmetrically for sources and
+destinations.
 
 Report generation prefers the newest non-empty export below a timestamped
 collection directory (`YYYYMMDDTHHMMSSZ-8hex`), never `raw/preflight`, and

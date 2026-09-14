@@ -398,6 +398,10 @@ Selectors containing both `app` and `env` are matched directly against those
 labels (plus any `loc`/`role`) on both source and destination sides. They are not
 cross-filtered by a second report pair. Partial selectors remain constrained by
 the requested report pairs.
+Label selector dimensions use Illumio boolean semantics: different dimensions
+are ANDed, while repeated values inside one dimension are ORed. For example,
+`app:A;env:PRD;role:PSM;role:PSMP` means app A AND PRD AND (PSM OR PSMP), on
+both source and destination sides.
 
 IP-list selectors render as `IP List: name (member1;member2)`. Members are
 split on `;` during reference ingestion and inline `#comment` suffixes are

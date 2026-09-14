@@ -295,14 +295,13 @@ def _expand_side_details(raw: Mapping[str, object], side: str,
         _append_workloads(values, addresses, matched)
     labels = str(raw.get(f"{side}_labels", ""))
     if labels:
-        wanted = {part.strip().casefold() for part in labels.split(";") if part.strip()}
         dimensions = _label_dimensions(labels)
         selector_has_pair = bool(dimensions.get("app") and dimensions.get("env"))
         matched = _matching_workloads(
             workloads,
             lambda workload: (
                 (selector_has_pair or _workload_matches_pairs(workload, scope_pairs))
-                and wanted.issubset(_workload_tags(workload))
+                and _workload_matches_dimensions(workload, dimensions)
             ),
         )
         _append_workloads(values, addresses, matched)
@@ -390,13 +389,14 @@ def _workload_matches_pairs(workload: Mapping[str, object],
                for pair_app, pair_env in scope_pairs)
 
 
-def _workload_tags(workload: Mapping[str, object]) -> set[str]:
-    return {
-        f"app:{workload.get('app', '')}".casefold(),
-        f"env:{workload.get('env', '')}".casefold(),
-        f"loc:{workload.get('loc', '')}".casefold(),
-        f"role:{workload.get('role', '')}".casefold(),
-    }
+def _workload_matches_dimensions(
+    workload: Mapping[str, object], dimensions: Mapping[str, set[str]],
+) -> bool:
+    """Apply AND across label dimensions and OR within each dimension."""
+    return bool(dimensions) and all(
+        str(workload.get(dimension, "")).strip().casefold() in allowed_values
+        for dimension, allowed_values in dimensions.items()
+    )
 
 
 def _workload_identities(workload: Mapping[str, object]) -> set[str]:

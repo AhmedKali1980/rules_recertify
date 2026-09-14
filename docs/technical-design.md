@@ -224,6 +224,9 @@ self-contained; partial selectors retain report-pair constraints.
 Selector matching stores values by dimension and evaluates AND across
 dimensions and OR within a repeated dimension, symmetrically for sources and
 destinations.
+An explicit `app` makes a side selector self-contained: missing `env` means all
+environments. Selectors without an application dimension retain report-pair
+constraints.
 
 Report generation prefers the newest non-empty export below a timestamped
 collection directory (`YYYYMMDDTHHMMSSZ-8hex`), never `raw/preflight`, and

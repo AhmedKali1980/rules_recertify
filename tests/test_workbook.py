@@ -17,6 +17,26 @@ from rules_recertify.resolution.workloads import prepare_nz3_members
 
 
 class WorkbookExpansionTest(unittest.TestCase):
+    def test_application_selector_without_environment_matches_every_environment(self):
+        workloads = [
+            {"short_hostname": "PSM-PRD", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",
+             "env": "PRD", "role": "PSM", "addresses_json": json.dumps(["10.0.0.1"])},
+            {"short_hostname": "PSMP-UAT", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",
+             "env": "UAT", "role": "PSMP", "addresses_json": json.dumps(["10.0.0.2"])},
+            {"short_hostname": "PSM-DEV", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",
+             "env": "DEV", "role": "PSM", "addresses_json": json.dumps(["10.0.0.3"])},
+            {"short_hostname": "WRONG-APP", "app": "OTHER",
+             "env": "PRD", "role": "PSM", "addresses_json": json.dumps(["10.0.0.4"])},
+        ]
+        selector = "app:CSM_RBD_CYBERARK.STANDARD.FRA.BUSU;role:PSM;role:PSMP"
+        raw = {"src_labels": selector, "dst_labels": selector}
+        for side in ("src", "dst"):
+            expanded = _expand_side(raw, side, workloads, [("REPORT_APP", "PRD")])
+            self.assertEqual(
+                expanded.splitlines(),
+                ["PSM-PRD (10.0.0.1)", "PSMP-UAT (10.0.0.2)", "PSM-DEV (10.0.0.3)"],
+            )
+
     def test_repeated_label_dimension_is_or_while_distinct_dimensions_are_and(self):
         workloads = [
             {"short_hostname": "PSM-01", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",
@@ -314,7 +334,7 @@ class WorkbookExpansionTest(unittest.TestCase):
         self.assertTrue(_rule_matches(split_across_sides, pairs))
         self.assertTrue(_rule_matches(app_only, pairs))
 
-    def test_multi_environment_expansion_does_not_cross_application_pairs(self):
+    def test_application_only_expansion_is_not_limited_to_report_environments(self):
         workloads = [
             {"short_hostname": "B-PRD", "name": "", "app": "APP_B", "env": "PRD",
              "addresses_json": json.dumps(["10.0.0.1"])},
@@ -325,7 +345,7 @@ class WorkbookExpansionTest(unittest.TestCase):
             {"src_labels": "app:APP_B"}, "src", workloads,
             [("APP_A", "PRD"), ("APP_B", "UAT")],
         )
-        self.assertEqual(expanded, "B-UAT (10.0.0.2)")
+        self.assertEqual(expanded, "B-PRD (10.0.0.1)\nB-UAT (10.0.0.2)")
 
     def test_scope_pair_cardinality_is_validated(self):
         with self.assertRaisesRegex(ValueError, "one-to-one"):

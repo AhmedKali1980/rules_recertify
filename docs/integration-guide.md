@@ -396,12 +396,15 @@ Managed workloads use `ip_with_default_gw`, while unmanaged workloads use the
 ordered IPv4 values parsed from `interfaces`.
 Selectors containing both `app` and `env` are matched directly against those
 labels (plus any `loc`/`role`) on both source and destination sides. They are not
-cross-filtered by a second report pair. Partial selectors remain constrained by
-the requested report pairs.
+cross-filtered by a second report pair. Selectors without `app` remain
+constrained by the requested report pairs.
 Label selector dimensions use Illumio boolean semantics: different dimensions
 are ANDed, while repeated values inside one dimension are ORed. For example,
 `app:A;env:PRD;role:PSM;role:PSMP` means app A AND PRD AND (PSM OR PSMP), on
 both source and destination sides.
+When an application label is present but `env` is absent, the selector matches
+all environments; report-level environment pairs must not add an implicit
+filter. A selector without `app` remains constrained by the report pairs.
 
 IP-list selectors render as `IP List: name (member1;member2)`. Members are
 split on `;` during reference ingestion and inline `#comment` suffixes are

@@ -169,12 +169,15 @@ ses propres labels, auxquels peuvent s'ajouter `loc` et `role`, sans être filtr
 une seconde fois par le couple du rapport. Cela couvre symétriquement Sources et
 Destinations et évite d'écarter un workload valide comme
 `app:APM_RBS_FACTOBOT.IAAS;env:PRD;role:DB.PCP`. Lorsqu'un sélecteur ne fournit
-pas le couple complet, les couples du rapport continuent de borner l'expansion.
+aucun label `app`, les couples du rapport continuent de borner l'expansion.
 La combinaison des labels suit la sémantique Illumio : **ET entre dimensions
 différentes**, **OU entre plusieurs valeurs d'une même dimension**. Ainsi,
 `app:CSM_RBD_CYBERARK.STANDARD.FRA.BUSU;env:PRD;role:PSM;role:PSMP`
 sélectionne les workloads PRD de cette application dont le rôle vaut `PSM` ou
-`PSMP`. La règle est identique pour Sources et Destinations.
+`PSMP`. La règle est identique pour Sources et Destinations. Lorsqu'un
+sélecteur contient `app` mais aucun label `env`, tous les environnements sont
+acceptés : `app:A;role:X;role:Y` signifie `app=A AND (role=X OR role=Y)`, sans
+filtre PRD/NONPRD implicite.
 
 Les colonnes `nb_src_ips` et `nb_dst_ips` comptent la cardinalité de l'union des
 IP, ranges et subnets IPv4 développés, sans double comptage. Dans ce périmètre

@@ -296,11 +296,11 @@ def _expand_side_details(raw: Mapping[str, object], side: str,
     labels = str(raw.get(f"{side}_labels", ""))
     if labels:
         dimensions = _label_dimensions(labels)
-        selector_has_pair = bool(dimensions.get("app") and dimensions.get("env"))
+        selector_has_application = bool(dimensions.get("app"))
         matched = _matching_workloads(
             workloads,
             lambda workload: (
-                (selector_has_pair or _workload_matches_pairs(workload, scope_pairs))
+                (selector_has_application or _workload_matches_pairs(workload, scope_pairs))
                 and _workload_matches_dimensions(workload, dimensions)
             ),
         )

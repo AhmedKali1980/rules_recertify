@@ -43,7 +43,7 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--kear-id", required=True)
     report.add_argument("--logical-application-name", required=True)
     report.add_argument("--application-label", action="append", required=True)
-    report.add_argument("--environment", required=True)
+    report.add_argument("--environment", action="append", required=True)
     report.add_argument("--lookback-days", type=int)
     report.add_argument("--as-of", type=_date, default=date.today())
     return root
@@ -96,6 +96,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
             if not 1 <= lookback <= settings.retention_days:
                 raise ValueError("lookback-days must be between 1 and retention_days")
+            if len(args.application_label) != len(args.environment):
+                raise ValueError("each --application-label must have one corresponding --environment")
             target = generate_workbook(db, Path(settings.output_dir), args.kear_id, args.logical_application_name,
                                        args.application_label, args.environment, lookback, args.as_of)
             print(target); return 0

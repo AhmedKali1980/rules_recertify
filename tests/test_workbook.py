@@ -6,7 +6,10 @@ from datetime import date
 from pathlib import Path
 
 from rules_recertify.history.database import Database
-from rules_recertify.reporting.workbook import _count_ports, _expand_side, _expand_side_details, generate_workbook
+from rules_recertify.reporting.workbook import (
+    _count_ports, _expand_side, _expand_side_details, _rule_matches, _scope_pairs,
+    generate_workbook,
+)
 
 
 class WorkbookExpansionTest(unittest.TestCase):
@@ -149,6 +152,59 @@ class WorkbookExpansionTest(unittest.TestCase):
             {"dst_iplists": "MISSING"}, "dst", [], "PRD", []
         )
         self.assertEqual(expanded, "IP List: MISSING [unresolved]")
+
+    def test_ip_list_selector_accepts_workloader_display_and_href_annotation(self):
+        expanded = _expand_side(
+            {"src_iplists": "IP List: NETWORKS (/orgs/1/sec_policy/draft/ip_lists/1)"},
+            "src", [], [("APP", "PRD")],
+            [{"name": "NETWORKS", "include": "192.168.19.0/24#GEN1"}],
+        )
+        self.assertEqual(expanded, "IP List: NETWORKS (192.168.19.0/24)")
+
+    def test_ip_list_include_splits_members_and_each_inline_comment(self):
+        expanded = _expand_side(
+            {"dst_iplists": "NETWORKS: /orgs/1/sec_policy/draft/ip_lists/1"},
+            "dst", [], [("APP", "PRD")],
+            [{"name": "NETWORKS", "include": "192.168.19.0/24#GEN1;192.168.19.1#GEN2"}],
+        )
+        self.assertEqual(expanded, "IP List: NETWORKS (192.168.19.0/24;192.168.19.1)")
+
+    def test_rule_selection_uses_exact_pairs_for_scoped_rulesets(self):
+        pairs = [("APP_A", "PRD"), ("APP_B", "UAT")]
+        matching = {"raw_json": json.dumps({"ruleset_scope": "app:APP_B;env:UAT"})}
+        wrong_environment = {"raw_json": json.dumps({"ruleset_scope": "app:APP_B;env:PRD"})}
+        self.assertTrue(_rule_matches(matching, pairs))
+        self.assertFalse(_rule_matches(wrong_environment, pairs))
+
+    def test_unscoped_rule_requires_pair_on_same_side_or_application_alone(self):
+        pairs = [("APP_A", "PRD")]
+        wrong_environment = {"raw_json": json.dumps({
+            "ruleset_scope": "", "src_labels": "app:APP_A;env:UAT",
+        })}
+        split_across_sides = {"raw_json": json.dumps({
+            "ruleset_scope": "", "src_labels": "app:APP_A", "dst_labels": "env:UAT",
+        })}
+        app_only = {"raw_json": json.dumps({"ruleset_scope": "", "dst_labels": "app:APP_A"})}
+        self.assertFalse(_rule_matches(wrong_environment, pairs))
+        self.assertTrue(_rule_matches(split_across_sides, pairs))
+        self.assertTrue(_rule_matches(app_only, pairs))
+
+    def test_multi_environment_expansion_does_not_cross_application_pairs(self):
+        workloads = [
+            {"short_hostname": "B-PRD", "name": "", "app": "APP_B", "env": "PRD",
+             "addresses_json": json.dumps(["10.0.0.1"])},
+            {"short_hostname": "B-UAT", "name": "", "app": "APP_B", "env": "UAT",
+             "addresses_json": json.dumps(["10.0.0.2"])},
+        ]
+        expanded = _expand_side(
+            {"src_labels": "app:APP_B"}, "src", workloads,
+            [("APP_A", "PRD"), ("APP_B", "UAT")],
+        )
+        self.assertEqual(expanded, "B-UAT (10.0.0.2)")
+
+    def test_scope_pair_cardinality_is_validated(self):
+        with self.assertRaisesRegex(ValueError, "one-to-one"):
+            _scope_pairs(["APP_A", "APP_B"], ["PRD"])
 
     def test_address_counts_are_stably_deduplicated(self):
         workload = {

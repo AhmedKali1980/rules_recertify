@@ -342,15 +342,20 @@ under the service account only after the PCE integration test succeeds.
 ./scripts/rules-recertify --config config/local.json report \
   --kear-id 51be4bf9-2080-432f-9d02-1c0cf0f251d7 \
   --logical-application-name "My Consolidated Application" \
-  --application-label APP_A \
-  --application-label APP_A_LEGACY \
-  --environment PRD \
+  --application-label APP_A --environment PRD \
+  --application-label APP_A_LEGACY --environment UAT \
   --lookback-days 180
 ```
 
 The output is written atomically below `output_dir`, with KEAR ID and Environment
 in its filename. Inspect `Presentation`, `Raw Rules`, `Expanded Rules`,
 `Rule Usage`, and `Data Quality`. The KEAR ID is present on every sheet.
+Each `--application-label` is paired by position with one `--environment`; the
+two options must therefore occur the same number of times. Scoped rulesets must
+match an exact pair. An unscoped ruleset is selected only when one source or
+destination side contains that exact pair, or contains the application label
+without an environment label (meaning every requested environment for that
+application).
 
 In `Expanded Rules`, sources and destinations are resolved from the ingested
 `export_wkld.derived.csv` and `export_iplists.derived.csv` references. Label,

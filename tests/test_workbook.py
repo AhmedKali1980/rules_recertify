@@ -1,5 +1,6 @@
 import json
 import importlib.util
+import csv
 import tempfile
 import unittest
 from datetime import date
@@ -8,7 +9,7 @@ from pathlib import Path
 from rules_recertify.history.database import Database
 from rules_recertify.reporting.workbook import (
     _count_addresses, _count_ports, _excel_safe_count, _expand_side,
-    _expand_side_details, _rule_matches, _scope_pairs,
+    _expand_side_details, _load_report_ip_lists, _rule_matches, _scope_pairs,
     generate_workbook,
 )
 
@@ -169,6 +170,53 @@ class WorkbookExpansionTest(unittest.TestCase):
             [{"name": "NETWORKS", "include": "192.168.19.0/24#GEN1;192.168.19.1#GEN2"}],
         )
         self.assertEqual(expanded, "IP List: NETWORKS (192.168.19.0/24;192.168.19.1)")
+
+    def test_report_prefers_latest_complete_raw_ip_list_export_over_stale_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); raw_dir = root / "raw"
+            old_run = raw_dir / "20260910T000000Z-old"; old_run.mkdir(parents=True)
+            latest_run = raw_dir / "20260911T094511Z-new"; latest_run.mkdir()
+            with (old_run / "export_iplists.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["name", "include"])
+                writer.writeheader(); writer.writerow({"name": "OLD", "include": "10.0.0.0/8"})
+            with (latest_run / "export_iplists.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "name", "description", "include", "exclude", "ip_ranges",
+                    "external_data_set", "external_data_ref", "href",
+                ])
+                writer.writeheader()
+                writer.writerow({
+                    "name": "NZ2_DOCKER.EUR.PRD_Paris.PCOM.L1-IPL",
+                    "description": "infra vlan common name",
+                    "include": "171.70.40.0/21#GEN1;171.71.32.0/21#GEN2",
+                    "href": "/orgs/1/sec_policy/draft/ip_lists/1083035",
+                })
+            db = Database(root / "state.sqlite"); db.initialize()
+            with db.connect() as connection:
+                connection.execute("INSERT INTO ip_lists VALUES(?,?,?)", ("NZ3_ONLY", "192.0.2.0/24", "old"))
+                rows, source = _load_report_ip_lists(connection, raw_dir)
+            self.assertEqual(source, str(latest_run / "export_iplists.csv"))
+            self.assertEqual(rows, [
+                {"name": "NZ2_DOCKER.EUR.PRD_Paris.PCOM.L1-IPL", "member": "171.70.40.0/21"},
+                {"name": "NZ2_DOCKER.EUR.PRD_Paris.PCOM.L1-IPL", "member": "171.71.32.0/21"},
+            ])
+            expanded = _expand_side(
+                {"src_iplists": "NZ2_DOCKER.EUR.PRD_Paris.PCOM.L1-IPL"},
+                "src", [], [("APP", "PRD")], rows,
+            )
+            self.assertEqual(
+                expanded,
+                "IP List: NZ2_DOCKER.EUR.PRD_Paris.PCOM.L1-IPL (171.70.40.0/21;171.71.32.0/21)",
+            )
+
+    def test_report_uses_sqlite_ip_lists_when_no_raw_export_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); db = Database(root / "state.sqlite"); db.initialize()
+            with db.connect() as connection:
+                connection.execute("INSERT INTO ip_lists VALUES(?,?,?)", ("DATABASE_IPL", "192.0.2.0/24", "now"))
+                rows, source = _load_report_ip_lists(connection, root / "missing-raw")
+            self.assertEqual(rows[0]["name"], "DATABASE_IPL")
+            self.assertEqual(source, "SQLite ip_lists fallback")
 
     def test_rule_selection_uses_exact_pairs_for_scoped_rulesets(self):
         pairs = [("APP_A", "PRD"), ("APP_B", "UAT")]

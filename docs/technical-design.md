@@ -218,6 +218,11 @@ The derived workload adapter validates the implemented column contract and
 selects managed addresses from `ip_with_default_gw` and unmanaged addresses
 from `interfaces`.
 
+Report generation prefers the newest non-empty run-specific
+`export_iplists.csv` below `raw_dir` and records that lineage in `Presentation`.
+The SQLite `ip_lists` snapshot is retained as a fallback, so reports can resolve
+non-`NZ3_*` names even when the database was populated by an older release.
+
 ## 5. Historical accumulation and 180-day guarantee
 
 ### 5.1 Recommended persistence

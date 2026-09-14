@@ -232,6 +232,9 @@ include
 The raw source is produced by Workloader `ipl-export`. This derived file is
 limited to `NZ3_*` and supports workload/subnet correlation. Report selector
 resolution deliberately uses the complete raw export instead.
+The report prefers the newest non-empty run-specific raw export and records its
+path in `Presentation`; the normalized SQLite table is a fallback for manual or
+legacy runs without an available raw file.
 
 ### DEC-014 — Derived workload CSV
 

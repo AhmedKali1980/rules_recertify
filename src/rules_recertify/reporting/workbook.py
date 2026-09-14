@@ -3,14 +3,18 @@ from __future__ import annotations
 import json
 import importlib.util
 import ipaddress
+import logging
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from ..history.database import Database
 from ..history.metrics import summarize_usage
+from ..workloader.csvio import read_rows
+
+LOG = logging.getLogger(__name__)
 
 
 class ReportingDependencyError(RuntimeError):
@@ -19,7 +23,7 @@ class ReportingDependencyError(RuntimeError):
 
 def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name: str,
                       application_labels: Sequence[str], environments: Sequence[str],
-                      lookback_days: int, as_of: date) -> Path:
+                      lookback_days: int, as_of: date, raw_dir: Optional[Path] = None) -> Path:
     scope_pairs = _scope_pairs(application_labels, environments)
     if not kear_id.strip():
         raise ValueError("kear_id must not be empty")
@@ -37,7 +41,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         for row in connection.execute("SELECT * FROM usage_windows WHERE window_end>? AND window_start<? ORDER BY window_start", (cutoff, as_of.isoformat())):
             usage_by_rule[row["rule_href"]].append(dict(row))
         workloads = [dict(row) for row in connection.execute("SELECT * FROM workloads")]
-        ip_lists = [dict(row) for row in connection.execute("SELECT * FROM ip_lists ORDER BY rowid")]
+        ip_lists, ip_list_reference = _load_report_ip_lists(connection, raw_dir)
         quality = [dict(row) for row in connection.execute("SELECT * FROM data_quality ORDER BY category,object_id")]
     raw_rows, expanded_rows, usage_rows = [], [], []
     for rule in selected:
@@ -76,6 +80,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
     presentation = [{"Field": key, "Value": value} for key, value in (
         ("KEAR ID", kear), ("Logical Application", logical_name),
         ("Application Scopes", "\n".join(f"{app} / {env}" for app, env in scope_pairs)),
+        ("IP List Reference", ip_list_reference),
         ("As Of", as_of.isoformat()), ("Lookback Days", lookback_days),
         ("Rules", len(selected)), ("Generated At UTC", datetime.now(timezone.utc).isoformat()))]
     _sheet(workbook, "Presentation", presentation)
@@ -90,6 +95,29 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
     temporary = target.with_suffix(".xlsx.tmp")
     workbook.save(temporary); temporary.replace(target)
     return target
+
+
+def _load_report_ip_lists(connection: object, raw_dir: Optional[Path]) -> Tuple[List[Dict[str, str]], str]:
+    """Prefer the newest complete raw IP-list export, with SQLite as fallback."""
+    if raw_dir:
+        candidates = sorted(
+            (path for path in raw_dir.glob("*/export_iplists.csv") if path.is_file() and path.stat().st_size),
+            key=lambda path: path.parent.name,
+            reverse=True,
+        )
+        if candidates:
+            source = candidates[0]
+            members: List[Dict[str, str]] = []
+            for row in read_rows(source, ("name", "include")):
+                for raw_member in row["include"].split(";"):
+                    member = raw_member.partition("#")[0].strip()
+                    if row["name"] and member:
+                        members.append({"name": row["name"], "member": member})
+            LOG.info("Using complete IP-list reference export: %s (%s members)", source, len(members))
+            return members, str(source)
+    rows = [dict(row) for row in connection.execute("SELECT name,member FROM ip_lists ORDER BY rowid")]
+    LOG.info("Using SQLite IP-list reference fallback (%s members)", len(rows))
+    return rows, "SQLite ip_lists fallback"
 
 
 def _scope_pairs(labels: Sequence[str], environments: Sequence[str]) -> List[Tuple[str, str]]:

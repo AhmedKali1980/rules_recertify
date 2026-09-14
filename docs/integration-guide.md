@@ -374,7 +374,12 @@ removed. An IP List that cannot be resolved remains visibly marked
 `[unresolved]` rather than being silently discarded.
 Reporting resolves these selectors from the complete raw `export_iplists.csv`;
 the `NZ3_*`-only derived export remains dedicated to workload/subnet
-correlation.
+correlation. At report time, the newest non-empty
+`raw_dir/<run_id>/export_iplists.csv` is parsed directly and takes precedence
+over the SQLite snapshot. This makes reports self-healing when SQLite was
+populated by an older release that stored only `NZ3_*` members. SQLite remains
+the fallback when no raw export exists. The `Presentation` sheet records the
+selected file path or the SQLite fallback for auditability.
 
 The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ip`, and
 `nb_ports`. Address counts represent the union cardinality of workload IPs,

@@ -124,7 +124,11 @@ Dans `Expanded Rules`, les workloads sont résolus depuis
 fallback sur `name`. Les IP Lists sont résolues depuis l'export complet
 `export_iplists.csv`; le dérivé limité à `NZ3_*` sert uniquement à la
 corrélation workload/subnet. Les commentaires `#...` sont retirés de chaque
-membre.
+membre. Lors de la génération, le rapport charge en priorité le
+`export_iplists.csv` du répertoire d'exécution raw le plus récent. Cela corrige
+également les bases historiques qui avaient été alimentées uniquement avec les
+IP Lists `NZ3_*`; SQLite reste le fallback si aucun export brut n'est disponible.
+La feuille `Presentation` indique le fichier effectivement utilisé.
 
 Les colonnes `nb_src_ips` et `nb_dst_ip` comptent la cardinalité de l'union des
 IP, ranges et subnets développés, sans double comptage. `Any` vaut donc

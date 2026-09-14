@@ -99,7 +99,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             if len(args.application_label) != len(args.environment):
                 raise ValueError("each --application-label must have one corresponding --environment")
             target = generate_workbook(db, Path(settings.output_dir), args.kear_id, args.logical_application_name,
-                                       args.application_label, args.environment, lookback, args.as_of)
+                                       args.application_label, args.environment, lookback, args.as_of,
+                                       raw_dir=Path(settings.raw_dir))
             print(target); return 0
         raise AssertionError("unhandled command")
     except (ConfigurationError, ValueError, RuntimeError) as exc:

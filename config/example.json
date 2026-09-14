@@ -19,5 +19,6 @@
   "retention_days": 200,
   "default_lookback_days": 180,
   "policy_version": "draft",
-  "smtp_enabled": false
+  "smtp_enabled": false,
+  "dangerous_port_lists": ["PORTS_TO_CONTROL", "PORTS_TO_ERADICATE"]
 }

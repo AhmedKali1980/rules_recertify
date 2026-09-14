@@ -416,6 +416,14 @@ number of distinct explicit TCP/UDP ports and expands inclusive ranges.
 `All Services` is displayed as `0-65535 TCP;0-65535 UDP` in `Expanded Rules`
 and therefore counts `131072` protocol/port pairs.
 
+`Expanded Rules.dangerous_ports` intersects each rule's TCP/UDP ports with the
+catalogues selected by the `dangerous_port_lists` setting. Supported names are
+`PORTS_TO_CONTROL`, `PORTS_TO_ERADICATE`, and `PORTS_ADMIN`; configuration may
+use a JSON list or a comma-separated string. Output uses canonical values such
+as `TCP/22` and `TCP/5900-5906`. The unexplained `/3` and `/14` suffixes from a
+legacy spreadsheet are not protocol or port syntax and are not emitted without
+an authoritative severity mapping.
+
 ## 7. Test procedure
 
 ### 7.1 Offline automated suite

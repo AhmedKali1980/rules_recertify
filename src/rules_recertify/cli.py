@@ -77,6 +77,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "rate_limit_retry_delay_minutes": settings.rate_limit_retry_delay_minutes,
                 "rate_limit_max_retries": settings.rate_limit_max_retries,
                 "empty_scope_ruleset_name_patterns": settings.empty_scope_ruleset_name_patterns,
+                "dangerous_port_lists": settings.dangerous_port_lists,
                 "smtp_enabled": settings.smtp_enabled,
             }, indent=2)); return 0
         if args.command == "init-db":
@@ -106,7 +107,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 raise ValueError("each --application-label must have one corresponding --environment")
             target = generate_workbook(db, Path(settings.output_dir), args.kear_id, args.logical_application_name,
                                        args.application_label, args.environment, lookback, args.as_of,
-                                       raw_dir=Path(settings.raw_dir))
+                                       raw_dir=Path(settings.raw_dir),
+                                       dangerous_port_lists=settings.dangerous_port_lists)
             print(target); return 0
         if args.command == "report-batch":
             db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
@@ -115,6 +117,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             targets = generate_microcosmos_reports(
                 db, args.microcosmos_xlsx, Path(settings.output_dir), Path(settings.raw_dir),
                 lookback, args.as_of,
+                dangerous_port_lists=settings.dangerous_port_lists,
             )
             print("\n".join(str(target) for target in targets)); return 0
         raise AssertionError("unhandled command")

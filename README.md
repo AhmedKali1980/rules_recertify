@@ -168,6 +168,23 @@ corporate IPv4, `Any` (`0.0.0.0/0` et `::/0`) vaut donc `2^32`, soit
 `4294967296`. Dans `Expanded Rules`, `All Services` est rendu sous la forme
 `0-65535 TCP;0-65535 UDP`; `nb_ports` vaut alors `131072`.
 
+La colonne `dangerous_ports` contient l'intersection entre les ports autorisés
+par la règle et les catalogues activés dans `config/local.json` :
+
+```json
+"dangerous_port_lists": ["PORTS_TO_CONTROL", "PORTS_TO_ERADICATE"]
+```
+
+La forme texte séparée par des virgules est également acceptée :
+`"PORTS_TO_CONTROL,PORTS_TO_ERADICATE"`. Les valeurs possibles sont
+`PORTS_TO_CONTROL`, `PORTS_TO_ERADICATE` et `PORTS_ADMIN`. Les résultats sont
+affichés sans ambiguïté sous la forme `TCP/22`, `UDP/161` ou `TCP/5900-5906`.
+Une règle `All Services` contient tous les ports des catalogues sélectionnés.
+Les suffixes `/3` et `/14` visibles dans l'ancien modèle ne correspondent pas à
+une notation réseau standard : ils semblent représenter un score ou identifiant
+de criticité propre à ce modèle. Faute de référentiel permettant de les calculer,
+ils ne sont volontairement pas inventés dans ce rapport.
+
 The standard production installation root is:
 
 ```text

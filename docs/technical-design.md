@@ -234,6 +234,11 @@ only pairs matching at least one SQLite rule enter a report. Non-actionable rows
 do not abort the batch: a preserved copy of the input workbook receives a
 per-row `Rules Recertify Status` audit column under the timestamp root.
 
+Dangerous-port detection is a pure interval intersection between expanded rule
+services and named, configuration-selected TCP/UDP catalogues. It preserves
+catalogue order, deduplicates overlaps, supports `All Services`, and emits only
+canonical `PROTOCOL/PORT[-PORT]` values.
+
 ## 5. Historical accumulation and 180-day guarantee
 
 ### 5.1 Recommended persistence

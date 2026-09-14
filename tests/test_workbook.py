@@ -301,7 +301,10 @@ class WorkbookExpansionTest(unittest.TestCase):
                      json.dumps(["10.0.0.1", "10.0.0.2"]), "{}", "2026-09-12"),
                 )
                 connection.execute("INSERT INTO ip_lists VALUES(?,?,?)", ("NETWORKS", "10.1.0.0/24", "2026-09-12"))
-            target = generate_workbook(db, root, "KEAR", "Application", ["APP"], "PRD", 1, date(2026, 9, 12))
+            target = generate_workbook(
+                db, root, "KEAR", "Application", ["APP"], "PRD", 1,
+                date(2026, 9, 12), dangerous_port_lists=["PORTS_TO_CONTROL"],
+            )
             from openpyxl import load_workbook
             sheet = load_workbook(target)["Expanded Rules"]
             values = {cell.value: sheet.cell(2, cell.column).value for cell in sheet[1]}
@@ -309,3 +312,4 @@ class WorkbookExpansionTest(unittest.TestCase):
             self.assertEqual(values["nb_dst_ip"], 256)
             self.assertEqual(values["Service Name / Definition"], "0-65535 TCP;0-65535 UDP")
             self.assertEqual(values["nb_ports"], 131072)
+            self.assertIn("TCP/22", values["dangerous_ports"])

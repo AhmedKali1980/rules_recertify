@@ -13,6 +13,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, 
 from ..history.database import Database
 from ..history.metrics import summarize_usage
 from ..workloader.csvio import read_rows
+from .dangerous_ports import dangerous_ports
 
 LOG = logging.getLogger(__name__)
 
@@ -24,7 +25,8 @@ class ReportingDependencyError(RuntimeError):
 def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name: str,
                       application_labels: Sequence[str], environments: Sequence[str],
                       lookback_days: int, as_of: date, raw_dir: Optional[Path] = None,
-                      filename_environment: Optional[str] = None) -> Path:
+                      filename_environment: Optional[str] = None,
+                      dangerous_port_lists: Sequence[str] = ()) -> Path:
     scope_pairs = _scope_pairs(application_labels, environments)
     if not kear_id.strip():
         raise ValueError("kear_id must not be empty")
@@ -72,6 +74,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         expanded["nb_src_ips"] = _excel_safe_count(_count_addresses(source_addresses))
         expanded["nb_dst_ip"] = _excel_safe_count(_count_addresses(destination_addresses))
         expanded["nb_ports"] = _count_ports(str(rule["services"]))
+        expanded["dangerous_ports"] = dangerous_ports(str(rule["services"]), dangerous_port_lists)
         expanded_rows.append(expanded)
         for usage in usage_by_rule[rule["rule_href"]]:
             usage_rows.append({"KEAR ID": kear, "Rule Href": rule["rule_href"], "Window Start": usage["window_start"],

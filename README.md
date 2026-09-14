@@ -47,6 +47,58 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 See the integration guide before contacting a PCE or enabling cron.
 
+## Import des workloads et IP Lists
+
+La commande `collect` importe désormais les référentiels avant les exports de
+règles. Le binaire et son fichier de configuration proviennent respectivement
+des clés `workloader_dir` et `workloader_config_file` de `config/local.json`.
+L'orchestrateur les transmet aux wrappers sous les noms internes `EXECUTABLE`
+et `CFG`; il n'est donc pas nécessaire de les dupliquer dans `.env`. Les FQDN,
+utilisateurs, clés et autres paramètres d'accès restent exclusivement dans
+`pce.yaml`, que Workloader lit via `--config-file`.
+
+Pour L1, le wrapper lit `default_pce_name` dans `pce.yaml`. Pour L3SM, il
+recherche une clé de profil de premier niveau suivant la convention
+`pce-l3-sm`/`pce_l3sm`. Les surcharges historiques `PCE_L1_NAME`,
+`PCE_L3SM_NAME`, `PCE_L1_FQDN` et `PCE_L3SM_FQDN` restent acceptées pour un
+diagnostic exceptionnel, mais ne font pas partie de la configuration normale
+et ne doivent pas dupliquer les accès dans `.env`. Si L3SM ne peut pas être
+déterminé sans ambiguïté, l'export échoue avant tout appel PCE.
+
+L'ordre live est strict : (1) tous les workloads L1, (2) workloads managés
+L3SM, (3) fusion CSV, (4) IP Lists L1, (5) dérivations. Le répertoire raw de
+l'exécution contient `export_wkld.csv`, `export_wkld.l3sm.m.csv`,
+`export_iplists.csv`, `export_wkld.derived.csv` et
+`export_iplists.derived.csv`. La fusion conserve toutes les lignes sans
+déduplication et exige des en-têtes strictement identiques.
+
+```bash
+./scripts/rules-recertify --config config/local.json collect
+```
+
+Le mode stub ne contacte jamais Workloader. Son répertoire exige
+`export_wkld.csv` et `export_iplists.csv`; un
+`export_wkld.l3sm.m.csv` non vide est facultatif et est fusionné avec les mêmes
+contrôles que le mode live. On peut employer l'option ou la variable :
+
+```bash
+./scripts/rules-recertify --config config/local.json collect \
+  --pce-stub-dir '/tmp/reference stubs'
+# équivalent : PCE_STUB_DIR='/tmp/reference stubs' ... collect
+```
+
+`--skip-pce-import` conserve explicitement le comportement de collecte sans
+actualisation du référentiel (utile pour une reprise contrôlée).
+
+Les dérivations préservent les colonnes source, insèrent `short_hostname`
+(préfixe DNS en majuscules) après `hostname`, puis ajoutent
+`ocs_name_from_IP`, `IPLIST` et `SUBNET`. `ocs_name_from_IP` utilise l'IP de
+passerelle pour un workload managé (préfixe `IP-`, sauf Windows), la première
+IPv4 d'interface pour une source non managée `AUTOMATION GEN2`, et reste vide
+sinon. Seules les IP Lists `NZ3_*` et leurs réseaux IPv4 valides sont corrélés.
+La priorité est **première IPv4, puis première IP List/réseau dans l'ordre
+source**. Le fichier IP Lists dérivé ne conserve que `name` et `include`.
+
 The standard production installation root is:
 
 ```text

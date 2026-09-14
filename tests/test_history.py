@@ -5,6 +5,22 @@ from rules_recertify.history.database import Database, ensure_sqlite_compatible
 from rules_recertify.history.metrics import summarize_usage
 
 class HistoryTest(unittest.TestCase):
+    def test_rule_history_tracks_first_import_and_content_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db=Database(Path(directory)/"db.sqlite"); db.initialize()
+            base={"rule_href":"/r/1","ruleset_href":"/rs/1","services":"443 TCP"}
+            db.upsert_rules([base], "2026-01-01T00:00:00+00:00")
+            db.upsert_rules([base], "2026-02-01T00:00:00+00:00")
+            db.upsert_rules([{**base,"services":"22 TCP"}], "2026-03-01T00:00:00+00:00")
+            with db.connect() as connection:
+                rows=connection.execute(
+                    "SELECT snapshot_at,changed FROM rule_history ORDER BY snapshot_at"
+                ).fetchall()
+            self.assertEqual([tuple(row) for row in rows], [
+                ("2026-01-01T00:00:00+00:00",1),
+                ("2026-02-01T00:00:00+00:00",0),
+                ("2026-03-01T00:00:00+00:00",1),
+            ])
     def test_progress_update_does_not_finish_run(self):
         with tempfile.TemporaryDirectory() as directory:
             db = Database(Path(directory) / "db.sqlite")

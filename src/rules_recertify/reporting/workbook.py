@@ -15,7 +15,7 @@ from ..history.database import Database
 from ..history.metrics import summarize_usage
 from ..workloader.csvio import read_rows
 from .dangerous_ports import dangerous_ports
-from ..resolution.workloads import prepare_nz3_members
+from ..resolution.workloads import prepare_nz3_members, select_addresses, short_hostname
 
 LOG = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         usage_by_rule: Dict[str, List[Mapping[str, object]]] = defaultdict(list)
         for row in connection.execute("SELECT * FROM usage_windows WHERE window_end>? AND window_start<? ORDER BY window_start", (cutoff, as_of.isoformat())):
             usage_by_rule[row["rule_href"]].append(dict(row))
-        workloads = [dict(row) for row in connection.execute("SELECT * FROM workloads")]
+        workloads, workload_reference = _load_report_workloads(connection, raw_dir)
         ip_lists, ip_list_reference = _load_report_ip_lists(connection, raw_dir)
         quality = [dict(row) for row in connection.execute("SELECT * FROM data_quality ORDER BY category,object_id")]
         lifecycle = {
@@ -133,6 +133,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         ("KEAR ID", kear), ("Logical Application", logical_name),
         ("Application Scopes", "\n".join(f"{app} / {env}" for app, env in scope_pairs)),
         ("IP List Reference", ip_list_reference),
+        ("Workload Reference", workload_reference),
         ("As Of", as_of.isoformat()), ("Lookback Days", lookback_days),
         ("Rules", len(selected)), ("Generated At UTC", datetime.now(timezone.utc).isoformat()))]
     _sheet(workbook, "Presentation", presentation)
@@ -176,6 +177,42 @@ def _load_report_ip_lists(connection: object, raw_dir: Optional[Path]) -> Tuple[
     rows = [dict(row) for row in connection.execute("SELECT name,member FROM ip_lists ORDER BY rowid")]
     LOG.info("Using SQLite IP-list reference fallback (%s members)", len(rows))
     return rows, "SQLite ip_lists fallback"
+
+
+def _load_report_workloads(connection: object, raw_dir: Optional[Path]) -> Tuple[List[Dict[str, object]], str]:
+    """Prefer the newest derived workload export so expansion uses current labels."""
+    if raw_dir:
+        candidates = sorted(
+            (
+                path for path in raw_dir.glob("*/export_wkld.derived.csv")
+                if re.fullmatch(r"\d{8}T\d{6}Z-[0-9A-Fa-f]{8}", path.parent.name)
+                and path.is_file() and path.stat().st_size
+            ),
+            key=lambda path: path.parent.name,
+            reverse=True,
+        )
+        if candidates:
+            source = candidates[0]
+            workloads: List[Dict[str, object]] = []
+            required = ("href", "hostname", "name", "interfaces", "ip_with_default_gw",
+                        "app", "env", "loc", "role", "managed")
+            for row in read_rows(source, required):
+                addresses, _warnings = select_addresses(row)
+                if not addresses:
+                    continue
+                workloads.append({
+                    **row,
+                    "short_hostname": (
+                        row.get("short_hostname", "").strip()
+                        if "short_hostname" in row else short_hostname(row["hostname"])
+                    ),
+                    "addresses_json": json.dumps(addresses),
+                })
+            LOG.info("Using derived workload reference export: %s (%s workloads)", source, len(workloads))
+            return workloads, str(source)
+    rows = [dict(row) for row in connection.execute("SELECT * FROM workloads")]
+    LOG.info("Using SQLite workload reference fallback (%s workloads)", len(rows))
+    return rows, "SQLite workloads fallback"
 
 
 def _scope_pairs(labels: Sequence[str], environments: Sequence[str]) -> List[Tuple[str, str]]:
@@ -259,10 +296,12 @@ def _expand_side_details(raw: Mapping[str, object], side: str,
     labels = str(raw.get(f"{side}_labels", ""))
     if labels:
         wanted = {part.strip().casefold() for part in labels.split(";") if part.strip()}
+        dimensions = _label_dimensions(labels)
+        selector_has_pair = bool(dimensions.get("app") and dimensions.get("env"))
         matched = _matching_workloads(
             workloads,
             lambda workload: (
-                _workload_matches_pairs(workload, scope_pairs)
+                (selector_has_pair or _workload_matches_pairs(workload, scope_pairs))
                 and wanted.issubset(_workload_tags(workload))
             ),
         )

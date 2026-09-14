@@ -387,11 +387,17 @@ was skipped (empty KEAR/environment, unknown module, missing rule, or
 inconsistent application name).
 
 In `Expanded Rules`, sources and destinations are resolved from the ingested
-`export_wkld.derived.csv` and complete `export_iplists.csv` references. Label,
+references, preferring the newest timestamped raw `export_wkld.derived.csv`
+over the SQLite workload snapshot and using the complete `export_iplists.csv`.
+Label,
 explicit-workload, and `All Workloads` selectors render one entry as
 `short_hostname (ip1;ip2)`; `name` is used when `short_hostname` is empty.
 Managed workloads use `ip_with_default_gw`, while unmanaged workloads use the
 ordered IPv4 values parsed from `interfaces`.
+Selectors containing both `app` and `env` are matched directly against those
+labels (plus any `loc`/`role`) on both source and destination sides. They are not
+cross-filtered by a second report pair. Partial selectors remain constrained by
+the requested report pairs.
 
 IP-list selectors render as `IP List: name (member1;member2)`. Members are
 split on `;` during reference ingestion and inline `#comment` suffixes are

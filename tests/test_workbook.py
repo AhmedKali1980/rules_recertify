@@ -9,13 +9,50 @@ from pathlib import Path
 from rules_recertify.history.database import Database
 from rules_recertify.reporting.workbook import (
     _count_addresses, _count_ports, _excel_safe_count, _expand_side,
-    _expand_services, _expand_side_details, _load_report_ip_lists, _rule_matches, _scope_pairs,
+    _expand_services, _expand_side_details, _load_report_ip_lists, _load_report_workloads,
+    _rule_matches, _scope_pairs,
     _octoflow_sequence, _unused_since_18_months, _zones_for_addresses, generate_workbook,
 )
 from rules_recertify.resolution.workloads import prepare_nz3_members
 
 
 class WorkbookExpansionTest(unittest.TestCase):
+    def test_complete_label_selector_expands_both_sides_without_report_pair_cross_filter(self):
+        workloads = [{
+            "short_hostname": "FACTO-DB-01", "name": "facto-db-01",
+            "app": "APM_RBS_FACTOBOT.IAAS", "env": "PRD", "loc": "FRANCE",
+            "role": "DB.PCP", "addresses_json": json.dumps(["192.167.248.115"]),
+        }]
+        raw = {
+            "src_labels": "app:APM_RBS_FACTOBOT.IAAS;env:PRD;role:DB.PCP",
+            "dst_labels": "role:DB.PCP;env:PRD;app:APM_RBS_FACTOBOT.IAAS",
+        }
+        for side in ("src", "dst"):
+            expanded = _expand_side(raw, side, workloads, [("DIFFERENT_SCOPE_APP", "PRD")])
+            self.assertEqual(expanded, "FACTO-DB-01 (192.167.248.115)")
+
+    def test_report_prefers_latest_derived_workloads_over_stale_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); raw_dir = root / "raw"
+            run = raw_dir / "20260914T120000Z-aabbccdd"; run.mkdir(parents=True)
+            fields = ["href", "hostname", "short_hostname", "name", "interfaces",
+                      "ip_with_default_gw", "app", "env", "loc", "role", "managed"]
+            with (run / "export_wkld.derived.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields); writer.writeheader()
+                writer.writerow({
+                    "href": "/workloads/1", "hostname": "facto-db-01.example.net",
+                    "short_hostname": "FACTO-DB-01", "name": "facto-db-01",
+                    "interfaces": "eth0:192.167.248.115", "ip_with_default_gw": "192.167.248.115",
+                    "app": "APM_RBS_FACTOBOT.IAAS", "env": "PRD", "loc": "FRANCE",
+                    "role": "DB.PCP", "managed": "TRUE",
+                })
+            db = Database(root / "state.sqlite"); db.initialize()
+            with db.connect() as connection:
+                rows, source = _load_report_workloads(connection, raw_dir)
+            self.assertEqual(source, str(run / "export_wkld.derived.csv"))
+            self.assertEqual(rows[0]["addresses_json"], '["192.167.248.115"]')
+            self.assertEqual(rows[0]["role"], "DB.PCP")
+
     def test_octoflow_sequence_dates_and_nz3_zones(self):
         href = "/orgs/1/sec_policy/draft/rule_sets/13173/sec_rules/104763"
         self.assertEqual(_octoflow_sequence(href), "13173/sec_rules/104763")

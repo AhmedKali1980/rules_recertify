@@ -150,8 +150,10 @@ Une copie du fichier Microcosmos est créée directement sous
 supplémentaire `Rules Recertify Status` indique pour chaque ligne le rapport
 produit (`PROCESSED`) ou la raison précise du `SKIPPED`.
 
-Dans `Expanded Rules`, les workloads sont résolus depuis
-`export_wkld.derived.csv` et affichés comme `short_hostname (ip1;ip2)`, avec
+Dans `Expanded Rules`, les workloads sont résolus directement depuis le
+`export_wkld.derived.csv` du sous-répertoire raw horodaté le plus récent, avec
+fallback SQLite si cet export n'est pas disponible. Ils sont affichés comme
+`short_hostname (ip1;ip2)`, avec
 fallback sur `name`. Les IP Lists sont résolues depuis l'export complet
 `export_iplists.csv`; le dérivé limité à `NZ3_*` sert uniquement à la
 corrélation workload/subnet. Les commentaires `#...` sont retirés de chaque
@@ -161,6 +163,13 @@ Le répertoire technique `raw/preflight` est explicitement exclu. Cela corrige
 également les bases historiques qui avaient été alimentées uniquement avec les
 IP Lists `NZ3_*`; SQLite reste le fallback si aucun export brut n'est disponible.
 La feuille `Presentation` indique le fichier effectivement utilisé.
+
+Un sélecteur latéral qui fournit explicitement `app` et `env` est résolu selon
+ses propres labels, auxquels peuvent s'ajouter `loc` et `role`, sans être filtré
+une seconde fois par le couple du rapport. Cela couvre symétriquement Sources et
+Destinations et évite d'écarter un workload valide comme
+`app:APM_RBS_FACTOBOT.IAAS;env:PRD;role:DB.PCP`. Lorsqu'un sélecteur ne fournit
+pas le couple complet, les couples du rapport continuent de borner l'expansion.
 
 Les colonnes `nb_src_ips` et `nb_dst_ips` comptent la cardinalité de l'union des
 IP, ranges et subnets IPv4 développés, sans double comptage. Dans ce périmètre

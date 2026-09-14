@@ -217,6 +217,10 @@ row-count guards, because Excel is limited to 1,048,576 rows per sheet.
 The derived workload adapter validates the implemented column contract and
 selects managed addresses from `ip_with_default_gw` and unmanaged addresses
 from `interfaces`.
+Workbook generation prefers the newest timestamped raw derived workload export
+over SQLite, preventing a stale reference snapshot from producing empty source
+or destination expansions. Complete side selectors (`app` plus `env`) are
+self-contained; partial selectors retain report-pair constraints.
 
 Report generation prefers the newest non-empty export below a timestamped
 collection directory (`YYYYMMDDTHHMMSSZ-8hex`), never `raw/preflight`, and

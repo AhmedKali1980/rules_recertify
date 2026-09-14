@@ -5,6 +5,7 @@ import importlib.util
 import ipaddress
 import logging
 import re
+import calendar
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from ..history.database import Database
 from ..history.metrics import summarize_usage
 from ..workloader.csvio import read_rows
 from .dangerous_ports import dangerous_ports
+from ..resolution.workloads import prepare_nz3_members
 
 LOG = logging.getLogger(__name__)
 
@@ -26,7 +28,8 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
                       application_labels: Sequence[str], environments: Sequence[str],
                       lookback_days: int, as_of: date, raw_dir: Optional[Path] = None,
                       filename_environment: Optional[str] = None,
-                      dangerous_port_lists: Sequence[str] = ()) -> Path:
+                      dangerous_port_lists: Sequence[str] = (), device: str = "",
+                      permissive_rule_max_ips: int = 255) -> Path:
     scope_pairs = _scope_pairs(application_labels, environments)
     if not kear_id.strip():
         raise ValueError("kear_id must not be empty")
@@ -46,7 +49,22 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         workloads = [dict(row) for row in connection.execute("SELECT * FROM workloads")]
         ip_lists, ip_list_reference = _load_report_ip_lists(connection, raw_dir)
         quality = [dict(row) for row in connection.execute("SELECT * FROM data_quality ORDER BY category,object_id")]
-    raw_rows, expanded_rows, usage_rows = [], [], []
+        lifecycle = {
+            row["rule_href"]: dict(row) for row in connection.execute(
+                """SELECT r.rule_href,
+                COALESCE(MIN(h.snapshot_at),r.snapshot_at) creation_time,
+                COALESCE(MAX(CASE WHEN h.changed=1 THEN h.snapshot_at END),r.snapshot_at) last_modified
+                FROM rules r LEFT JOIN rule_history h ON h.rule_href=r.rule_href GROUP BY r.rule_href"""
+            )
+        }
+        latest_hits = {
+            row["rule_href"]: row["last_hit"] for row in connection.execute(
+                """SELECT rule_href,MAX(window_end) last_hit FROM usage_windows
+                WHERE status='completed' AND flows>0 GROUP BY rule_href"""
+            )
+        }
+    raw_rows, expanded_rows, usage_rows, octoflow_rows = [], [], [], []
+    prepared_nz3 = prepare_nz3_members(ip_lists)
     for rule in selected:
         raw = json.loads(rule["raw_json"])
         rule_pairs = _matching_rule_pairs(raw, scope_pairs)
@@ -72,10 +90,39 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         expanded["Expanded Destinations"] = expanded_destinations
         expanded["Service Name / Definition"] = _expand_services(str(rule["services"]))
         expanded["nb_src_ips"] = _excel_safe_count(_count_addresses(source_addresses))
-        expanded["nb_dst_ip"] = _excel_safe_count(_count_addresses(destination_addresses))
+        expanded["nb_dst_ips"] = _excel_safe_count(_count_addresses(destination_addresses))
         expanded["nb_ports"] = _count_ports(str(rule["services"]))
         expanded["dangerous_ports"] = dangerous_ports(str(rule["services"]), dangerous_port_lists)
         expanded_rows.append(expanded)
+        source_count = _count_addresses(source_addresses)
+        destination_count = _count_addresses(destination_addresses)
+        last_hit = latest_hits.get(rule["rule_href"], "")
+        octoflow_rows.append({
+            "device": device,
+            "policy_name": expanded["Ruleset"],
+            "seq_number": _octoflow_sequence(str(expanded["Rule Href"])),
+            "rule_id": _octoflow_sequence(str(expanded["Rule Href"])),
+            "rule_name": "",
+            "logged": "Enabled",
+            "sources": expanded_sources,
+            "destinations": expanded_destinations,
+            "services": expanded["Service Name / Definition"],
+            "action": str(expanded["Rule Type"]).upper(),
+            "comment": expanded["Description"],
+            "from_zone": _zones_for_addresses(source_addresses, prepared_nz3),
+            "to_zone": _zones_for_addresses(destination_addresses, prepared_nz3),
+            "Disabled": "FALSE" if rule["ruleset_enabled"] and rule["rule_enabled"] else "TRUE",
+            "shadow": "N/A",
+            "creation_time": lifecycle[rule["rule_href"]]["creation_time"],
+            "last_modified": lifecycle[rule["rule_href"]]["last_modified"],
+            "last_hit": last_hit,
+            "unused_since_18_months": _unused_since_18_months(last_hit, as_of),
+            "dangerous_rule": "TRUE" if expanded["dangerous_ports"] else "FALSE",
+            "permissive_rule": "YES" if max(source_count, destination_count) > permissive_rule_max_ips else "NO",
+            "nb_src_ips": expanded["nb_src_ips"],
+            "nb_dst_ips": expanded["nb_dst_ips"],
+            "nb_ports": expanded["nb_ports"],
+        })
         for usage in usage_by_rule[rule["rule_href"]]:
             usage_rows.append({"KEAR ID": kear, "Rule Href": rule["rule_href"], "Window Start": usage["window_start"],
                                "Window End": usage["window_end"], "Status": usage["status"], "Flows": usage["flows"],
@@ -91,6 +138,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
     _sheet(workbook, "Presentation", presentation)
     _sheet(workbook, "Raw Rules", raw_rows)
     _sheet(workbook, "Expanded Rules", expanded_rows)
+    _sheet(workbook, "Octoflow", octoflow_rows)
     _sheet(workbook, "Rule Usage", usage_rows)
     quality_rows = [{"KEAR ID": kear, **row} for row in quality]
     _sheet(workbook, "Data Quality", quality_rows)
@@ -401,6 +449,45 @@ def _count_addresses(addresses: Iterable[str]) -> int:
 def _excel_safe_count(value: int) -> object:
     """Preserve integers beyond Excel's 15-digit numeric precision as text."""
     return str(value) if value > 999_999_999_999_999 else value
+
+
+def _octoflow_sequence(rule_href: str) -> str:
+    marker = "/rule_sets/"
+    return rule_href.split(marker, 1)[1] if marker in rule_href else rule_href.strip("/")
+
+
+def _zones_for_addresses(addresses: Iterable[str], prepared_nz3: Sequence[Tuple[object, ...]]) -> str:
+    zones: List[str] = []
+    for raw in addresses:
+        value = str(raw).partition("#")[0].strip()
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+            start, end = network.network_address, network.broadcast_address
+        except ValueError:
+            start_text, separator, end_text = value.partition("-")
+            try:
+                start = ipaddress.ip_address(start_text.strip())
+                end = ipaddress.ip_address(end_text.strip()) if separator else start
+            except ValueError:
+                continue
+        if start.version != 4 or end.version != 4:
+            continue
+        for name, _member, zone_start, zone_end in prepared_nz3:
+            if zone_start.version == 4 and int(zone_start) <= int(start) and int(end) <= int(zone_end):
+                if str(name) not in zones:
+                    zones.append(str(name))
+    return ";".join(zones) if zones else "Any"
+
+
+def _unused_since_18_months(last_hit: object, as_of: date) -> str:
+    if not last_hit:
+        return "YES"
+    hit_date = datetime.fromisoformat(str(last_hit).replace("Z", "+00:00")).date()
+    month_index = as_of.year * 12 + as_of.month - 1 - 18
+    year, zero_based_month = divmod(month_index, 12)
+    month = zero_based_month + 1
+    cutoff = date(year, month, min(as_of.day, calendar.monthrange(year, month)[1]))
+    return "YES" if hit_date <= cutoff else "NO"
 
 
 def _sheet(workbook: object, name: str, rows: List[Mapping[str, object]]) -> None:

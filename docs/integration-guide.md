@@ -407,7 +407,7 @@ the fallback when no raw export exists. The `Presentation` sheet records the
 selected file path or the SQLite fallback for auditability. Technical folders
 such as `raw/preflight` are never eligible.
 
-The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ip`, and
+The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ips`, and
 `nb_ports`. Address counts represent the union cardinality of workload IPs,
 IP-list addresses, ranges, and subnets rather than the number of displayed
 items. Corporate rules are IPv4-only, so `Any` (`0.0.0.0/0` plus `::/0` in the
@@ -423,6 +423,15 @@ use a JSON list or a comma-separated string. Output uses canonical values such
 as `TCP/22` and `TCP/5900-5906`. The unexplained `/3` and `/14` suffixes from a
 legacy spreadsheet are not protocol or port syntax and are not emitted without
 an authoritative severity mapping.
+
+The `Octoflow` sheet exposes the 24-column consumer contract. Its NZ3 zones are
+computed by full containment of expanded IPv4 addresses, ranges, or subnets;
+unmatched sides become `Any`. `permissive_rule_max_ips` (default 255) controls
+the strict-greater-than threshold for `permissive_rule`. Rule imports populate
+`rule_history`: the first observation is `creation_time`, and the latest
+content-changing observation is `last_modified`. Historical changes predating
+this schema cannot be reconstructed. `last_hit` uses the latest positive,
+completed usage window independently of the report lookback.
 
 ## 7. Test procedure
 

@@ -339,7 +339,12 @@ The three requested sheets are mandatory; additional sheets improve auditability
 5. **Data Quality** — pending/expired/missing/truncated queries, unresolved
    selectors, gaps, duplicates, and counts.
 
-`Expanded Rules` additionally exposes `nb_src_ips`, `nb_dst_ip`, and `nb_ports`.
+`Expanded Rules` additionally exposes `nb_src_ips`, `nb_dst_ips`, and `nb_ports`.
+`Octoflow` is derived in memory from the same expanded rows, avoiding a second
+interpretation of selectors and services. NZ3 zone assignment requires full
+IPv4 range containment. Rule lifecycle timestamps come from append-only
+`rule_history` observations; positive completed usage windows provide
+`last_hit`. The permissive-address threshold is configuration controlled.
 IP counts are union cardinalities, not displayed-row counts; Any is the exact
 sum of the complete IPv4 and IPv6 spaces. Values beyond Excel numeric precision
 are stored as decimal text. Port counts cover distinct explicit TCP/UDP ports,

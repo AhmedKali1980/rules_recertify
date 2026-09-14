@@ -162,7 +162,7 @@ Le répertoire technique `raw/preflight` est explicitement exclu. Cela corrige
 IP Lists `NZ3_*`; SQLite reste le fallback si aucun export brut n'est disponible.
 La feuille `Presentation` indique le fichier effectivement utilisé.
 
-Les colonnes `nb_src_ips` et `nb_dst_ip` comptent la cardinalité de l'union des
+Les colonnes `nb_src_ips` et `nb_dst_ips` comptent la cardinalité de l'union des
 IP, ranges et subnets IPv4 développés, sans double comptage. Dans ce périmètre
 corporate IPv4, `Any` (`0.0.0.0/0` et `::/0`) vaut donc `2^32`, soit
 `4294967296`. Dans `Expanded Rules`, `All Services` est rendu sous la forme
@@ -184,6 +184,26 @@ Les suffixes `/3` et `/14` visibles dans l'ancien modèle ne correspondent pas �
 une notation réseau standard : ils semblent représenter un score ou identifiant
 de criticité propre à ce modèle. Faute de référentiel permettant de les calculer,
 ils ne sont volontairement pas inventés dans ce rapport.
+
+La feuille `Octoflow` transpose chaque ligne enrichie vers le contrat attendu
+par le consommateur : `device` vient de `pce`, les identifiants sont extraits du
+`Rule Href`, les sources/destinations/services reprennent les expansions, et les
+zones sont les IP Lists `NZ3_*` contenant intégralement les adresses ou subnets
+du côté concerné (`Any` en absence de correspondance). `Disabled`,
+`dangerous_rule`, les compteurs et le dernier hit sont également exposés.
+
+Le seuil de permissivité se configure dans `config/local.json` :
+
+```json
+"permissive_rule_max_ips": 255
+```
+
+`permissive_rule` vaut `YES` lorsque `nb_src_ips` ou `nb_dst_ips` dépasse ce
+seuil. `creation_time` correspond au premier import observé et `last_modified`
+au premier import ayant détecté la version courante. Ce suivi commence après la
+mise en place de la table d'historique ; les imports antérieurs ne peuvent pas
+être reconstruits rétroactivement. `unused_since_18_months` vaut `YES` sans hit
+connu ou lorsque le dernier hit date d'au moins 18 mois calendaires.
 
 The standard production installation root is:
 

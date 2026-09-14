@@ -34,3 +34,9 @@ class ConfigTest(unittest.TestCase):
             path.write_text(json.dumps({"pce":"p","dangerous_port_lists":["UNKNOWN"]}))
             with self.assertRaisesRegex(ConfigurationError, "unknown dangerous_port_lists"):
                 load_settings(path)
+    def test_permissive_rule_threshold_must_be_positive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"c.json"
+            path.write_text(json.dumps({"pce":"p","permissive_rule_max_ips":0}))
+            with self.assertRaisesRegex(ConfigurationError, "permissive_rule_max_ips"):
+                load_settings(path)

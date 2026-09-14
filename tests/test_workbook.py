@@ -10,11 +10,24 @@ from rules_recertify.history.database import Database
 from rules_recertify.reporting.workbook import (
     _count_addresses, _count_ports, _excel_safe_count, _expand_side,
     _expand_services, _expand_side_details, _load_report_ip_lists, _rule_matches, _scope_pairs,
-    generate_workbook,
+    _octoflow_sequence, _unused_since_18_months, _zones_for_addresses, generate_workbook,
 )
+from rules_recertify.resolution.workloads import prepare_nz3_members
 
 
 class WorkbookExpansionTest(unittest.TestCase):
+    def test_octoflow_sequence_dates_and_nz3_zones(self):
+        href = "/orgs/1/sec_policy/draft/rule_sets/13173/sec_rules/104763"
+        self.assertEqual(_octoflow_sequence(href), "13173/sec_rules/104763")
+        zones = prepare_nz3_members([
+            {"name": "NZ3_PARIS", "member": "10.0.0.0/24"},
+            {"name": "OTHER", "member": "192.0.2.0/24"},
+        ])
+        self.assertEqual(_zones_for_addresses(["10.0.0.4", "10.0.0.128/25"], zones), "NZ3_PARIS")
+        self.assertEqual(_zones_for_addresses(["192.0.2.1"], zones), "Any")
+        self.assertEqual(_unused_since_18_months("2025-03-10T00:00:00Z", date(2026, 9, 10)), "YES")
+        self.assertEqual(_unused_since_18_months("2025-03-11T00:00:00Z", date(2026, 9, 10)), "NO")
+        self.assertEqual(_unused_since_18_months("", date(2026, 9, 10)), "YES")
     def setUp(self):
         self.workloads = [
             {
@@ -309,7 +322,11 @@ class WorkbookExpansionTest(unittest.TestCase):
             sheet = load_workbook(target)["Expanded Rules"]
             values = {cell.value: sheet.cell(2, cell.column).value for cell in sheet[1]}
             self.assertEqual(values["nb_src_ips"], 2)
-            self.assertEqual(values["nb_dst_ip"], 256)
+            self.assertEqual(values["nb_dst_ips"], 256)
             self.assertEqual(values["Service Name / Definition"], "0-65535 TCP;0-65535 UDP")
             self.assertEqual(values["nb_ports"], 131072)
             self.assertIn("TCP/22", values["dangerous_ports"])
+            octoflow = load_workbook(target)["Octoflow"]
+            octoflow_values = {cell.value: octoflow.cell(2, cell.column).value for cell in octoflow[1]}
+            self.assertEqual(octoflow_values["nb_dst_ips"], 256)
+            self.assertEqual(octoflow_values["dangerous_rule"], "TRUE")

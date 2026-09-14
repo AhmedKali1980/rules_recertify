@@ -65,6 +65,7 @@ class Settings:
     policy_version: str = "draft"
     smtp_enabled: bool = False
     dangerous_port_lists: Tuple[str, ...] = ("PORTS_TO_CONTROL", "PORTS_TO_ERADICATE")
+    permissive_rule_max_ips: int = 255
 
     @property
     def workloader(self) -> Path:
@@ -107,6 +108,8 @@ class Settings:
             raise ConfigurationError(
                 "unknown dangerous_port_lists: " + ", ".join(sorted(unknown_port_lists))
             )
+        if self.permissive_rule_max_ips < 1:
+            raise ConfigurationError("permissive_rule_max_ips must be positive")
 
 
 def load_settings(path: Path, dotenv: Optional[Path] = None) -> Settings:

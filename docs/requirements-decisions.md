@@ -308,7 +308,7 @@ consumer-required sheet.
 version contains the useful canonical columns; exact target column order and
 types will evolve after downstream ingestion testing.
 
-It also contains `nb_src_ips`, `nb_dst_ip`, and `nb_ports`. Address counts are
+It also contains `nb_src_ips`, `nb_dst_ips`, and `nb_ports`. Address counts are
 the cardinality of the union represented by expanded IPs, CIDRs, and ranges;
 overlaps are not counted twice and IPv6 is ignored for this corporate IPv4
 scope. Port counts include distinct explicit TCP/UDP ports and expand inclusive

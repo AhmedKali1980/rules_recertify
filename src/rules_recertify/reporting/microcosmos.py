@@ -30,6 +30,8 @@ def generate_microcosmos_reports(
     as_of: date,
     timestamp: Optional[str] = None,
     dangerous_port_lists: Sequence[str] = (),
+    device: str = "",
+    permissive_rule_max_ips: int = 255,
 ) -> List[Path]:
     """Generate one PRD/NONPRD report per Entity and non-empty KEAR ID."""
     rows = _read_microcosmos(source)
@@ -84,6 +86,7 @@ def generate_microcosmos_reports(
                 [pair[0] for pair in pairs], [pair[1] for pair in pairs],
                 lookback_days, as_of, raw_dir=raw_dir, filename_environment=category,
                 dangerous_port_lists=dangerous_port_lists,
+                device=device, permissive_rule_max_ips=permissive_rule_max_ips,
             )
         except (ValueError, RuntimeError) as exc:
             LOG.error("Skipping Microcosmos report %s/%s/%s: %s", entity, kear, category, exc)

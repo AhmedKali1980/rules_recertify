@@ -187,9 +187,10 @@ Label expressions use AND within a selector group, OR between groups, then apply
 exclusions and ruleset scope.
 
 Expand `All Workloads` against the ruleset scope rather than displaying the
-literal selector. For `app:X;env:Y`, include only reference workloads whose
-`app=X` and `env=Y`, formatted one `hostname (selected_ip)` per line. For
-`env:NULL`, use the environment requested for the report.
+literal selector. Apply every supported dimension present in `ruleset_scope`
+(`app`, `env`, `loc`, and `role`) to the workload reference. Format one workload
+as `short_hostname (ip1;ip2)`, falling back to `name` when `short_hostname` is
+empty. For `env:NULL`, use the environment paired with the selected application.
 
 ### DEC-011 — Workload address selection
 
@@ -211,25 +212,26 @@ IPv6 is expected only on managed workloads but must be parsed rather than reject
 
 ### DEC-012 — IP Lists and Any
 
-Create one expanded entry per IP-list value, retaining the IP-list name in the
-human report. Preserve address/CIDR/range text losslessly in normalized storage so
-future target adaptations remain possible. Represent Any as two entries:
-`0.0.0.0/0` and `::/0`.
+Resolve report IP Lists from the complete `export_iplists.csv`, not from the
+`NZ3_*`-only derived file. Split `include` on `;`, remove each inline `#comment`,
+and retain the IP-list name in the human report. Preserve address/CIDR/range
+text in normalized storage. Represent Any as `0.0.0.0/0` and `::/0`; its address
+count is `2^32 + 2^128`, stored as exact decimal text in Excel.
 
 ## 5. Derived data contracts
 
 ### DEC-013 — Derived IP-list CSV
 
-`export_iplists.derived.csv` is retained as a normalized optional input with:
+`export_iplists.derived.csv` is retained as a normalized derived artifact with:
 
 ```text
 name
 include
 ```
 
-The raw source is produced by Workloader `ipl-export`. Release 1 may use the
-derived file for resolution; if it is not needed, it remains an auditable
-intermediate rather than being removed.
+The raw source is produced by Workloader `ipl-export`. This derived file is
+limited to `NZ3_*` and supports workload/subnet correlation. Report selector
+resolution deliberately uses the complete raw export instead.
 
 ### DEC-014 — Derived workload CSV
 
@@ -277,9 +279,9 @@ remaining columns. Derive the enriched fields as follows:
 - `SUBNET`: the precise member subnet from that matching `NZ3_` IP List which
   contains the selected IP address.
 
-If several `NZ3_` lists or subnets contain an address, retain every unique match
-in deterministic order rather than selecting an arbitrary first match. Boolean
-spelling and source encoding remain adapter-validation details.
+If several `NZ3_` lists or subnets contain an address, use the first workload IP
+and then the first matching IP-list/network in source order. Boolean spelling
+and source encoding remain adapter-validation details.
 
 ## 6. Workbook contract baseline
 
@@ -302,6 +304,12 @@ consumer-required sheet.
 version contains the useful canonical columns; exact target column order and
 types will evolve after downstream ingestion testing.
 
+It also contains `nb_src_ips`, `nb_dst_ip`, and `nb_ports`. Address counts are
+the cardinality of the union represented by expanded IPs, CIDRs, and ranges;
+overlaps are not counted twice. Port counts include distinct explicit TCP/UDP
+ports and expand inclusive ranges. Portless protocols and `All Services` do not
+invent an arbitrary numeric count.
+
 ### DEC-016 — Required application arguments
 
 The command requires:
@@ -310,7 +318,12 @@ The command requires:
 - `logical_application_name`: mandatory display name, passed as one quoted shell
   argument when it contains whitespace or apostrophes;
 - one or more Application label values;
-- exactly one Environment label value.
+- exactly one Environment value per Application value, paired by CLI order.
+
+For a scoped ruleset, `ruleset_scope` must match an exact requested pair. For an
+unscoped ruleset, one Source or Destination side must contain the pair, or the
+Application label alone (meaning every requested environment for that
+application). Labels split across opposite sides do not form a pair.
 
 Never use shell `eval`; pass arguments as an array so quotes and apostrophes are
 data rather than command syntax.
@@ -318,9 +331,9 @@ data rather than command syntax.
 The representative KEAR identifier format is a hyphenated UUID such as
 `51be4bf9-2080-432f-9d02-1c0cf0f251d7`, without a `KEAR-` prefix. Input validation
 only requires a non-empty value; normalize it to lowercase. The mandatory KEAR ID
-appears in every workbook sheet and, together with the Environment, in the
-workbook filename. A safe pattern is
-`rules_recertify_<kear_id>_<environment>_<as-of>.xlsx`.
+appears in every workbook sheet and, together with the ordered distinct
+environments, in the workbook filename. A safe pattern is
+`rules_recertify_<kear_id>_<env1-env2>_<as-of>.xlsx`.
 
 ## 7. Persistence and operations
 

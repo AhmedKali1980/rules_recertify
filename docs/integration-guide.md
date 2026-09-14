@@ -10,7 +10,7 @@ The `scripts/rules-recertify` entrypoint exposes:
 | `init-db` | Create/upgrade the local SQLite schema |
 | `collect` | Export policy, submit/poll traffic queries, and persist usage |
 | `ingest-usage` | Ingest an existing Workloader `rule-usage` CSV |
-| `ingest-reference` | Ingest derived workload and IP-list CSVs |
+| `ingest-reference` | Ingest derived workloads and the complete raw IP-list CSV |
 | `report` | Generate an application workbook on demand |
 
 Collection and report delivery are deliberately separate. Cron runs `collect`;
@@ -144,18 +144,20 @@ chmod 600 .env
 Edit `config/local.json`. Important settings are:
 
 - `workloader_dir`: directory containing the Workloader binary;
+- `workloader_config_file`: Workloader `pce.yaml`, which owns PCE profiles,
+  FQDNs and credentials;
 - `state_db`: durable local SQLite path;
 - traffic batch/poll timing;
 - `retention_days`, which cannot be lower than 200;
 - `smtp_enabled`.
 
-Edit `.env` for PCE/Workloader environment overrides and SMTP values. The parser
-never evaluates shell syntax. Do not run `source .env`; do not commit it.
+Use `.env` primarily for optional SMTP secrets. Runtime paths and the normal PCE
+selection belong in `config/local.json` and `pce.yaml`. The parser never
+evaluates shell syntax. Do not run `source .env`; do not commit it.
 
-`PCE`, `WORKLOADER_DIR`, and `STATE_DB` in `.env` override values from
-`config/local.json`. They are commented out in new installations to avoid an
-accidental override. For an installation created from an earlier template, check
-only these non-secret keys:
+Legacy `PCE`, `WORKLOADER_DIR`, and `STATE_DB` values in `.env` still override
+`config/local.json`; new installations should not define them. For an
+installation created from an earlier template, check these non-secret keys:
 
 ```bash
 grep -E '^(PCE|WORKLOADER_DIR|STATE_DB)=' .env || true
@@ -191,13 +193,13 @@ Expected schema version is `1`; integrity must return `ok`.
 
 ## 4. Reference-data ingestion
 
-Produce `export_wkld.derived.csv` and `export_iplists.derived.csv` with the existing
-approved extraction/derivation process, then run:
+Produce the reference exports with the approved extraction/derivation process,
+then ingest derived workloads and the complete IP-list export:
 
 ```bash
 ./scripts/rules-recertify --config config/local.json ingest-reference \
   --workloads /data/export_wkld.derived.csv \
-  --ip-lists /data/export_iplists.derived.csv
+  --ip-lists /data/export_iplists.csv
 ```
 
 The adapter accepts comma or semicolon CSV delimiters and UTF-8 with or without a
@@ -219,19 +221,21 @@ Run after the previous UTC day has closed:
 
 The collector:
 
-1. exports all enabled and disabled rulesets;
-2. exports labels and builds the authoritative set of `app` label values;
-3. inventories rules without traffic expansion;
-4. admits only rulesets whose complete scope contains exactly `app:<value>` and
+1. exports L1 workloads, managed L3SM workloads, and the complete L1 IP Lists,
+   then produces and ingests the derived reference data;
+2. exports all enabled and disabled rulesets;
+3. exports labels and builds the authoritative set of `app` label values;
+4. inventories rules without traffic expansion;
+5. admits only rulesets whose complete scope contains exactly `app:<value>` and
    `env:<value>` (in either order) and whose application value exists in the
    label export;
-5. counts and bin-packs whole eligible rulesets up to the configured rule limit;
-6. submits sequential `rule-export --traffic-count --expand-svcs` batches;
-7. polls `rule-usage` and logs completion progress;
-8. never replaces a completed usage window with a later pending result;
-9. commits usage and port observations to SQLite;
-10. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
-11. sends one non-blocking SMTP summary.
+6. counts and bin-packs whole eligible rulesets up to the configured rule limit;
+7. submits sequential `rule-export --traffic-count --expand-svcs` batches;
+8. polls `rule-usage` and logs completion progress;
+9. never replaces a completed usage window with a later pending result;
+10. commits usage and port observations to SQLite;
+11. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
+12. sends one non-blocking SMTP summary.
 
 Check the latest collection with a single concise status line:
 
@@ -342,21 +346,45 @@ under the service account only after the PCE integration test succeeds.
 ./scripts/rules-recertify --config config/local.json report \
   --kear-id 51be4bf9-2080-432f-9d02-1c0cf0f251d7 \
   --logical-application-name "My Consolidated Application" \
-  --application-label APP_A \
-  --application-label APP_A_LEGACY \
-  --environment PRD \
+  --application-label APP_A --environment PRD \
+  --application-label APP_A_LEGACY --environment UAT \
   --lookback-days 180
 ```
 
 The output is written atomically below `output_dir`, with KEAR ID and Environment
 in its filename. Inspect `Presentation`, `Raw Rules`, `Expanded Rules`,
 `Rule Usage`, and `Data Quality`. The KEAR ID is present on every sheet.
+Each `--application-label` is paired by position with one `--environment`; the
+two options must therefore occur the same number of times. Scoped rulesets must
+match an exact pair. An unscoped ruleset is selected only when one source or
+destination side contains that exact pair, or contains the application label
+without an environment label (meaning every requested environment for that
+application).
 
-In `Expanded Rules`, an `All Workloads` source or destination is resolved from
-the ingested workload reference and the ruleset scope. For example,
-`app:APM_PAYMENT;env:PRD` produces one `hostname (ip_with_default_gw)` line for
-each matching PRD workload. Managed workloads use `ip_with_default_gw`; the
-reference ingestion's selected addresses are used for other workload types.
+In `Expanded Rules`, sources and destinations are resolved from the ingested
+`export_wkld.derived.csv` and complete `export_iplists.csv` references. Label,
+explicit-workload, and `All Workloads` selectors render one entry as
+`short_hostname (ip1;ip2)`; `name` is used when `short_hostname` is empty.
+Managed workloads use `ip_with_default_gw`, while unmanaged workloads use the
+ordered IPv4 values parsed from `interfaces`.
+
+IP-list selectors render as `IP List: name (member1;member2)`. Members are
+split on `;` during reference ingestion and inline `#comment` suffixes are
+removed. An IP List that cannot be resolved remains visibly marked
+`[unresolved]` rather than being silently discarded.
+Reporting resolves these selectors from the complete raw `export_iplists.csv`;
+the `NZ3_*`-only derived export remains dedicated to workload/subnet
+correlation.
+
+The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ip`, and
+`nb_ports`. Address counts represent the union cardinality of workload IPs,
+IP-list addresses, ranges, and subnets rather than the number of displayed
+items. Consequently, `Any` (`0.0.0.0/0` plus `::/0`) is
+`340282366920938463463374607436063178752`; this exact value is stored as text
+because it exceeds Excel's numeric precision. The port count is the number of
+distinct explicit TCP/UDP ports; inclusive ranges are expanded, while
+protocols without a port and `All Services` do not invent an arbitrary numeric
+cardinality.
 
 ## 7. Test procedure
 

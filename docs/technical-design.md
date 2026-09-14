@@ -224,6 +224,12 @@ records that lineage in `Presentation`.
 The SQLite `ip_lists` snapshot is retained as a fallback, so reports can resolve
 non-`NZ3_*` names even when the database was populated by an older release.
 
+Bulk reporting reads the active sheet of a Microcosmos XLSX and groups rows by
+`(Entity, Kear Id, PRD/NONPRD)`. Modules are resolved against known application
+labels by the exact, case-insensitive suffix after their second underscore. The
+timestamped output tree separates PRD from NONPRD before sanitized Entity
+directories; each group delegates to the same single-workbook generator.
+
 ## 5. Historical accumulation and 180-day guarantee
 
 ### 5.1 Recommended persistence

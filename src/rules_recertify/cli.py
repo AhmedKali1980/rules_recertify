@@ -15,6 +15,7 @@ from .history.database import Database
 from .logging_utils import configure_logging
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
+from .reporting.microcosmos import generate_microcosmos_reports
 from .workloader.csvio import read_rows
 
 LOG = logging.getLogger(__name__)
@@ -46,6 +47,11 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--environment", action="append", required=True)
     report.add_argument("--lookback-days", type=int)
     report.add_argument("--as-of", type=_date, default=date.today())
+    batch_report = commands.add_parser("report-batch", help="Generate reports from a Microcosmos XLSX export")
+    batch_report.add_argument("--microcosmos-xlsx", type=Path, required=True,
+                              help="Microcosmos XLSX used to generate all non-empty Kear Id rows")
+    batch_report.add_argument("--lookback-days", type=int)
+    batch_report.add_argument("--as-of", type=_date, default=date.today())
     return root
 
 
@@ -102,6 +108,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                                        args.application_label, args.environment, lookback, args.as_of,
                                        raw_dir=Path(settings.raw_dir))
             print(target); return 0
+        if args.command == "report-batch":
+            db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
+            if not 1 <= lookback <= settings.retention_days:
+                raise ValueError("lookback-days must be between 1 and retention_days")
+            targets = generate_microcosmos_reports(
+                db, args.microcosmos_xlsx, Path(settings.output_dir), Path(settings.raw_dir),
+                lookback, args.as_of,
+            )
+            print("\n".join(str(target) for target in targets)); return 0
         raise AssertionError("unhandled command")
     except (ConfigurationError, ValueError, RuntimeError) as exc:
         LOG.error("%s", exc)

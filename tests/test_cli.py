@@ -9,6 +9,14 @@ from rules_recertify.cli import main, parser
 
 
 class CliTest(unittest.TestCase):
+    def test_batch_report_accepts_microcosmos_workbook(self):
+        args = parser().parse_args([
+            "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx",
+            "--lookback-days", "180", "--as-of", "2026-09-10",
+        ])
+        self.assertEqual(args.microcosmos_xlsx, Path("microcosmos.xlsx"))
+        self.assertEqual(args.as_of.isoformat(), "2026-09-10")
+
     def test_report_options_form_ordered_application_environment_pairs(self):
         args = parser().parse_args([
             "report", "--kear-id", "k", "--logical-application-name", "app",

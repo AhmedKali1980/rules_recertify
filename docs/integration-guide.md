@@ -361,6 +361,23 @@ destination side contains that exact pair, or contains the application label
 without an environment label (meaning every requested environment for that
 application).
 
+### 6.1 Bulk reports from Microcosmos
+
+Use `report-batch --microcosmos-xlsx <file.xlsx>` to generate reports for every
+non-empty `Kear Id` in the active sheet. The workbook must expose `Kear Id`,
+`Application Name`, `Module`, `Account`, `Account Leader`,
+`Microsegmentation Solution`, `Environment`, and `Entity`. The application name
+becomes the logical report name. A Microcosmos module matches application labels
+whose suffix after the second underscore equals that module, case-insensitively
+(for example, `APM_RBS_FACTOBOT` maps to `FACTOBOT`). Unknown modules and
+inconsistent application names fail explicitly.
+
+The batch root is `output_dir/<UTC timestamp>`. Reports are grouped below
+`PRD/<sanitized Entity>` and `NONPRD/<sanitized Entity>`. Rows for the same KEAR
+and category are consolidated into one report; NONPRD preserves each original
+environment in its application/environment pairs while using `NONPRD` in the
+filename.
+
 In `Expanded Rules`, sources and destinations are resolved from the ingested
 `export_wkld.derived.csv` and complete `export_iplists.csv` references. Label,
 explicit-workload, and `All Workloads` selectors render one entry as

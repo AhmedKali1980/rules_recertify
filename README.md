@@ -119,6 +119,31 @@ sans scope est retenu si un même côté Source ou Destination contient ce coupl
 ou contient seulement le label applicatif (tous les environnements demandés
 pour cette application).
 
+### Génération en masse depuis Microcosmos
+
+La commande `report-batch` accepte un export Excel Microcosmos :
+
+```bash
+./scripts/rules-recertify --config config/local.json report-batch \
+  --microcosmos-xlsx /chemin/export_microcosmos.xlsx \
+  --lookback-days 180 --as-of 2026-09-10
+```
+
+La première feuille doit contenir les colonnes `Kear Id`, `Application Name`,
+`Module`, `Account`, `Account Leader`, `Microsegmentation Solution`,
+`Environment` et `Entity`. Seules les lignes dont `Kear Id` est renseigné sont
+traitées. `Application Name` alimente le nom logique et `Environment` le scope.
+Le module est rapproché des labels applicatifs connus en comparant sa valeur à
+la partie située après le deuxième underscore : `APM_RBS_FACTOBOT` correspond
+ainsi au module `FACTOBOT`. Un module sans label correspondant provoque une
+erreur explicite plutôt qu'un rapport incomplet.
+
+Les fichiers sont écrits sous
+`output/<timestamp>/{PRD,NONPRD}/<Entity>/`. Pour un même KEAR, les lignes PRD
+sont réunies dans un rapport suffixé `PRD`; tous les autres environnements sont
+réunis dans un second rapport suffixé `NONPRD`. Les noms d'entités sont assainis
+pour rester des composants de chemin sûrs.
+
 Dans `Expanded Rules`, les workloads sont résolus depuis
 `export_wkld.derived.csv` et affichés comme `short_hostname (ip1;ip2)`, avec
 fallback sur `name`. Les IP Lists sont résolues depuis l'export complet

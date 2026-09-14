@@ -23,7 +23,8 @@ class ReportingDependencyError(RuntimeError):
 
 def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name: str,
                       application_labels: Sequence[str], environments: Sequence[str],
-                      lookback_days: int, as_of: date, raw_dir: Optional[Path] = None) -> Path:
+                      lookback_days: int, as_of: date, raw_dir: Optional[Path] = None,
+                      filename_environment: Optional[str] = None) -> Path:
     scope_pairs = _scope_pairs(application_labels, environments)
     if not kear_id.strip():
         raise ValueError("kear_id must not be empty")
@@ -91,7 +92,8 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
     quality_rows = [{"KEAR ID": kear, **row} for row in quality]
     _sheet(workbook, "Data Quality", quality_rows)
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_env = re.sub(r"[^A-Za-z0-9_.-]+", "_", "-".join(dict.fromkeys(env for _, env in scope_pairs)))
+    environment_tag = filename_environment or "-".join(dict.fromkeys(env for _, env in scope_pairs))
+    safe_env = re.sub(r"[^A-Za-z0-9_.-]+", "_", environment_tag)
     target = output_dir / f"rules_recertify_{kear}_{safe_env}_{as_of.strftime('%Y%m%d')}.xlsx"
     temporary = target.with_suffix(".xlsx.tmp")
     workbook.save(temporary); temporary.replace(target)

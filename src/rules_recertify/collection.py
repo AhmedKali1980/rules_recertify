@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -13,6 +14,8 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 from .config import Settings
 from .history.database import Database
 from .notifications import send_summary
+from .pce_import import import_pce_exports
+from .reference import ingest_reference
 from .workloader.batching import (
     partition_and_pack_rulesets,
     select_application_scoped_rulesets,
@@ -32,7 +35,8 @@ USAGE_REQUIRED = (*RULE_REQUIRED, "async_query_status", "flows", "flows_by_port"
 LABEL_REQUIRED = ("key", "value")
 
 
-def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False) -> Dict[str, object]:
+def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
+            import_references: bool = False, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
     if traffic_end <= traffic_start:
         raise ValueError("traffic_end must be after traffic_start")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
@@ -52,6 +56,32 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
     )
     status = "ERROR"
     try:
+        if import_references:
+            details["current_stage"] = "IMPORTING_PCE_REFERENCE"
+            db.update_run_details(run_id, details)
+            import_keys = {
+                "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH",
+                "EXECUTABLE", "CFG", "PCE_L1_NAME", "PCE_L3SM_NAME",
+                "PCE_L1_FQDN", "PCE_L3SM_FQDN", "RULES_RECERTIFY_ENV_FILE",
+                "BASE_SLEEP", "BACKOFF", "MAX_SLEEP", "JITTER", "TIMEOUT_SEC",
+                "MAX_ATTEMPTS", "POST_SUCCESS_PAUSE_SEC", "POST_FAILURE_PAUSE_SEC",
+                "VERIFY_OUTPUT_FILE",
+            }
+            import_environment = {key: value for key, value in os.environ.items() if key in import_keys}
+            import_environment.setdefault("EXECUTABLE", str(settings.workloader))
+            if settings.workloader_config_file:
+                import_environment.setdefault("CFG", settings.workloader_config_file)
+            import_pce_exports(run_dir, pce_stub_dir, import_environment)
+            details["reference_ingest"] = ingest_reference(
+                db, run_dir / "export_wkld.derived.csv",
+                run_dir / "export_iplists.derived.csv", run_id,
+            )
+            details["reference_exports"] = [
+                "export_wkld.csv", "export_iplists.csv",
+                "export_wkld.derived.csv", "export_iplists.derived.csv",
+            ]
+            details["current_stage"] = "EXPORTING_RULESETS"
+            db.update_run_details(run_id, details)
         rulesets_file = run_dir / "rulesets.csv"
         runner.run(["ruleset-export", "--output-file", str(rulesets_file)])
         rulesets = list(read_rows(rulesets_file, ("href", "enabled")))

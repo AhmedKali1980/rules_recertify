@@ -1,7 +1,12 @@
 import json
+import importlib.util
+import tempfile
 import unittest
+from datetime import date
+from pathlib import Path
 
-from rules_recertify.reporting.workbook import _expand_side
+from rules_recertify.history.database import Database
+from rules_recertify.reporting.workbook import _count_ports, _expand_side, _expand_side_details, generate_workbook
 
 
 class WorkbookExpansionTest(unittest.TestCase):
@@ -9,6 +14,7 @@ class WorkbookExpansionTest(unittest.TestCase):
         self.workloads = [
             {
                 "hostname": "payment-01.example.net",
+                "short_hostname": "PAYMENT-01",
                 "name": "payment-01",
                 "app": "APM_PAYMENT",
                 "env": "PRD",
@@ -16,6 +22,7 @@ class WorkbookExpansionTest(unittest.TestCase):
             },
             {
                 "hostname": "payment-02.example.net",
+                "short_hostname": "PAYMENT-02",
                 "name": "payment-02",
                 "app": "APM_PAYMENT",
                 "env": "PRD",
@@ -23,6 +30,7 @@ class WorkbookExpansionTest(unittest.TestCase):
             },
             {
                 "hostname": "payment-uat.example.net",
+                "short_hostname": "PAYMENT-UAT",
                 "name": "payment-uat",
                 "app": "APM_PAYMENT",
                 "env": "UAT",
@@ -30,6 +38,7 @@ class WorkbookExpansionTest(unittest.TestCase):
             },
             {
                 "hostname": "other.example.net",
+                "short_hostname": "OTHER",
                 "name": "other",
                 "app": "OTHER_APP",
                 "env": "PRD",
@@ -47,14 +56,28 @@ class WorkbookExpansionTest(unittest.TestCase):
             self.workloads,
             "PRD",
         )
-
         self.assertEqual(
             expanded.splitlines(),
             [
-                "payment-01.example.net (10.10.1.10)",
-                "payment-02.example.net (10.10.1.11)",
+                "PAYMENT-01 (10.10.1.10)",
+                "PAYMENT-02 (10.10.1.11)",
             ],
         )
+
+    def test_all_workloads_uses_every_label_from_ruleset_scope(self):
+        workloads = [
+            {**self.workloads[0], "loc": "PAR", "role": "WEB"},
+            {**self.workloads[1], "loc": "LYO", "role": "WEB"},
+        ]
+        expanded, addresses = _expand_side_details(
+            {
+                "ruleset_scope": "app:APM_PAYMENT;env:PRD;loc:PAR;role:WEB",
+                "src_all_workloads": "true",
+            },
+            "src", workloads, "PRD",
+        )
+        self.assertEqual(expanded, "PAYMENT-01 (10.10.1.10)")
+        self.assertEqual(addresses, ["10.10.1.10"])
 
     def test_all_workloads_expansion_accepts_reversed_scope_order(self):
         expanded = _expand_side(
@@ -69,7 +92,7 @@ class WorkbookExpansionTest(unittest.TestCase):
 
         self.assertNotIn("payment-uat", expanded)
         self.assertNotIn("other.example.net", expanded)
-        self.assertIn("payment-01.example.net (10.10.1.10)", expanded)
+        self.assertIn("PAYMENT-01 (10.10.1.10)", expanded)
 
     def test_null_scope_environment_uses_requested_report_environment(self):
         expanded = _expand_side(
@@ -82,5 +105,88 @@ class WorkbookExpansionTest(unittest.TestCase):
             "UAT",
         )
 
-        self.assertEqual(expanded, "payment-uat.example.net (10.20.1.10)")
+        self.assertEqual(expanded, "PAYMENT-UAT (10.20.1.10)")
 
+    def test_label_workload_uses_short_name_and_groups_multiple_addresses(self):
+        workload = {
+            "href": "/workloads/1", "hostname": "host.example.net",
+            "short_hostname": "HOST", "name": "fallback", "app": "APP",
+            "env": "PRD", "loc": "PAR", "role": "WEB",
+            "addresses_json": json.dumps(["192.168.1.10", "192.168.1.5"]),
+        }
+        expanded = _expand_side(
+            {"src_labels": "app:app;env:prd;role:web"}, "src", [workload], "prd"
+        )
+        self.assertEqual(expanded, "HOST (192.168.1.10;192.168.1.5)")
+
+    def test_empty_short_hostname_falls_back_to_name(self):
+        workload = {
+            "href": "/workloads/1", "hostname": "", "short_hostname": "",
+            "name": "fallback-name", "app": "APP", "env": "PRD",
+            "addresses_json": json.dumps(["192.168.1.10"]),
+        }
+        expanded = _expand_side(
+            {"dst_workloads": "/workloads/1"}, "dst", [workload], "PRD"
+        )
+        self.assertEqual(expanded, "fallback-name (192.168.1.10)")
+
+    def test_ip_list_expands_members_and_removes_comments(self):
+        expanded, addresses = _expand_side_details(
+            {"src_iplists": "NETWORKS"}, "src", [], "PRD",
+            [
+                {"name": "NETWORKS", "member": "171.18.16.0/24#GEN1"},
+                {"name": "NETWORKS", "member": "171.16.16.0/24"},
+            ],
+        )
+        self.assertEqual(
+            expanded,
+            "IP List: NETWORKS (171.18.16.0/24;171.16.16.0/24)",
+        )
+        self.assertEqual(addresses, ["171.18.16.0/24", "171.16.16.0/24"])
+
+    def test_unresolved_ip_list_is_visible(self):
+        expanded = _expand_side(
+            {"dst_iplists": "MISSING"}, "dst", [], "PRD", []
+        )
+        self.assertEqual(expanded, "IP List: MISSING [unresolved]")
+
+    def test_address_counts_are_stably_deduplicated(self):
+        workload = {
+            "href": "/workloads/1", "short_hostname": "HOST", "name": "host",
+            "app": "APP", "env": "PRD", "addresses_json": json.dumps(["10.0.0.1", "10.0.0.2"]),
+        }
+        _, addresses = _expand_side_details(
+            {"src_workloads": "/workloads/1", "src_labels": "app:APP;env:PRD"},
+            "src", [workload], "PRD",
+        )
+        self.assertEqual(addresses, ["10.0.0.1", "10.0.0.2"])
+
+    def test_port_count_expands_ranges_and_deduplicates_protocol_ports(self):
+        self.assertEqual(_count_ports("443 TCP; 80-82 TCP; 53 UDP; 443 TCP"), 5)
+        self.assertEqual(_count_ports("All Services; 0 ICMP"), 0)
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is optional")
+    def test_expanded_rules_contains_address_and_port_count_columns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); db = Database(root / "state.sqlite"); db.initialize()
+            raw = {
+                "rule_href": "/rules/1", "ruleset_href": "/rulesets/1",
+                "ruleset_name": "APP", "ruleset_scope": "app:APP;env:PRD",
+                "src_all_workloads": "true", "dst_iplists": "NETWORKS",
+                "services": "443 TCP;8000-8001 TCP",
+            }
+            db.upsert_rules([raw], "2026-09-12T00:00:00+00:00")
+            with db.connect() as connection:
+                connection.execute(
+                    "INSERT INTO workloads VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ("/workloads/1", "host.example", "HOST", "host", "APP", "PRD", "", "", 1,
+                     json.dumps(["10.0.0.1", "10.0.0.2"]), "{}", "2026-09-12"),
+                )
+                connection.execute("INSERT INTO ip_lists VALUES(?,?,?)", ("NETWORKS", "10.1.0.0/24", "2026-09-12"))
+            target = generate_workbook(db, root, "KEAR", "Application", ["APP"], "PRD", 1, date(2026, 9, 12))
+            from openpyxl import load_workbook
+            sheet = load_workbook(target)["Expanded Rules"]
+            values = {cell.value: sheet.cell(2, cell.column).value for cell in sheet[1]}
+            self.assertEqual(values["nb_src_ips"], 2)
+            self.assertEqual(values["nb_dst_ip"], 1)
+            self.assertEqual(values["nb_ports"], 3)

@@ -7,6 +7,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from .reporting.dangerous_ports import PORT_CATALOGS
+
 
 class ConfigurationError(ValueError):
     """Raised when configuration is invalid."""
@@ -62,6 +64,7 @@ class Settings:
     default_lookback_days: int = 180
     policy_version: str = "draft"
     smtp_enabled: bool = False
+    dangerous_port_lists: Tuple[str, ...] = ("PORTS_TO_CONTROL", "PORTS_TO_ERADICATE")
 
     @property
     def workloader(self) -> Path:
@@ -97,6 +100,13 @@ class Settings:
             raise ConfigurationError("default_lookback_days must fit retention")
         if self.policy_version not in {"active", "draft"}:
             raise ConfigurationError("policy_version must be active or draft")
+        if not isinstance(self.dangerous_port_lists, (list, tuple)):
+            raise ConfigurationError("dangerous_port_lists must be a list or comma-separated string")
+        unknown_port_lists = set(self.dangerous_port_lists) - set(PORT_CATALOGS)
+        if unknown_port_lists:
+            raise ConfigurationError(
+                "unknown dangerous_port_lists: " + ", ".join(sorted(unknown_port_lists))
+            )
 
 
 def load_settings(path: Path, dotenv: Optional[Path] = None) -> Settings:
@@ -111,6 +121,10 @@ def load_settings(path: Path, dotenv: Optional[Path] = None) -> Settings:
     unknown = set(data) - allowed
     if unknown:
         raise ConfigurationError(f"Unknown configuration keys: {', '.join(sorted(unknown))}")
+    if isinstance(data.get("dangerous_port_lists"), str):
+        data["dangerous_port_lists"] = tuple(
+            item.strip() for item in data["dangerous_port_lists"].split(",") if item.strip()
+        )
     env_map = {
         "pce": "PCE",
         "workloader_dir": "WORKLOADER_DIR",

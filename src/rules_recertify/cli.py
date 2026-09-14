@@ -15,6 +15,7 @@ from .history.database import Database
 from .logging_utils import configure_logging
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
+from .reporting.microcosmos import generate_microcosmos_reports
 from .workloader.csvio import read_rows
 
 LOG = logging.getLogger(__name__)
@@ -32,6 +33,8 @@ def parser() -> argparse.ArgumentParser:
     collect_p.add_argument("--traffic-start", type=_date)
     collect_p.add_argument("--traffic-end", type=_date)
     collect_p.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
+    collect_p.add_argument("--pce-stub-dir", type=Path, help="Use local reference CSVs; never contact a PCE")
+    collect_p.add_argument("--skip-pce-import", action="store_true", help="Skip workload/IP-list reference import")
     ingest = commands.add_parser("ingest-usage")
     ingest.add_argument("csv", type=Path)
     reference = commands.add_parser("ingest-reference")
@@ -41,9 +44,14 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--kear-id", required=True)
     report.add_argument("--logical-application-name", required=True)
     report.add_argument("--application-label", action="append", required=True)
-    report.add_argument("--environment", required=True)
+    report.add_argument("--environment", action="append", required=True)
     report.add_argument("--lookback-days", type=int)
     report.add_argument("--as-of", type=_date, default=date.today())
+    batch_report = commands.add_parser("report-batch", help="Generate reports from a Microcosmos XLSX export")
+    batch_report.add_argument("--microcosmos-xlsx", type=Path, required=True,
+                              help="Microcosmos XLSX used to generate all non-empty Kear Id rows")
+    batch_report.add_argument("--lookback-days", type=int)
+    batch_report.add_argument("--as-of", type=_date, default=date.today())
     return root
 
 
@@ -69,6 +77,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "rate_limit_retry_delay_minutes": settings.rate_limit_retry_delay_minutes,
                 "rate_limit_max_retries": settings.rate_limit_max_retries,
                 "empty_scope_ruleset_name_patterns": settings.empty_scope_ruleset_name_patterns,
+                "dangerous_port_lists": settings.dangerous_port_lists,
                 "smtp_enabled": settings.smtp_enabled,
             }, indent=2)); return 0
         if args.command == "init-db":
@@ -76,7 +85,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "collect":
             end = args.traffic_end or date.today()
             start = args.traffic_start or end - timedelta(days=settings.traffic_window_days)
-            print(json.dumps(collect(settings, start, end, args.no_wait), indent=2, sort_keys=True)); return 0
+            print(json.dumps(collect(settings, start, end, args.no_wait,
+                                     import_references=not args.skip_pce_import,
+                                     pce_stub_dir=args.pce_stub_dir), indent=2, sort_keys=True)); return 0
         if args.command == "ingest-usage":
             db.initialize(); run_id = "manual-" + uuid.uuid4().hex
             db.begin_run(run_id, "MANUAL_USAGE", {"csv": str(args.csv)})
@@ -92,9 +103,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
             if not 1 <= lookback <= settings.retention_days:
                 raise ValueError("lookback-days must be between 1 and retention_days")
+            if len(args.application_label) != len(args.environment):
+                raise ValueError("each --application-label must have one corresponding --environment")
             target = generate_workbook(db, Path(settings.output_dir), args.kear_id, args.logical_application_name,
-                                       args.application_label, args.environment, lookback, args.as_of)
+                                       args.application_label, args.environment, lookback, args.as_of,
+                                       raw_dir=Path(settings.raw_dir),
+                                       dangerous_port_lists=settings.dangerous_port_lists)
             print(target); return 0
+        if args.command == "report-batch":
+            db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
+            if not 1 <= lookback <= settings.retention_days:
+                raise ValueError("lookback-days must be between 1 and retention_days")
+            targets = generate_microcosmos_reports(
+                db, args.microcosmos_xlsx, Path(settings.output_dir), Path(settings.raw_dir),
+                lookback, args.as_of,
+                dangerous_port_lists=settings.dangerous_port_lists,
+            )
+            print("\n".join(str(target) for target in targets)); return 0
         raise AssertionError("unhandled command")
     except (ConfigurationError, ValueError, RuntimeError) as exc:
         LOG.error("%s", exc)

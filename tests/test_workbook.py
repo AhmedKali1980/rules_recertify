@@ -9,7 +9,7 @@ from pathlib import Path
 from rules_recertify.history.database import Database
 from rules_recertify.reporting.workbook import (
     _count_addresses, _count_ports, _excel_safe_count, _expand_side,
-    _expand_side_details, _load_report_ip_lists, _rule_matches, _scope_pairs,
+    _expand_services, _expand_side_details, _load_report_ip_lists, _rule_matches, _scope_pairs,
     generate_workbook,
 )
 
@@ -174,8 +174,12 @@ class WorkbookExpansionTest(unittest.TestCase):
     def test_report_prefers_latest_complete_raw_ip_list_export_over_stale_database(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); raw_dir = root / "raw"
-            old_run = raw_dir / "20260910T000000Z-old"; old_run.mkdir(parents=True)
-            latest_run = raw_dir / "20260911T094511Z-new"; latest_run.mkdir()
+            preflight = raw_dir / "preflight"; preflight.mkdir(parents=True)
+            old_run = raw_dir / "20260910T000000Z-aabbccdd"; old_run.mkdir(parents=True)
+            latest_run = raw_dir / "20260911T094511Z-331e4c5c"; latest_run.mkdir()
+            (preflight / "export_iplists.csv").write_text(
+                "name,include\nPREFLIGHT,203.0.113.0/24\n", encoding="utf-8",
+            )
             with (old_run / "export_iplists.csv").open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=["name", "include"])
                 writer.writeheader(); writer.writerow({"name": "OLD", "include": "10.0.0.0/8"})
@@ -268,15 +272,16 @@ class WorkbookExpansionTest(unittest.TestCase):
 
     def test_port_count_expands_ranges_and_deduplicates_protocol_ports(self):
         self.assertEqual(_count_ports("443 TCP; 80-82 TCP; 53 UDP; 443 TCP"), 5)
-        self.assertEqual(_count_ports("All Services; 0 ICMP"), 0)
+        self.assertEqual(_count_ports("All Services; 0 ICMP"), 131072)
+        self.assertEqual(_expand_services("All Services"), "0-65535 TCP;0-65535 UDP")
 
     def test_address_count_uses_network_cardinality_and_removes_overlap(self):
         self.assertEqual(_count_addresses(["192.168.19.0/24", "192.168.19.1", "10.0.0.1-10.0.0.3"]), 259)
 
-    def test_any_counts_complete_ipv4_and_ipv6_address_spaces_exactly(self):
+    def test_any_counts_only_the_complete_ipv4_address_space(self):
         count = _count_addresses(["0.0.0.0/0", "::/0"])
-        self.assertEqual(count, (2 ** 32) + (2 ** 128))
-        self.assertEqual(_excel_safe_count(count), "340282366920938463463374607436063178752")
+        self.assertEqual(count, 2 ** 32)
+        self.assertEqual(_excel_safe_count(count), 4294967296)
 
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is optional")
     def test_expanded_rules_contains_address_and_port_count_columns(self):
@@ -286,7 +291,7 @@ class WorkbookExpansionTest(unittest.TestCase):
                 "rule_href": "/rules/1", "ruleset_href": "/rulesets/1",
                 "ruleset_name": "APP", "ruleset_scope": "app:APP;env:PRD",
                 "src_all_workloads": "true", "dst_iplists": "NETWORKS",
-                "services": "443 TCP;8000-8001 TCP",
+                "services": "All Services",
             }
             db.upsert_rules([raw], "2026-09-12T00:00:00+00:00")
             with db.connect() as connection:
@@ -302,4 +307,5 @@ class WorkbookExpansionTest(unittest.TestCase):
             values = {cell.value: sheet.cell(2, cell.column).value for cell in sheet[1]}
             self.assertEqual(values["nb_src_ips"], 2)
             self.assertEqual(values["nb_dst_ip"], 256)
-            self.assertEqual(values["nb_ports"], 3)
+            self.assertEqual(values["Service Name / Definition"], "0-65535 TCP;0-65535 UDP")
+            self.assertEqual(values["nb_ports"], 131072)

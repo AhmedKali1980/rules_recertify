@@ -375,21 +375,21 @@ removed. An IP List that cannot be resolved remains visibly marked
 Reporting resolves these selectors from the complete raw `export_iplists.csv`;
 the `NZ3_*`-only derived export remains dedicated to workload/subnet
 correlation. At report time, the newest non-empty
-`raw_dir/<run_id>/export_iplists.csv` is parsed directly and takes precedence
+`raw_dir/<YYYYMMDDTHHMMSSZ-8hex>/export_iplists.csv` is parsed directly and takes precedence
 over the SQLite snapshot. This makes reports self-healing when SQLite was
 populated by an older release that stored only `NZ3_*` members. SQLite remains
 the fallback when no raw export exists. The `Presentation` sheet records the
-selected file path or the SQLite fallback for auditability.
+selected file path or the SQLite fallback for auditability. Technical folders
+such as `raw/preflight` are never eligible.
 
 The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ip`, and
 `nb_ports`. Address counts represent the union cardinality of workload IPs,
 IP-list addresses, ranges, and subnets rather than the number of displayed
-items. Consequently, `Any` (`0.0.0.0/0` plus `::/0`) is
-`340282366920938463463374607436063178752`; this exact value is stored as text
-because it exceeds Excel's numeric precision. The port count is the number of
-distinct explicit TCP/UDP ports; inclusive ranges are expanded, while
-protocols without a port and `All Services` do not invent an arbitrary numeric
-cardinality.
+items. Corporate rules are IPv4-only, so `Any` (`0.0.0.0/0` plus `::/0` in the
+source selector) counts only `2^32`, or `4294967296`. The port count is the
+number of distinct explicit TCP/UDP ports and expands inclusive ranges.
+`All Services` is displayed as `0-65535 TCP;0-65535 UDP` in `Expanded Rules`
+and therefore counts `131072` protocol/port pairs.
 
 ## 7. Test procedure
 

@@ -67,6 +67,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         expanded_destinations, destination_addresses = _expand_side_details(raw, "dst", workloads, rule_pairs, ip_lists)
         expanded["Expanded Sources"] = expanded_sources
         expanded["Expanded Destinations"] = expanded_destinations
+        expanded["Service Name / Definition"] = _expand_services(str(rule["services"]))
         expanded["nb_src_ips"] = _excel_safe_count(_count_addresses(source_addresses))
         expanded["nb_dst_ip"] = _excel_safe_count(_count_addresses(destination_addresses))
         expanded["nb_ports"] = _count_ports(str(rule["services"]))
@@ -101,7 +102,11 @@ def _load_report_ip_lists(connection: object, raw_dir: Optional[Path]) -> Tuple[
     """Prefer the newest complete raw IP-list export, with SQLite as fallback."""
     if raw_dir:
         candidates = sorted(
-            (path for path in raw_dir.glob("*/export_iplists.csv") if path.is_file() and path.stat().st_size),
+            (
+                path for path in raw_dir.glob("*/export_iplists.csv")
+                if re.fullmatch(r"\d{8}T\d{6}Z-[0-9A-Fa-f]{8}", path.parent.name)
+                and path.is_file() and path.stat().st_size
+            ),
             key=lambda path: path.parent.name,
             reverse=True,
         )
@@ -340,6 +345,8 @@ def _ip_list_selector_name(selector: str) -> str:
 
 def _count_ports(services: str) -> int:
     """Count distinct explicit TCP/UDP ports, expanding inclusive ranges."""
+    if re.search(r"\bAll Services\b", services, re.IGNORECASE):
+        return 2 * 65536
     ports = set()
     for match in re.finditer(r"\b(\d{1,5})(?:\s*-\s*(\d{1,5}))?\s+(TCP|UDP)\b", services, re.IGNORECASE):
         start = int(match.group(1)); end = int(match.group(2) or start)
@@ -348,9 +355,20 @@ def _count_ports(services: str) -> int:
     return len(ports)
 
 
+def _expand_services(services: str) -> str:
+    """Render All Services as the complete TCP and UDP port ranges."""
+    if not re.search(r"\bAll Services\b", services, re.IGNORECASE):
+        return services
+    expanded = re.sub(
+        r"\bAll Services\b", "0-65535 TCP;0-65535 UDP", services,
+        flags=re.IGNORECASE,
+    )
+    return expanded
+
+
 def _count_addresses(addresses: Iterable[str]) -> int:
-    """Count the union of represented IPv4/IPv6 addresses without overlap."""
-    networks: Dict[int, List[object]] = {4: [], 6: []}
+    """Count the union of represented IPv4 addresses without overlap."""
+    networks: List[object] = []
     for raw in addresses:
         value = str(raw).partition("#")[0].strip()
         if not value:
@@ -366,16 +384,13 @@ def _count_addresses(addresses: Iterable[str]) -> int:
                 end = ipaddress.ip_address(end_text.strip())
             except ValueError:
                 continue
-            if start.version != end.version or int(start) > int(end):
+            if start.version != 4 or end.version != 4 or int(start) > int(end):
                 continue
-            networks[start.version].extend(ipaddress.summarize_address_range(start, end))
+            networks.extend(ipaddress.summarize_address_range(start, end))
         else:
-            networks[network.version].append(network)
-    return sum(
-        network.num_addresses
-        for version_networks in networks.values()
-        for network in ipaddress.collapse_addresses(version_networks)
-    )
+            if network.version == 4:
+                networks.append(network)
+    return sum(network.num_addresses for network in ipaddress.collapse_addresses(networks))
 
 
 def _excel_safe_count(value: int) -> object:

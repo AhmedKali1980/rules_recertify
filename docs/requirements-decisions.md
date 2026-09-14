@@ -232,9 +232,10 @@ include
 The raw source is produced by Workloader `ipl-export`. This derived file is
 limited to `NZ3_*` and supports workload/subnet correlation. Report selector
 resolution deliberately uses the complete raw export instead.
-The report prefers the newest non-empty run-specific raw export and records its
-path in `Presentation`; the normalized SQLite table is a fallback for manual or
-legacy runs without an available raw file.
+The report prefers the newest non-empty timestamped run-specific raw export,
+explicitly excluding technical directories such as `preflight`, and records
+its path in `Presentation`; the normalized SQLite table is a fallback for
+manual or legacy runs without an available raw file.
 
 ### DEC-014 — Derived workload CSV
 
@@ -309,9 +310,10 @@ types will evolve after downstream ingestion testing.
 
 It also contains `nb_src_ips`, `nb_dst_ip`, and `nb_ports`. Address counts are
 the cardinality of the union represented by expanded IPs, CIDRs, and ranges;
-overlaps are not counted twice. Port counts include distinct explicit TCP/UDP
-ports and expand inclusive ranges. Portless protocols and `All Services` do not
-invent an arbitrary numeric count.
+overlaps are not counted twice and IPv6 is ignored for this corporate IPv4
+scope. Port counts include distinct explicit TCP/UDP ports and expand inclusive
+ranges. `All Services` expands to `0-65535 TCP` and `0-65535 UDP`, for 131072
+protocol/port pairs; portless protocols do not add a numeric count.
 
 ### DEC-016 — Required application arguments
 

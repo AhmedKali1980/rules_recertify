@@ -125,16 +125,17 @@ fallback sur `name`. Les IP Lists sont résolues depuis l'export complet
 `export_iplists.csv`; le dérivé limité à `NZ3_*` sert uniquement à la
 corrélation workload/subnet. Les commentaires `#...` sont retirés de chaque
 membre. Lors de la génération, le rapport charge en priorité le
-`export_iplists.csv` du répertoire d'exécution raw le plus récent. Cela corrige
+`export_iplists.csv` du sous-répertoire d'exécution horodaté le plus récent.
+Le répertoire technique `raw/preflight` est explicitement exclu. Cela corrige
 également les bases historiques qui avaient été alimentées uniquement avec les
 IP Lists `NZ3_*`; SQLite reste le fallback si aucun export brut n'est disponible.
 La feuille `Presentation` indique le fichier effectivement utilisé.
 
 Les colonnes `nb_src_ips` et `nb_dst_ip` comptent la cardinalité de l'union des
-IP, ranges et subnets développés, sans double comptage. `Any` vaut donc
-`2^32 + 2^128`, soit `340282366920938463463374607436063178752` (stocké comme
-texte pour préserver sa précision dans Excel). `nb_ports` compte les ports
-TCP/UDP explicites distincts, plages incluses.
+IP, ranges et subnets IPv4 développés, sans double comptage. Dans ce périmètre
+corporate IPv4, `Any` (`0.0.0.0/0` et `::/0`) vaut donc `2^32`, soit
+`4294967296`. Dans `Expanded Rules`, `All Services` est rendu sous la forme
+`0-65535 TCP;0-65535 UDP`; `nb_ports` vaut alors `131072`.
 
 The standard production installation root is:
 

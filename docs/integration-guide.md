@@ -352,11 +352,23 @@ The output is written atomically below `output_dir`, with KEAR ID and Environmen
 in its filename. Inspect `Presentation`, `Raw Rules`, `Expanded Rules`,
 `Rule Usage`, and `Data Quality`. The KEAR ID is present on every sheet.
 
-In `Expanded Rules`, an `All Workloads` source or destination is resolved from
-the ingested workload reference and the ruleset scope. For example,
-`app:APM_PAYMENT;env:PRD` produces one `hostname (ip_with_default_gw)` line for
-each matching PRD workload. Managed workloads use `ip_with_default_gw`; the
-reference ingestion's selected addresses are used for other workload types.
+In `Expanded Rules`, sources and destinations are resolved from the ingested
+`export_wkld.derived.csv` and `export_iplists.derived.csv` references. Label,
+explicit-workload, and `All Workloads` selectors render one entry as
+`short_hostname (ip1;ip2)`; `name` is used when `short_hostname` is empty.
+Managed workloads use `ip_with_default_gw`, while unmanaged workloads use the
+ordered IPv4 values parsed from `interfaces`.
+
+IP-list selectors render as `IP List: name (member1;member2)`. Members are
+split on `;` during reference ingestion and inline `#comment` suffixes are
+removed. An IP List that cannot be resolved remains visibly marked
+`[unresolved]` rather than being silently discarded.
+
+The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ip`, and
+`nb_ports`. Address counts use the distinct expanded workload addresses and
+IP-list members. The port count is the number of distinct explicit TCP/UDP
+ports; inclusive ranges are expanded, while protocols without a port and
+`All Services` do not invent an arbitrary numeric cardinality.
 
 ## 7. Test procedure
 

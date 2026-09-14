@@ -35,7 +35,11 @@ def ingest_reference(db: Database, workloads_file: Path, ip_lists_file: Path, ru
                 quality.append(("WORKLOAD_WITHOUT_IP", row["href"], "; ".join(warnings) or "No usable IP"))
                 continue
             enriched = dict(row)
-            enriched["short_hostname"] = short_hostname(row["hostname"])
+            enriched["short_hostname"] = (
+                row.get("short_hostname", "").strip()
+                if "short_hostname" in row
+                else short_hostname(row["hostname"])
+            )
             enriched["address_details"] = []
             for address in addresses:
                 matches = matching_prepared_nz3(address, prepared_nz3)

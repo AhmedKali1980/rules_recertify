@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -25,6 +26,10 @@ CREATE TABLE IF NOT EXISTS rules(
  ruleset_scope TEXT, ruleset_enabled INTEGER, rule_type TEXT, rule_description TEXT,
  rule_enabled INTEGER, unscoped_consumers INTEGER, source_text TEXT,
  destination_text TEXT, services TEXT, raw_json TEXT NOT NULL, snapshot_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rule_history(
+ rule_href TEXT NOT NULL, snapshot_at TEXT NOT NULL, content_hash TEXT NOT NULL,
+ changed INTEGER NOT NULL, PRIMARY KEY(rule_href, snapshot_at)
 );
 CREATE TABLE IF NOT EXISTS usage_windows(
  rule_href TEXT NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL,
@@ -128,13 +133,20 @@ class Database:
         raw_json=excluded.raw_json,snapshot_at=excluded.snapshot_at"""
         with self.connect() as db:
             for row in rows:
+                raw_json = json.dumps(dict(row), sort_keys=True)
+                existing = db.execute("SELECT raw_json FROM rules WHERE rule_href=?", (row["rule_href"],)).fetchone()
+                changed = existing is None or existing[0] != raw_json
+                db.execute(
+                    "INSERT OR REPLACE INTO rule_history VALUES(?,?,?,?)",
+                    (row["rule_href"], snapshot_at, hashlib.sha256(raw_json.encode("utf-8")).hexdigest(), int(changed)),
+                )
                 db.execute(sql, (
                     row["rule_href"], row["ruleset_href"], row.get("ruleset_name", ""),
                     row.get("ruleset_scope", ""), _bool_int(row.get("ruleset_enabled")),
                     row.get("rule_type", ""), row.get("rule_description", ""),
                     _bool_int(row.get("rule_enabled")), _bool_int(row.get("unscoped_consumers")),
                     _side_text(row, "src"), _side_text(row, "dst"), row.get("services", ""),
-                    json.dumps(dict(row), sort_keys=True), snapshot_at,
+                    raw_json, snapshot_at,
                 )); count += 1
         return count
 

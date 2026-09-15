@@ -77,7 +77,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
                 run_dir / "export_iplists.csv", run_id,
             )
             details["reference_exports"] = [
-                "export_wkld.csv", "export_iplists.csv",
+                "export_wkld.csv", "export_iplists.csv", "export_services.csv",
                 "export_wkld.derived.csv", "export_iplists.derived.csv",
             ]
             details["current_stage"] = "EXPORTING_RULESETS"

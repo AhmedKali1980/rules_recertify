@@ -9,7 +9,8 @@ from pathlib import Path
 from rules_recertify.history.database import Database
 from rules_recertify.reporting.workbook import (
     _count_addresses, _count_ports, _excel_safe_count, _expand_side,
-    _expand_services, _expand_side_details, _load_report_ip_lists, _load_report_workloads,
+    _expand_services, _expand_side_details, _load_report_ip_lists, _load_report_services,
+    _load_report_workloads,
     _rule_matches, _scope_pairs,
     _octoflow_sequence, _unused_since_18_months, _zones_for_addresses, generate_workbook,
 )
@@ -367,6 +368,35 @@ class WorkbookExpansionTest(unittest.TestCase):
         self.assertEqual(_count_ports("All Services; 0 ICMP"), 131072)
         self.assertEqual(_expand_services("All Services"), "0-65535 TCP;0-65535 UDP")
 
+    def test_named_services_are_expanded_and_explicit_ports_are_preserved(self):
+        catalog = {
+            "all-but-admin.premium.igad-svc": (
+                "ALL-BUT-ADMIN.PREMIUM.IGAD-SVC", "80 TCP;1000-1002 UDP",
+            )
+        }
+        expanded = _expand_services(
+            "ALL-BUT-ADMIN.PREMIUM.IGAD-SVC;21 TCP", catalog,
+        )
+        self.assertEqual(
+            expanded,
+            "ALL-BUT-ADMIN.PREMIUM.IGAD-SVC (80 TCP;1000-1002 UDP);21 TCP",
+        )
+        self.assertEqual(_count_ports(expanded), 5)
+
+    def test_service_reference_uses_newest_timestamped_raw_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory)
+            preflight = raw / "preflight"; old = raw / "20260914T100000Z-AAAAAAAA"
+            latest = raw / "20260915T100000Z-BBBBBBBB"
+            for folder, port in ((preflight, "1 TCP"), (old, "80 TCP"), (latest, "443 TCP")):
+                folder.mkdir()
+                with (folder / "export_services.csv").open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=["name", "service_ports"])
+                    writer.writeheader(); writer.writerow({"name": "WEB-SVC", "service_ports": port})
+            services, source = _load_report_services(raw)
+            self.assertEqual(services["web-svc"], ("WEB-SVC", "443 TCP"))
+            self.assertEqual(source, str(latest / "export_services.csv"))
+
     def test_address_count_uses_network_cardinality_and_removes_overlap(self):
         self.assertEqual(_count_addresses(["192.168.19.0/24", "192.168.19.1", "10.0.0.1-10.0.0.3"]), 259)
 
@@ -409,3 +439,8 @@ class WorkbookExpansionTest(unittest.TestCase):
             octoflow_values = {cell.value: octoflow.cell(2, cell.column).value for cell in octoflow[1]}
             self.assertEqual(octoflow_values["nb_dst_ips"], 256)
             self.assertEqual(octoflow_values["dangerous_rule"], "TRUE")
+            self.assertEqual(octoflow_values["dangerous_ports"], values["dangerous_ports"])
+            headers = [cell.value for cell in octoflow[1]]
+            self.assertEqual(
+                headers.index("dangerous_ports"), headers.index("dangerous_rule") + 1,
+            )

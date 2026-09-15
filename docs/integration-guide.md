@@ -429,6 +429,15 @@ number of distinct explicit TCP/UDP ports and expands inclusive ranges.
 `All Services` is displayed as `0-65535 TCP;0-65535 UDP` in `Expanded Rules`
 and therefore counts `131072` protocol/port pairs.
 
+Named Illumio service objects are exported from L1 with
+`svc-export --compressed` into `export_services.csv`. Reporting loads the
+newest non-empty file under a timestamped raw run (never `raw/preflight`) and
+resolves each name from the `name` and `service_ports` columns. Expanded Rules
+keeps the service name followed by its compressed TCP/UDP definition; Octoflow,
+port cardinality, and dangerous-port detection all consume that same expanded
+value. Explicit ports combined with a named service remain present. The chosen
+service reference path is recorded in `Presentation`.
+
 `Expanded Rules.dangerous_ports` intersects each rule's TCP/UDP ports with the
 catalogues selected by the `dangerous_port_lists` setting. Supported names are
 `PORTS_TO_CONTROL`, `PORTS_TO_ERADICATE`, and `PORTS_ADMIN`; configuration may
@@ -437,7 +446,9 @@ as `TCP/22` and `TCP/5900-5906`. The unexplained `/3` and `/14` suffixes from a
 legacy spreadsheet are not protocol or port syntax and are not emitted without
 an authoritative severity mapping.
 
-The `Octoflow` sheet exposes the 24-column consumer contract. Its NZ3 zones are
+The `Octoflow` sheet exposes the 25-column consumer contract. The
+`dangerous_ports` column immediately follows `dangerous_rule` and contains the
+exact value computed for `Expanded Rules.dangerous_ports`. Its NZ3 zones are
 computed by full containment of expanded IPv4 addresses, ranges, or subnets;
 unmatched sides become `Any`. `permissive_rule_max_ips` (default 255) controls
 the strict-greater-than threshold for `permissive_rule`. Rule imports populate

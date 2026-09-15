@@ -47,7 +47,8 @@ chmod 0755 "$TARGET/scripts/install-prod.sh" \
   "$TARGET/scripts/workloader_common.sh" \
   "$TARGET/scripts/workloader-wkld-export.sh" \
   "$TARGET/scripts/workloader-wkld-l3sm-managed-export.sh" \
-  "$TARGET/scripts/workloader-ipl-export.sh"
+  "$TARGET/scripts/workloader-ipl-export.sh" \
+  "$TARGET/scripts/workloader-svc-export.sh"
 
 if [[ ! -e "$TARGET/config/local.json" ]]; then
   install -m 0640 "$TARGET/config/production.example.json" "$TARGET/config/local.json"

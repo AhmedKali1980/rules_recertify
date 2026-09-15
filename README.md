@@ -66,9 +66,9 @@ et ne doivent pas dupliquer les accès dans `.env`. Si L3SM ne peut pas être
 déterminé sans ambiguïté, l'export échoue avant tout appel PCE.
 
 L'ordre live est strict : (1) tous les workloads L1, (2) workloads managés
-L3SM, (3) fusion CSV, (4) IP Lists L1, (5) dérivations. Le répertoire raw de
+L3SM, (3) fusion CSV, (4) IP Lists L1, (5) services L1 compressés, (6) dérivations. Le répertoire raw de
 l'exécution contient `export_wkld.csv`, `export_wkld.l3sm.m.csv`,
-`export_iplists.csv`, `export_wkld.derived.csv` et
+`export_iplists.csv`, `export_services.csv`, `export_wkld.derived.csv` et
 `export_iplists.derived.csv`. La fusion conserve toutes les lignes sans
 déduplication et exige des en-têtes strictement identiques.
 
@@ -77,7 +77,7 @@ déduplication et exige des en-têtes strictement identiques.
 ```
 
 Le mode stub ne contacte jamais Workloader. Son répertoire exige
-`export_wkld.csv` et `export_iplists.csv`; un
+`export_wkld.csv`, `export_iplists.csv` et `export_services.csv`; un
 `export_wkld.l3sm.m.csv` non vide est facultatif et est fusionné avec les mêmes
 contrôles que le mode live. On peut employer l'option ou la variable :
 
@@ -164,6 +164,14 @@ Le répertoire technique `raw/preflight` est explicitement exclu. Cela corrige
 IP Lists `NZ3_*`; SQLite reste le fallback si aucun export brut n'est disponible.
 La feuille `Presentation` indique le fichier effectivement utilisé.
 
+Les objets de service nommés Illumio sont résolus depuis le
+`export_services.csv` du même type de sous-répertoire raw horodaté. Cet export
+est produit par `svc-export --compressed`; sa colonne `service_ports` est
+injectée après le nom du service dans `Expanded Rules`, puis reprise telle
+quelle dans `Octoflow`. Les ports explicites présents à côté d'un service sont
+conservés. Le comptage et la détection des ports dangereux utilisent cette
+définition développée, et `Presentation` trace le fichier de services retenu.
+
 Un sélecteur latéral qui fournit explicitement `app` et `env` est résolu selon
 ses propres labels, auxquels peuvent s'ajouter `loc` et `role`, sans être filtré
 une seconde fois par le couple du rapport. Cela couvre symétriquement Sources et
@@ -207,7 +215,8 @@ par le consommateur : `device` vient de `pce`, les identifiants sont extraits du
 `Rule Href`, les sources/destinations/services reprennent les expansions, et les
 zones sont les IP Lists `NZ3_*` contenant intégralement les adresses ou subnets
 du côté concerné (`Any` en absence de correspondance). `Disabled`,
-`dangerous_rule`, les compteurs et le dernier hit sont également exposés.
+`dangerous_rule`, puis `dangerous_ports` avec exactement la valeur calculée
+dans `Expanded Rules`, les compteurs et le dernier hit sont également exposés.
 
 Le seuil de permissivité se configure dans `config/local.json` :
 

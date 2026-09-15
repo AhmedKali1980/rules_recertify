@@ -48,6 +48,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
             usage_by_rule[row["rule_href"]].append(dict(row))
         workloads, workload_reference = _load_report_workloads(connection, raw_dir)
         ip_lists, ip_list_reference = _load_report_ip_lists(connection, raw_dir)
+        services, service_reference = _load_report_services(raw_dir)
         quality = [dict(row) for row in connection.execute("SELECT * FROM data_quality ORDER BY category,object_id")]
         lifecycle = {
             row["rule_href"]: dict(row) for row in connection.execute(
@@ -88,11 +89,12 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         expanded_destinations, destination_addresses = _expand_side_details(raw, "dst", workloads, rule_pairs, ip_lists)
         expanded["Expanded Sources"] = expanded_sources
         expanded["Expanded Destinations"] = expanded_destinations
-        expanded["Service Name / Definition"] = _expand_services(str(rule["services"]))
+        expanded_services = _expand_services(str(rule["services"]), services)
+        expanded["Service Name / Definition"] = expanded_services
         expanded["nb_src_ips"] = _excel_safe_count(_count_addresses(source_addresses))
         expanded["nb_dst_ips"] = _excel_safe_count(_count_addresses(destination_addresses))
-        expanded["nb_ports"] = _count_ports(str(rule["services"]))
-        expanded["dangerous_ports"] = dangerous_ports(str(rule["services"]), dangerous_port_lists)
+        expanded["nb_ports"] = _count_ports(expanded_services)
+        expanded["dangerous_ports"] = dangerous_ports(expanded_services, dangerous_port_lists)
         expanded_rows.append(expanded)
         source_count = _count_addresses(source_addresses)
         destination_count = _count_addresses(destination_addresses)
@@ -118,6 +120,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
             "last_hit": last_hit,
             "unused_since_18_months": _unused_since_18_months(last_hit, as_of),
             "dangerous_rule": "TRUE" if expanded["dangerous_ports"] else "FALSE",
+            "dangerous_ports": expanded["dangerous_ports"],
             "permissive_rule": "YES" if max(source_count, destination_count) > permissive_rule_max_ips else "NO",
             "nb_src_ips": expanded["nb_src_ips"],
             "nb_dst_ips": expanded["nb_dst_ips"],
@@ -134,6 +137,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         ("Application Scopes", "\n".join(f"{app} / {env}" for app, env in scope_pairs)),
         ("IP List Reference", ip_list_reference),
         ("Workload Reference", workload_reference),
+        ("Service Reference", service_reference),
         ("As Of", as_of.isoformat()), ("Lookback Days", lookback_days),
         ("Rules", len(selected)), ("Generated At UTC", datetime.now(timezone.utc).isoformat()))]
     _sheet(workbook, "Presentation", presentation)
@@ -213,6 +217,31 @@ def _load_report_workloads(connection: object, raw_dir: Optional[Path]) -> Tuple
     rows = [dict(row) for row in connection.execute("SELECT * FROM workloads")]
     LOG.info("Using SQLite workload reference fallback (%s workloads)", len(rows))
     return rows, "SQLite workloads fallback"
+
+
+def _load_report_services(raw_dir: Optional[Path]) -> Tuple[Dict[str, Tuple[str, str]], str]:
+    """Load compressed services from the newest timestamped raw run."""
+    if raw_dir:
+        candidates = sorted(
+            (
+                path for path in raw_dir.glob("*/export_services.csv")
+                if re.fullmatch(r"\d{8}T\d{6}Z-[0-9A-Fa-f]{8}", path.parent.name)
+                and path.is_file() and path.stat().st_size
+            ),
+            key=lambda path: path.parent.name,
+            reverse=True,
+        )
+        if candidates:
+            source = candidates[0]
+            services: Dict[str, Tuple[str, str]] = {}
+            for row in read_rows(source, ("name", "service_ports")):
+                name = row["name"].strip()
+                if name:
+                    services[name.casefold()] = (name, row["service_ports"].strip())
+            LOG.info("Using compressed service reference export: %s (%s services)", source, len(services))
+            return services, str(source)
+    LOG.warning("No timestamped compressed service reference export found")
+    return {}, "No service export available"
 
 
 def _scope_pairs(labels: Sequence[str], environments: Sequence[str]) -> List[Tuple[str, str]]:
@@ -447,15 +476,30 @@ def _count_ports(services: str) -> int:
     return len(ports)
 
 
-def _expand_services(services: str) -> str:
-    """Render All Services as the complete TCP and UDP port ranges."""
-    if not re.search(r"\bAll Services\b", services, re.IGNORECASE):
-        return services
-    expanded = re.sub(
-        r"\bAll Services\b", "0-65535 TCP;0-65535 UDP", services,
-        flags=re.IGNORECASE,
-    )
-    return expanded
+def _expand_services(
+    services: str, service_catalog: Optional[Mapping[str, Tuple[str, str]]] = None,
+) -> str:
+    """Expand All Services and named compressed PCE services.
+
+    Explicit definitions remain untouched. Named services are rendered with
+    their canonical name followed by their compressed port definition.
+    """
+    catalog = service_catalog or {}
+    expanded_items: List[str] = []
+    for raw_item in re.split(r"[;\n]+", services):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if item.casefold() == "all services":
+            expanded_items.extend(("0-65535 TCP", "0-65535 UDP"))
+            continue
+        resolved = catalog.get(item.casefold())
+        if resolved:
+            canonical_name, ports = resolved
+            expanded_items.append(f"{canonical_name} ({ports})" if ports else canonical_name)
+        else:
+            expanded_items.append(item)
+    return ";".join(expanded_items)
 
 
 def _count_addresses(addresses: Iterable[str]) -> int:

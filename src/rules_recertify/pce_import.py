@@ -11,7 +11,10 @@ from typing import Mapping, Optional
 from .workloader.reference_exports import derive_exports, merge_workloads
 
 LOG = logging.getLogger(__name__)
-REQUIRED_EXPORTS = ("export_wkld.csv", "export_iplists.csv", "export_wkld.derived.csv", "export_iplists.derived.csv")
+REQUIRED_EXPORTS = (
+    "export_wkld.csv", "export_iplists.csv", "export_services.csv",
+    "export_wkld.derived.csv", "export_iplists.derived.csv",
+)
 
 
 def import_pce_exports(raw_dir: Path, stub_dir: Optional[Path] = None,
@@ -19,7 +22,7 @@ def import_pce_exports(raw_dir: Path, stub_dir: Optional[Path] = None,
     raw_dir.mkdir(parents=True, exist_ok=True)
     stub = stub_dir or (Path(os.environ["PCE_STUB_DIR"]) if os.getenv("PCE_STUB_DIR") else None)
     if stub:
-        for name in ("export_wkld.csv", "export_iplists.csv"):
+        for name in ("export_wkld.csv", "export_iplists.csv", "export_services.csv"):
             source = stub / name
             if not source.is_file() or source.stat().st_size == 0:
                 raise RuntimeError(f"Required stub is missing or empty: {source}")

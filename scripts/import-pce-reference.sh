@@ -14,6 +14,7 @@ count = merge_workloads(Path(sys.argv[1])/'export_wkld.csv', Path(sys.argv[1])/'
 print(f'Merged {count} L3SM workload rows')
 PY
 "${ROOT}/scripts/workloader-ipl-export.sh" "$RAW/export_iplists.csv"
+"${ROOT}/scripts/workloader-svc-export.sh" "$RAW/export_services.csv"
 PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" python3 - "$RAW" <<'PY'
 import sys
 from pathlib import Path

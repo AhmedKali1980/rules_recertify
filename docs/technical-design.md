@@ -8,7 +8,7 @@
 
 Rules Recertify will produce an auditable Excel view of Illumio microsegmentation
 rules for a logical application. A logical application is selected with one or
-more `app` label values plus exactly one `env` label value. The workbook will
+more ordered (`app`, `env`) pairs. The workbook will
 consolidate all selected application labels, replace the Local/Remote convention
 with explicit Source/Destination columns, resolve policy selectors to IPs and
 subnets, and show whether and when each rule was used over a rolling period of up
@@ -22,11 +22,14 @@ input to another system. Its schema must therefore be versioned and deterministi
 ### 2.1 In scope
 
 - Orchestrate Workloader exports for rulesets, rules with traffic queries,
-  rule usage, IP lists, labels, and managed/unmanaged workloads.
-- Ingest the enriched `export_wkld.derived.csv` and, when confirmed,
-  `export_iplists.derived.csv`.
-- Select all rules relevant to the requested application-label set and
-  environment.
+  rule usage, IP lists, compressed named services, labels, and
+  managed/unmanaged workloads.
+- Ingest enriched `export_wkld.derived.csv` and the complete
+  `export_iplists.csv`; retain `export_iplists.derived.csv` for `NZ3_*`
+  workload/subnet correlation.
+  Retain `export_services.csv` so reports can resolve reusable service names
+  to their compressed `service_ports` definitions.
+- Select all rules relevant to the requested application/environment pairs.
 - Preserve Illumio rule identity using `rule_href`, not mutable names or row
   positions.
 - Expand labels, label groups, explicit workloads, IP lists, Any, and workload
@@ -50,10 +53,11 @@ input to another system. Its schema must therefore be versioned and deterministi
 
 ```yaml
 pce: pce-prd-l3.wr
-application_labels:
-  - APP_A
-  - APP_A_LEGACY
-environment_label: PRD
+application_scopes:
+  - app: APP_A
+    env: PRD
+  - app: APP_A_LEGACY
+    env: UAT
 window_days: 1
 query_initial_delay_minutes: 30
 query_poll_interval_minutes: 10
@@ -86,7 +90,7 @@ command, file checksum, row count, and extraction time before transformation.
 
 ### 3.3 Outputs
 
-- `rules_recertify_<kear-id>_<env>_<as-of>.xlsx`
+- `rules_recertify_<kear-id>_<env1-env2>_<as-of>.xlsx`
 - `manifest.json` with run identity, effective filters, source checksums, coverage,
   warnings, counts, software versions, and workbook schema version
 - immutable raw CSV exports and logs in a run-specific artifact directory
@@ -200,7 +204,8 @@ Resolve:
 - labels against workload label sets, including managed and unmanaged workloads;
 - label groups recursively, with cycle detection;
 - explicit workloads and virtual objects when source data supports them;
-- IP lists into individual addresses/CIDRs while retaining list name and member;
+- IP lists from the complete raw export into individual addresses/CIDRs while
+  retaining list name and member and removing inline comments;
 - workload-subnet semantics from workload interfaces/subnets;
 - Any as `0.0.0.0/0` and `::/0`, without enumerating the address space;
 - inclusions and exclusions without discarding their provenance.
@@ -212,8 +217,51 @@ creating a full Source × Destination Cartesian product. If pairwise rows are
 required by the downstream system, make that a separate bounded output mode with
 row-count guards, because Excel is limited to 1,048,576 rows per sheet.
 
-The exact columns and delimiter rules of `export_wkld.derived.csv` are currently
-unknown, so its adapter cannot be finalized.
+The derived workload adapter validates the implemented column contract and
+selects managed addresses from `ip_with_default_gw` and unmanaged addresses
+from `interfaces`.
+Workbook generation prefers the newest timestamped raw derived workload export
+over SQLite, preventing a stale reference snapshot from producing empty source
+or destination expansions. Complete side selectors (`app` plus `env`) are
+self-contained; partial selectors retain report-pair constraints.
+Selector matching stores values by dimension and evaluates AND across
+dimensions and OR within a repeated dimension, symmetrically for sources and
+destinations.
+An explicit `app` makes a side selector self-contained: missing `env` means all
+environments. Selectors without an application dimension retain report-pair
+constraints.
+
+Report generation prefers the newest non-empty export below a timestamped
+collection directory (`YYYYMMDDTHHMMSSZ-8hex`), never `raw/preflight`, and
+records that lineage in `Presentation`.
+The SQLite `ip_lists` snapshot is retained as a fallback, so reports can resolve
+non-`NZ3_*` names even when the database was populated by an older release.
+
+Bulk reporting reads the active sheet of a Microcosmos XLSX and groups rows by
+`(Entity, Kear Id, PRD/NONPRD)`. Modules are resolved against known application
+labels by the exact, case-insensitive suffix after their second underscore. The
+timestamped output tree separates PRD from NONPRD before sanitized Entity
+directories; each group delegates to the same single-workbook generator.
+The latest timestamped `labels.csv` supplements labels observed in SQLite, but
+only pairs matching at least one SQLite rule enter a report. Non-actionable rows
+do not abort the batch: a preserved copy of the input workbook receives a
+per-row `Rules Recertify Status` audit column under the timestamp root.
+
+Named services are loaded from the newest timestamped raw
+`export_services.csv` generated by `svc-export --compressed`; technical
+directories such as `preflight` are excluded. Their `service_ports` values are
+expanded before Octoflow rendering, port counting, and dangerous-port checks.
+Dangerous-port detection is a pure interval intersection between expanded rule
+services and named, configuration-selected TCP/UDP catalogues. It preserves
+catalogue order, deduplicates overlaps, supports `All Services`, and emits only
+canonical `PROTOCOL/PORT[-PORT]` values.
+
+Rule-item search is intentionally independent of usage and flow tables. It
+selects only rows belonging to `MAX(rules.snapshot_at)`, searches normalized
+selector fields from `raw_json`, and expands named services before
+protocol/port interval intersection. Results retain both unmatched inputs and
+match provenance, while workbook metadata records the rule snapshot and service
+reference used.
 
 ## 5. Historical accumulation and 180-day guarantee
 
@@ -306,7 +354,7 @@ Use one row per rule. Sources, Destinations, Modules, and resolved services are 
 
 The three requested sheets are mandatory; additional sheets improve auditability:
 
-1. **Presentation** — title, logical application, requested labels/environment,
+1. **Presentation** — title, logical application, requested app/env pairs,
    modules/scopes, extraction time/timezone, traffic period, coverage, schema and
    tool versions, warnings, and definitions.
 2. **Raw Rules** — canonical non-expanded rule view.
@@ -314,6 +362,18 @@ The three requested sheets are mandatory; additional sheets improve auditability
 4. **Rule Usage** — per-rule/per-window/per-protocol-port observations and status.
 5. **Data Quality** — pending/expired/missing/truncated queries, unresolved
    selectors, gaps, duplicates, and counts.
+
+`Expanded Rules` additionally exposes `nb_src_ips`, `nb_dst_ips`, and `nb_ports`.
+`Octoflow` is derived in memory from the same expanded rows, avoiding a second
+interpretation of selectors and services. Its `dangerous_ports` column follows
+`dangerous_rule` and reuses the exact Expanded Rules value. NZ3 zone assignment requires full
+IPv4 range containment. Rule lifecycle timestamps come from append-only
+`rule_history` observations; positive completed usage windows provide
+`last_hit`. The permissive-address threshold is configuration controlled.
+IP counts are union cardinalities, not displayed-row counts; Any is the exact
+sum of the complete IPv4 and IPv6 spaces. Values beyond Excel numeric precision
+are stored as decimal text. Port counts cover distinct explicit TCP/UDP ports,
+with inclusive ranges expanded.
 
 Use frozen header rows, filters, Excel tables, wrapped text, sensible widths,
 consistent UTC date formats, conditional formatting for hit/unknown status, and a

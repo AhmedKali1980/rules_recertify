@@ -256,6 +256,13 @@ services and named, configuration-selected TCP/UDP catalogues. It preserves
 catalogue order, deduplicates overlaps, supports `All Services`, and emits only
 canonical `PROTOCOL/PORT[-PORT]` values.
 
+Rule-item search is intentionally independent of usage and flow tables. It
+selects only rows belonging to `MAX(rules.snapshot_at)`, searches normalized
+selector fields from `raw_json`, and expands named services before
+protocol/port interval intersection. Results retain both unmatched inputs and
+match provenance, while workbook metadata records the rule snapshot and service
+reference used.
+
 ## 5. Historical accumulation and 180-day guarantee
 
 ### 5.1 Recommended persistence

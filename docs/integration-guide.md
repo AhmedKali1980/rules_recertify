@@ -27,7 +27,8 @@ an operator or another system runs `report` only when a deliverable is needed.
 - Network/PCE credentials already accepted by Workloader.
 
 No online package lookup is required by collection, ingestion, SQLite, or tests.
-`openpyxl` is imported only by `report`.
+`openpyxl` is imported only by commands that read or generate workbooks
+(`report`, `report-batch`, and `search-rules`).
 
 The standard production installation root is:
 
@@ -457,9 +458,31 @@ content-changing observation is `last_modified`. Historical changes predating
 this schema cannot be reconstructed. `last_hit` uses the latest positive,
 completed usage window independently of the report lookback.
 
-## 7. Test procedure
+## 7. Rule-item search
 
-### 7.1 Offline automated suite
+`search-rules` reads one item per row from a one-column CSV, text, or XLSX file
+and searches only the rules whose `snapshot_at` equals the newest snapshot in
+SQLite. Searchable selectors include ruleset scopes, labels and exclusions,
+label groups and exclusions, IP Lists, explicit workloads, and services.
+Text matching is literal and case-insensitive unless `--case-sensitive` is
+used.
+
+Port inputs support slash or Workloader notation, single ports, and inclusive
+ranges. A semicolon-separated port list uses intersection semantics: a rule is
+reported when at least one requested interval overlaps an allowed TCP/UDP
+interval. Named services are expanded from the newest timestamped
+`export_services.csv` before matching. The output workbook contains `Summary`,
+`Results`, and `Metadata`; unmatched inputs are explicitly retained as
+`NOT_USED_IN_ANY_RULE`.
+
+```bash
+./scripts/rules-recertify --config config/local.json search-rules \
+  --items /data/search_items.csv --out /data/rules_items_search.xlsx
+```
+
+## 8. Test procedure
+
+### 8.1 Offline automated suite
 
 ```bash
 PYTHONPATH=src python3.9 -m unittest discover -s tests -v
@@ -469,7 +492,7 @@ python3.9 -m compileall -q src tests
 The suite includes a fake Workloader end-to-end collection test and does not
 contact the PCE.
 
-### 7.2 Development smoke test
+### 8.2 Development smoke test
 
 ```bash
 cp config/example.json /tmp/rules-recertify-test.json
@@ -477,7 +500,7 @@ PYTHONPATH=src python3 -m rules_recertify.cli \
   --config /tmp/rules-recertify-test.json validate-config
 ```
 
-### 7.3 PCE integration acceptance
+### 8.3 PCE integration acceptance
 
 Use a non-production/test PCE and a small ruleset set where possible. Confirm:
 
@@ -494,7 +517,7 @@ Use a non-production/test PCE and a small ruleset set where possible. Confirm:
    dates, KEAR ID, and application selection are correct;
 10. the downstream system accepts the workbook baseline.
 
-### 7.4 Operational acceptance
+### 8.4 Operational acceptance
 
 Run shadow collection for at least one week. Validate disk growth, PCE load,
 completion time, polling values, recovery after interruption, email summaries,

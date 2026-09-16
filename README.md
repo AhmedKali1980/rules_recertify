@@ -231,6 +231,37 @@ mise en place de la table d'historique ; les imports antérieurs ne peuvent pas
 être reconstruits rétroactivement. `unused_since_18_months` vaut `YES` sans hit
 connu ou lorsque le dernier hit date d'au moins 18 mois calendaires.
 
+## Recherche de règles par éléments
+
+La commande `search-rules` produit un classeur indépendant des données de flux
+à partir d'un fichier d'éléments fourni par l'utilisateur. Elle interroge
+uniquement les règles du **snapshot SQLite le plus récent** : une règle restée
+dans la base mais absente de la dernière collecte n'est donc pas retournée.
+
+Le fichier d'entrée peut être un CSV, un TXT ou un XLSX à une seule colonne,
+avec un en-tête facultatif `item`. Chaque ligne peut contenir un label
+applicatif, un rôle, un label group, une IP List, un workload, un service nommé,
+un port ou un range. La recherche texte est littérale et insensible à la casse
+par défaut ; `--case-sensitive` active la comparaison sensible à la casse.
+
+Les ports acceptent notamment `TCP/22`, `22 TCP`, `TCP/137-138`, `137-138 UDP`
+ou un port sans protocole comme `3389`. Plusieurs ports/ranges peuvent être
+séparés par `;` sur une même ligne ; la règle est retournée dès qu'une
+intersection existe. Les services nommés sont d'abord développés depuis le
+dernier `export_services.csv` raw horodaté, ce qui permet à une recherche de
+port de retrouver également un port inclus dans un objet `svc`.
+
+```bash
+./scripts/rules-recertify --config config/local.json search-rules \
+  --items /data/search_items.csv \
+  --out /data/rules_items_search.xlsx
+```
+
+Le classeur contient `Summary` (statut et nombre de règles), `Results` (une
+ligne par couple élément/règle, avec `found as` et `match details`) et
+`Metadata` (snapshot des règles et référence services). Les éléments sans
+correspondance sont conservés avec le statut `NOT_USED_IN_ANY_RULE`.
+
 The standard production installation root is:
 
 ```text

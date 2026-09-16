@@ -16,6 +16,7 @@ from .logging_utils import configure_logging
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
 from .reporting.microcosmos import generate_microcosmos_reports
+from .reporting.rule_search import generate_rule_search_workbook
 from .workloader.csvio import read_rows
 
 LOG = logging.getLogger(__name__)
@@ -52,6 +53,15 @@ def parser() -> argparse.ArgumentParser:
                               help="Microcosmos XLSX used to generate all non-empty Kear Id rows")
     batch_report.add_argument("--lookback-days", type=int)
     batch_report.add_argument("--as-of", type=_date, default=date.today())
+    search = commands.add_parser(
+        "search-rules", help="Find items in the latest SQLite rule snapshot",
+    )
+    search.add_argument("--items", type=Path, required=True,
+                        help="One-column CSV, TXT, or XLSX file containing search items")
+    search.add_argument("--out", type=Path,
+                        help="Output XLSX path (default: output_dir/rules_items_search_<UTC timestamp>.xlsx)")
+    search.add_argument("--case-sensitive", action="store_true",
+                        help="Use case-sensitive text matching (ports are unaffected)")
     return root
 
 
@@ -125,6 +135,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 permissive_rule_max_ips=settings.permissive_rule_max_ips,
             )
             print("\n".join(str(target) for target in targets)); return 0
+        if args.command == "search-rules":
+            db.initialize()
+            target = args.out or Path(settings.output_dir) / (
+                "rules_items_search_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
+            )
+            print(generate_rule_search_workbook(
+                db, args.items, target, raw_dir=Path(settings.raw_dir),
+                case_sensitive=args.case_sensitive,
+            ))
+            return 0
         raise AssertionError("unhandled command")
     except (ConfigurationError, ValueError, RuntimeError) as exc:
         LOG.error("%s", exc)

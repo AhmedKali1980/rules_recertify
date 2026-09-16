@@ -9,6 +9,15 @@ from rules_recertify.cli import main, parser
 
 
 class CliTest(unittest.TestCase):
+    def test_rule_search_accepts_items_output_and_case_mode(self):
+        args = parser().parse_args([
+            "search-rules", "--items", "items.csv", "--out", "result.xlsx",
+            "--case-sensitive",
+        ])
+        self.assertEqual(args.items, Path("items.csv"))
+        self.assertEqual(args.out, Path("result.xlsx"))
+        self.assertTrue(args.case_sensitive)
+
     def test_batch_report_accepts_microcosmos_workbook(self):
         args = parser().parse_args([
             "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx",

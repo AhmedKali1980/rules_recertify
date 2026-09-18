@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS rule_history(
  rule_href TEXT NOT NULL, snapshot_at TEXT NOT NULL, content_hash TEXT NOT NULL,
  changed INTEGER NOT NULL, PRIMARY KEY(rule_href, snapshot_at)
 );
+CREATE TABLE IF NOT EXISTS rule_history(
+ rule_href TEXT NOT NULL, snapshot_at TEXT NOT NULL, content_hash TEXT NOT NULL,
+ changed INTEGER NOT NULL, PRIMARY KEY(rule_href, snapshot_at)
+);
 CREATE TABLE IF NOT EXISTS usage_windows(
  rule_href TEXT NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL,
  status TEXT NOT NULL, flows INTEGER, async_query_href TEXT,

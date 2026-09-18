@@ -2,16 +2,22 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 
+SCHEMA_VERSION = 2
+RUN_TYPE_POLICY = "POLICY_COLLECTION"
+RUN_TYPE_TRAFFIC = "TRAFFIC_COLLECTION"
+RUN_TYPE_BACKFILL = "TRAFFIC_BACKFILL"
+
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
-INSERT OR IGNORE INTO schema_version(version) VALUES (1);
+INSERT OR IGNORE INTO schema_version(version) VALUES (2);
 CREATE TABLE IF NOT EXISTS runs(
  run_id TEXT PRIMARY KEY, run_type TEXT NOT NULL, status TEXT NOT NULL,
  started_at TEXT NOT NULL, finished_at TEXT, details_json TEXT NOT NULL DEFAULT '{}'
@@ -24,7 +30,12 @@ CREATE TABLE IF NOT EXISTS rules(
  rule_href TEXT PRIMARY KEY, ruleset_href TEXT NOT NULL, ruleset_name TEXT,
  ruleset_scope TEXT, ruleset_enabled INTEGER, rule_type TEXT, rule_description TEXT,
  rule_enabled INTEGER, unscoped_consumers INTEGER, source_text TEXT,
- destination_text TEXT, services TEXT, raw_json TEXT NOT NULL, snapshot_at TEXT NOT NULL
+ destination_text TEXT, services TEXT, raw_json TEXT NOT NULL, snapshot_at TEXT NOT NULL,
+ is_present INTEGER NOT NULL DEFAULT 1, last_seen_snapshot_id TEXT
+);
+CREATE TABLE IF NOT EXISTS rule_history(
+ rule_href TEXT NOT NULL, snapshot_at TEXT NOT NULL, content_hash TEXT NOT NULL,
+ changed INTEGER NOT NULL, PRIMARY KEY(rule_href, snapshot_at)
 );
 CREATE TABLE IF NOT EXISTS usage_windows(
  rule_href TEXT NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL,
@@ -55,9 +66,74 @@ CREATE TABLE IF NOT EXISTS data_quality(
  object_id TEXT NOT NULL DEFAULT '', message TEXT NOT NULL,
  PRIMARY KEY(run_id, category, object_id, message)
 );
+CREATE TABLE IF NOT EXISTS policy_snapshots(
+ snapshot_id TEXT PRIMARY KEY, run_id TEXT, status TEXT NOT NULL,
+ created_at TEXT NOT NULL, completed_at TEXT, rule_count INTEGER NOT NULL DEFAULT 0,
+ snapshot_path TEXT, manifest_path TEXT, archive_path TEXT, archive_sha256 TEXT
+);
+CREATE TABLE IF NOT EXISTS traffic_cursors(
+ cursor_name TEXT PRIMARY KEY, last_successful_end TEXT,
+ in_progress_start TEXT, in_progress_end TEXT, last_status TEXT NOT NULL,
+ last_run_id TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS traffic_windows(
+ window_type TEXT NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL,
+ run_id TEXT NOT NULL, status TEXT NOT NULL, error TEXT,
+ started_at TEXT NOT NULL, finished_at TEXT,
+ PRIMARY KEY(window_type,window_start,window_end,run_id)
+);
+CREATE TABLE IF NOT EXISTS backfill_states(
+ backfill_id TEXT PRIMARY KEY, backfill_start TEXT NOT NULL,
+ backfill_target_end TEXT NOT NULL, next_window_start TEXT NOT NULL,
+ last_successful_window_end TEXT, status TEXT NOT NULL, last_run_id TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_archives(
+ run_id TEXT PRIMARY KEY, archive_kind TEXT NOT NULL, archive_path TEXT NOT NULL,
+ sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, status TEXT NOT NULL,
+ retained_until TEXT, created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_rules_scope ON rules(ruleset_scope);
+CREATE INDEX IF NOT EXISTS idx_rules_present ON rules(is_present);
 CREATE INDEX IF NOT EXISTS idx_usage_end ON usage_windows(window_end);
 CREATE INDEX IF NOT EXISTS idx_workloads_labels ON workloads(app, env);
+"""
+
+MIGRATION_1_TO_2 = """
+BEGIN IMMEDIATE;
+ALTER TABLE rules ADD COLUMN is_present INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE rules ADD COLUMN last_seen_snapshot_id TEXT;
+CREATE TABLE policy_snapshots(
+ snapshot_id TEXT PRIMARY KEY, run_id TEXT, status TEXT NOT NULL,
+ created_at TEXT NOT NULL, completed_at TEXT, rule_count INTEGER NOT NULL DEFAULT 0,
+ snapshot_path TEXT, manifest_path TEXT, archive_path TEXT, archive_sha256 TEXT
+);
+CREATE TABLE traffic_cursors(
+ cursor_name TEXT PRIMARY KEY, last_successful_end TEXT,
+ in_progress_start TEXT, in_progress_end TEXT, last_status TEXT NOT NULL,
+ last_run_id TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE traffic_windows(
+ window_type TEXT NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL,
+ run_id TEXT NOT NULL, status TEXT NOT NULL, error TEXT,
+ started_at TEXT NOT NULL, finished_at TEXT,
+ PRIMARY KEY(window_type,window_start,window_end,run_id)
+);
+CREATE TABLE backfill_states(
+ backfill_id TEXT PRIMARY KEY, backfill_start TEXT NOT NULL,
+ backfill_target_end TEXT NOT NULL, next_window_start TEXT NOT NULL,
+ last_successful_window_end TEXT, status TEXT NOT NULL, last_run_id TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE run_archives(
+ run_id TEXT PRIMARY KEY, archive_kind TEXT NOT NULL, archive_path TEXT NOT NULL,
+ sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, status TEXT NOT NULL,
+ retained_until TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX idx_rules_present ON rules(is_present);
+DELETE FROM schema_version;
+INSERT INTO schema_version(version) VALUES (2);
+COMMIT;
 """
 
 MINIMUM_SQLITE_VERSION = (3, 24, 0)
@@ -87,7 +163,23 @@ class Database:
     def initialize(self) -> None:
         ensure_sqlite_compatible()
         with self.connect() as db:
-            db.executescript(SCHEMA)
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'"
+            ).fetchone()
+            if not exists:
+                db.executescript(SCHEMA)
+                return
+            row = db.execute("SELECT MAX(version) FROM schema_version").fetchone()
+            version = int(row[0] or 0)
+            if version > SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Database schema {version} is newer than supported schema {SCHEMA_VERSION}"
+                )
+            if version == 1:
+                db.executescript(MIGRATION_1_TO_2)
+                version = 2
+            if version != SCHEMA_VERSION:
+                raise RuntimeError(f"Unsupported database schema version: {version}")
 
     def begin_run(self, run_id: str, run_type: str, details: Mapping[str, object]) -> None:
         with self.connect() as db:
@@ -117,26 +209,210 @@ class Database:
                        (run_id, kind, path, sha256, row_count))
 
     def upsert_rules(self, rows: Iterable[Mapping[str, object]], snapshot_at: str) -> int:
+        with self.connect() as db:
+            return self._upsert_rules(db, rows, snapshot_at, None)
+
+    def _upsert_rules(self, db: sqlite3.Connection, rows: Iterable[Mapping[str, object]],
+                      snapshot_at: str, snapshot_id: Optional[str]) -> int:
         count = 0
-        sql = """INSERT INTO rules VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        sql = """INSERT INTO rules(
+        rule_href,ruleset_href,ruleset_name,ruleset_scope,ruleset_enabled,rule_type,
+        rule_description,rule_enabled,unscoped_consumers,source_text,destination_text,
+        services,raw_json,snapshot_at,is_present,last_seen_snapshot_id
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(rule_href) DO UPDATE SET ruleset_href=excluded.ruleset_href,
         ruleset_name=excluded.ruleset_name,ruleset_scope=excluded.ruleset_scope,
         ruleset_enabled=excluded.ruleset_enabled,rule_type=excluded.rule_type,
         rule_description=excluded.rule_description,rule_enabled=excluded.rule_enabled,
         unscoped_consumers=excluded.unscoped_consumers,source_text=excluded.source_text,
         destination_text=excluded.destination_text,services=excluded.services,
-        raw_json=excluded.raw_json,snapshot_at=excluded.snapshot_at"""
-        with self.connect() as db:
-            for row in rows:
-                db.execute(sql, (
-                    row["rule_href"], row["ruleset_href"], row.get("ruleset_name", ""),
-                    row.get("ruleset_scope", ""), _bool_int(row.get("ruleset_enabled")),
-                    row.get("rule_type", ""), row.get("rule_description", ""),
-                    _bool_int(row.get("rule_enabled")), _bool_int(row.get("unscoped_consumers")),
-                    _side_text(row, "src"), _side_text(row, "dst"), row.get("services", ""),
-                    json.dumps(dict(row), sort_keys=True), snapshot_at,
-                )); count += 1
+        raw_json=excluded.raw_json,snapshot_at=excluded.snapshot_at,
+        is_present=CASE WHEN excluded.last_seen_snapshot_id IS NULL
+          THEN rules.is_present ELSE 1 END,
+        last_seen_snapshot_id=COALESCE(excluded.last_seen_snapshot_id,rules.last_seen_snapshot_id)"""
+        for row in rows:
+            raw_json = json.dumps(dict(row), sort_keys=True)
+            existing = db.execute("SELECT raw_json FROM rules WHERE rule_href=?", (row["rule_href"],)).fetchone()
+            changed = existing is None or existing[0] != raw_json
+            db.execute(
+                "INSERT OR REPLACE INTO rule_history VALUES(?,?,?,?)",
+                (row["rule_href"], snapshot_at, hashlib.sha256(raw_json.encode("utf-8")).hexdigest(), int(changed)),
+            )
+            db.execute(sql, (
+                row["rule_href"], row["ruleset_href"], row.get("ruleset_name", ""),
+                row.get("ruleset_scope", ""), _bool_int(row.get("ruleset_enabled")),
+                row.get("rule_type", ""), row.get("rule_description", ""),
+                _bool_int(row.get("rule_enabled")), _bool_int(row.get("unscoped_consumers")),
+                _side_text(row, "src"), _side_text(row, "dst"), row.get("services", ""),
+                raw_json, snapshot_at, 1, snapshot_id,
+            )); count += 1
         return count
+
+    def complete_policy_snapshot(self, snapshot_id: str, run_id: str,
+                                 rows: Iterable[Mapping[str, object]],
+                                 snapshot_at: Optional[str] = None,
+                                 snapshot_path: str = "", manifest_path: str = "") -> int:
+        """Atomically publish a complete inventory and mark missing rules absent."""
+        timestamp = snapshot_at or _now()
+        materialized = list(rows)
+        if not snapshot_id.strip():
+            raise ValueError("snapshot_id must not be empty")
+        with self.connect() as db:
+            count = self._upsert_rules(db, materialized, timestamp, snapshot_id)
+            db.execute(
+                "UPDATE rules SET is_present=0 WHERE COALESCE(last_seen_snapshot_id,'')<>?",
+                (snapshot_id,),
+            )
+            db.execute(
+                """INSERT INTO policy_snapshots(
+                snapshot_id,run_id,status,created_at,completed_at,rule_count,
+                snapshot_path,manifest_path,archive_path,archive_sha256
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (snapshot_id, run_id, "COMPLETE", timestamp, timestamp, count,
+                 snapshot_path, manifest_path, "", ""),
+            )
+        return count
+
+    def current_policy_snapshot(self) -> Optional[Mapping[str, object]]:
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT * FROM policy_snapshots WHERE status='COMPLETE'
+                ORDER BY completed_at DESC LIMIT 1"""
+            ).fetchone()
+            return dict(row) if row else None
+
+    def traffic_cursor(self, cursor_name: str) -> Optional[Mapping[str, object]]:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM traffic_cursors WHERE cursor_name=?", (cursor_name,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def begin_traffic_window(self, cursor_name: str, window_type: str, run_id: str,
+                             window_start: str, window_end: str) -> None:
+        """Record an in-progress window without advancing its durable cursor."""
+        now = _now()
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO traffic_cursors VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(cursor_name) DO UPDATE SET
+                in_progress_start=excluded.in_progress_start,
+                in_progress_end=excluded.in_progress_end,last_status='RUNNING',
+                last_run_id=excluded.last_run_id,updated_at=excluded.updated_at""",
+                (cursor_name, None, window_start, window_end, "RUNNING", run_id, now),
+            )
+            db.execute(
+                "INSERT INTO traffic_windows VALUES(?,?,?,?,?,?,?,?)",
+                (window_type, window_start, window_end, run_id, "RUNNING", "", now, None),
+            )
+
+    def finish_traffic_window(self, cursor_name: str, window_type: str, run_id: str,
+                              window_start: str, window_end: str, success: bool,
+                              error: str = "") -> None:
+        """Finish a window and advance the cursor only on success."""
+        now = _now(); status = "SUCCESS" if success else "FAILED"
+        with self.connect() as db:
+            changed = db.execute(
+                """UPDATE traffic_windows SET status=?,error=?,finished_at=?
+                WHERE window_type=? AND window_start=? AND window_end=? AND run_id=?
+                AND status='RUNNING'""",
+                (status, error, now, window_type, window_start, window_end, run_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("traffic window is not running or does not exist")
+            if success:
+                cursor_changed = db.execute(
+                    """UPDATE traffic_cursors SET last_successful_end=?,in_progress_start=NULL,
+                    in_progress_end=NULL,last_status='SUCCESS',last_run_id=?,updated_at=?
+                    WHERE cursor_name=? AND in_progress_start=? AND in_progress_end=?""",
+                    (window_end, run_id, now, cursor_name, window_start, window_end),
+                ).rowcount
+            else:
+                cursor_changed = db.execute(
+                    """UPDATE traffic_cursors SET in_progress_start=NULL,in_progress_end=NULL,
+                    last_status='FAILED',last_run_id=?,updated_at=? WHERE cursor_name=?
+                    AND in_progress_start=? AND in_progress_end=?""",
+                    (run_id, now, cursor_name, window_start, window_end),
+                ).rowcount
+            if cursor_changed != 1:
+                raise ValueError("traffic cursor does not match the running window")
+
+    def initialize_backfill(self, backfill_id: str, start: str, target_end: str) -> None:
+        if target_end <= start:
+            raise ValueError("backfill target_end must be after start")
+        now = _now()
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO backfill_states VALUES(?,?,?,?,?,?,?,?,?)",
+                (backfill_id, start, target_end, start, None, "PENDING", None, now, now),
+            )
+
+    def backfill_state(self, backfill_id: str) -> Optional[Mapping[str, object]]:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM backfill_states WHERE backfill_id=?", (backfill_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_backfill_window(self, backfill_id: str, run_id: str,
+                               window_end: str, success: bool) -> None:
+        """Advance backfill only after a successful window."""
+        now = _now()
+        with self.connect() as db:
+            state = db.execute(
+                """SELECT next_window_start,backfill_target_end,status,last_run_id
+                FROM backfill_states WHERE backfill_id=?""",
+                (backfill_id,),
+            ).fetchone()
+            if state is None:
+                raise ValueError(f"unknown backfill: {backfill_id}")
+            if state[2] != "RUNNING" or state[3] != run_id:
+                raise ValueError("backfill window is not running for this run")
+            if success:
+                if window_end <= state[0] or window_end > state[1]:
+                    raise ValueError("invalid successful backfill window end")
+                status = "COMPLETE" if window_end >= state[1] else "PENDING"
+                db.execute(
+                    """UPDATE backfill_states SET next_window_start=?,
+                    last_successful_window_end=?,status=?,last_run_id=?,updated_at=?
+                    WHERE backfill_id=?""",
+                    (window_end, window_end, status, run_id, now, backfill_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE backfill_states SET status='FAILED',last_run_id=?,updated_at=? WHERE backfill_id=?",
+                    (run_id, now, backfill_id),
+                )
+
+    def begin_backfill_window(self, backfill_id: str, run_id: str) -> Mapping[str, str]:
+        """Mark a pending/failed backfill as running without moving its cursor."""
+        now = _now()
+        with self.connect() as db:
+            state = db.execute(
+                """SELECT next_window_start,backfill_target_end,status
+                FROM backfill_states WHERE backfill_id=?""", (backfill_id,),
+            ).fetchone()
+            if state is None:
+                raise ValueError(f"unknown backfill: {backfill_id}")
+            if state[2] == "COMPLETE":
+                raise ValueError(f"backfill is already complete: {backfill_id}")
+            if state[2] == "RUNNING":
+                raise ValueError(f"backfill already has a running window: {backfill_id}")
+            db.execute(
+                "UPDATE backfill_states SET status='RUNNING',last_run_id=?,updated_at=? WHERE backfill_id=?",
+                (run_id, now, backfill_id),
+            )
+            return {"window_start": str(state[0]), "target_end": str(state[1])}
+
+    def record_archive(self, run_id: str, archive_kind: str, archive_path: str,
+                       sha256: str, size_bytes: int, retained_until: Optional[str],
+                       status: str = "VERIFIED") -> None:
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO run_archives VALUES(?,?,?,?,?,?,?,?)",
+                (run_id, archive_kind, archive_path, sha256, size_bytes, status,
+                 retained_until, _now()),
+            )
 
     def upsert_usage(self, run_id: str, rows: Iterable[Mapping[str, object]]) -> int:
         from rules_recertify.workloader.csvio import parse_flows_by_port, query_window

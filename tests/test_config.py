@@ -5,8 +5,15 @@ from rules_recertify.config import ConfigurationError, load_dotenv, load_setting
 class ConfigTest(unittest.TestCase):
     def test_minimum_retention(self):
         with tempfile.TemporaryDirectory() as directory:
-            p=Path(directory)/"c.json"; p.write_text(json.dumps({"pce":"p","retention_days":199}))
+            p=Path(directory)/"c.json"; p.write_text(json.dumps({"pce":"p","retention_days":549}))
             with self.assertRaises(ConfigurationError): load_settings(p)
+    def test_production_retention_and_weekly_window_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"c.json"; path.write_text(json.dumps({"pce":"p"}))
+            settings=load_settings(path)
+            self.assertEqual(settings.traffic_window_days, 7)
+            self.assertEqual(settings.retention_days, 550)
+            self.assertEqual(settings.default_lookback_days, 548)
     def test_dotenv_does_not_execute_shell(self):
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory)/".env"; p.write_text("SAFE=$(touch /tmp/must-not-exist)\n"); p.chmod(0o600)
@@ -22,3 +29,21 @@ class ConfigTest(unittest.TestCase):
             path=Path(directory)/"c.json"
             path.write_text(json.dumps({"pce":"p","empty_scope_ruleset_name_patterns":[""]}))
             with self.assertRaises(ConfigurationError): load_settings(path)
+    def test_dangerous_port_lists_accept_comma_separated_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"c.json"
+            path.write_text(json.dumps({"pce":"p","dangerous_port_lists":"PORTS_TO_CONTROL,PORTS_ADMIN"}))
+            settings=load_settings(path)
+            self.assertEqual(settings.dangerous_port_lists, ("PORTS_TO_CONTROL", "PORTS_ADMIN"))
+    def test_unknown_dangerous_port_list_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"c.json"
+            path.write_text(json.dumps({"pce":"p","dangerous_port_lists":["UNKNOWN"]}))
+            with self.assertRaisesRegex(ConfigurationError, "unknown dangerous_port_lists"):
+                load_settings(path)
+    def test_permissive_rule_threshold_must_be_positive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"c.json"
+            path.write_text(json.dumps({"pce":"p","permissive_rule_max_ips":0}))
+            with self.assertRaisesRegex(ConfigurationError, "permissive_rule_max_ips"):
+                load_settings(path)

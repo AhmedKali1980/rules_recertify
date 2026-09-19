@@ -6,7 +6,7 @@
   "raw_dir": "var/raw",
   "output_dir": "var/output",
   "log_dir": "var/logs",
-  "traffic_window_days": 1,
+  "traffic_window_days": 7,
   "traffic_batch_size": 100,
   "traffic_max_results": 10000,
   "query_initial_delay_minutes": 30,
@@ -16,8 +16,10 @@
   "rate_limit_retry_delay_minutes": 10,
   "rate_limit_max_retries": 12,
   "empty_scope_ruleset_name_patterns": ["OUTBOUND2APA"],
-  "retention_days": 200,
-  "default_lookback_days": 180,
+  "retention_days": 550,
+  "default_lookback_days": 548,
   "policy_version": "draft",
-  "smtp_enabled": false
+  "smtp_enabled": false,
+  "dangerous_port_lists": ["PORTS_TO_CONTROL", "PORTS_TO_ERADICATE"],
+  "permissive_rule_max_ips": 255
 }

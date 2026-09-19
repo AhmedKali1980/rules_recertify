@@ -9,6 +9,14 @@ from rules_recertify.cli import main, parser
 
 
 class CliTest(unittest.TestCase):
+    def test_collect_policy_accepts_reference_stub_without_traffic_options(self):
+        args = parser().parse_args([
+            "collect-policy", "--pce-stub-dir", "reference stubs",
+        ])
+        self.assertEqual(args.command, "collect-policy")
+        self.assertEqual(args.pce_stub_dir, Path("reference stubs"))
+        self.assertFalse(hasattr(args, "traffic_start"))
+
     def test_rule_search_accepts_items_output_and_case_mode(self):
         args = parser().parse_args([
             "search-rules", "--items", "items.csv", "--out", "result.xlsx",

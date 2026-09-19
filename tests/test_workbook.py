@@ -10,7 +10,7 @@ from rules_recertify.history.database import Database
 from rules_recertify.reporting.workbook import (
     _count_addresses, _count_ports, _excel_safe_count, _expand_side,
     _expand_services, _expand_side_details, _load_report_ip_lists, _load_report_services,
-    _load_report_workloads,
+    _load_report_workloads, _current_rules,
     _rule_matches, _scope_pairs,
     _octoflow_sequence, _unused_since_18_months, _zones_for_addresses, generate_workbook,
 )
@@ -18,6 +18,32 @@ from rules_recertify.resolution.workloads import prepare_nz3_members
 
 
 class WorkbookExpansionTest(unittest.TestCase):
+    def test_materialized_snapshot_precedes_timestamped_reference_exports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory)
+            old = raw / "20990101T000000Z-AAAAAAAA"; old.mkdir()
+            snapshot = raw / "snapshot"; snapshot.mkdir()
+            for folder, member in ((old, "10.0.0.0/8"), (snapshot, "192.0.2.0/24")):
+                with (folder / "export_iplists.csv").open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=["name", "include"])
+                    writer.writeheader(); writer.writerow({"name": "CURRENT", "include": member})
+            db = Database(raw / "db.sqlite"); db.initialize()
+            with db.connect() as connection:
+                rows, source = _load_report_ip_lists(connection, raw)
+            self.assertEqual(rows, [{"name": "CURRENT", "member": "192.0.2.0/24"}])
+            self.assertEqual(source, str(snapshot / "export_iplists.csv"))
+
+    def test_reports_only_read_rules_present_in_current_policy_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(Path(directory) / "db.sqlite"); db.initialize()
+            old = {"rule_href": "/r/old", "ruleset_href": "/rs/1"}
+            current = {"rule_href": "/r/current", "ruleset_href": "/rs/1"}
+            db.complete_policy_snapshot("one", "run-1", [old, current], "2026-01-01")
+            db.complete_policy_snapshot("two", "run-2", [current], "2026-01-02")
+            with db.connect() as connection:
+                rows = _current_rules(connection)
+            self.assertEqual([row["rule_href"] for row in rows], ["/r/current"])
+
     def test_application_selector_without_environment_matches_every_environment(self):
         workloads = [
             {"short_hostname": "PSM-PRD", "app": "CSM_RBD_CYBERARK.STANDARD.FRA.BUSU",

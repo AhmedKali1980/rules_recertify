@@ -178,7 +178,7 @@ Validate and initialize:
 The second command creates
 `/DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite` and the
 version-2 schema. Existing version-1 databases are migrated transactionally.
-`collect`, `ingest-reference`, `ingest-usage`, and `report` also
+`collect-policy`, `collect`, `ingest-reference`, `ingest-usage`, and `report` also
 initialize the schema defensively. This is application setup, not an RPM install:
 the installer does not execute `dnf` or modify the operating system.
 
@@ -211,7 +211,29 @@ current workload/IP-list snapshot.
 
 ## 5. Collection
 
-### 5.1 One daily UTC window
+### 5.1 Daily complete policy inventory
+
+Run the policy-only command daily. It exports L1 and L3SM workloads, IP Lists,
+compressed services, labels, every ruleset, and every rule, then validates and
+ingests them without submitting any Explorer or rule-usage query:
+
+```bash
+./scripts/rules-recertify --config config/local.json collect-policy
+```
+
+The run type is `POLICY_COLLECTION`. Current-rule membership is published only
+after every required CSV has passed validation and reference ingestion has
+completed. A failed run therefore leaves `rules.is_present` and the previous
+`policy_snapshots` record untouched. On success, the complete validated run and
+manifest are materialized atomically under `var/raw/snapshot`; reports and
+`search-rules` read only rules with `is_present=1` and prefer snapshot reference
+exports when timestamped raw runs are no longer available.
+
+For an offline validation, `--pce-stub-dir` supplies workload, IP-list, and
+service exports while rulesets, labels, and rules continue to come from the
+configured fake/test Workloader. The production command does not use this flag.
+
+### 5.2 Transitional combined collection
 
 Run after the previous UTC day has closed:
 
@@ -238,6 +260,10 @@ The collector:
 10. commits usage and port observations to SQLite;
 11. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
 12. sends one non-blocking SMTP summary.
+
+This legacy `collect` command temporarily remains available while the traffic
+workflow is split into its dedicated command. New daily scheduling must use
+`collect-policy`; the legacy command is not the target production scheduler.
 
 Check the latest collection with a single concise status line:
 
@@ -462,8 +488,8 @@ completed usage window independently of the report lookback.
 ## 7. Rule-item search
 
 `search-rules` reads one item per row from a one-column CSV, text, or XLSX file
-and searches only the rules whose `snapshot_at` equals the newest snapshot in
-SQLite. Searchable selectors include ruleset scopes, labels and exclusions,
+and searches only rules explicitly marked present by the latest successful
+complete policy snapshot. Searchable selectors include ruleset scopes, labels and exclusions,
 label groups and exclusions, IP Lists, explicit workloads, and services.
 Text matching is literal and case-insensitive unless `--case-sensitive` is
 used.

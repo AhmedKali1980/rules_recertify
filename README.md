@@ -49,8 +49,8 @@ See the integration guide before contacting a PCE or enabling cron.
 
 ## Import des workloads et IP Lists
 
-La commande `collect` importe désormais les référentiels avant les exports de
-règles. Le binaire et son fichier de configuration proviennent respectivement
+La commande quotidienne `collect-policy` importe les référentiels et l'inventaire
+policy complet, sans créer de requête Explorer ni collecter de trafic. Le binaire et son fichier de configuration proviennent respectivement
 des clés `workloader_dir` et `workloader_config_file` de `config/local.json`.
 L'orchestrateur les transmet aux wrappers sous les noms internes `EXECUTABLE`
 et `CFG`; il n'est donc pas nécessaire de les dupliquer dans `.env`. Les FQDN,
@@ -73,7 +73,7 @@ l'exécution contient `export_wkld.csv`, `export_wkld.l3sm.m.csv`,
 déduplication et exige des en-têtes strictement identiques.
 
 ```bash
-./scripts/rules-recertify --config config/local.json collect
+./scripts/rules-recertify --config config/local.json collect-policy
 ```
 
 Le mode stub ne contacte jamais Workloader. Son répertoire exige
@@ -82,13 +82,21 @@ Le mode stub ne contacte jamais Workloader. Son répertoire exige
 contrôles que le mode live. On peut employer l'option ou la variable :
 
 ```bash
-./scripts/rules-recertify --config config/local.json collect \
+./scripts/rules-recertify --config config/local.json collect-policy \
   --pce-stub-dir '/tmp/reference stubs'
-# équivalent : PCE_STUB_DIR='/tmp/reference stubs' ... collect
+# équivalent : PCE_STUB_DIR='/tmp/reference stubs' ... collect-policy
 ```
 
-`--skip-pce-import` conserve explicitement le comportement de collecte sans
-actualisation du référentiel (utile pour une reprise contrôlée).
+Après validation de tous les CSV, `collect-policy` ingère les références puis
+publie toutes les règles dans un snapshot SQLite complet. Une règle non vue est
+marquée absente uniquement lors de cette publication réussie. Le run validé est
+également copié atomiquement sous `var/raw/snapshot`, avec son manifeste et ses
+checksums. `report`, `report-batch` et `search-rules` ignorent les règles absentes.
+
+L'ancienne commande `collect` reste temporairement disponible pour le workflow
+historique combinant policy et trafic. Elle est transitoire et sera remplacée par
+les commandes dédiées des étapes suivantes ; `--skip-pce-import` ne concerne que
+ce workflow historique.
 
 Les dérivations préservent les colonnes source, insèrent `short_hostname`
 (préfixe DNS en majuscules) après `hostname`, puis ajoutent

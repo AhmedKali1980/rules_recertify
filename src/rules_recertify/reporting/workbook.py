@@ -41,7 +41,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
     kear = kear_id.lower()
     cutoff = (as_of - timedelta(days=lookback_days)).isoformat()
     with db.connect() as connection:
-        rule_rows = [dict(row) for row in connection.execute("SELECT * FROM rules ORDER BY ruleset_name,rule_href")]
+        rule_rows = _current_rules(connection)
         selected = [row for row in rule_rows if _rule_matches(row, scope_pairs)]
         usage_by_rule: Dict[str, List[Mapping[str, object]]] = defaultdict(list)
         for row in connection.execute("SELECT * FROM usage_windows WHERE window_end>? AND window_start<? ORDER BY window_start", (cutoff, as_of.isoformat())):
@@ -156,18 +156,30 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
     return target
 
 
+def _current_rules(connection: object) -> List[Dict[str, object]]:
+    return [dict(row) for row in connection.execute(
+        "SELECT * FROM rules WHERE is_present=1 ORDER BY ruleset_name,rule_href"
+    )]
+
+
+def _raw_reference_candidates(raw_dir: Path, filename: str) -> List[Path]:
+    snapshot = raw_dir / "snapshot" / filename
+    timestamped = sorted(
+        (
+            path for path in raw_dir.glob(f"*/{filename}")
+            if re.fullmatch(r"\d{8}T\d{6}Z-[0-9A-Fa-f]{8}", path.parent.name)
+            and path.is_file() and path.stat().st_size
+        ),
+        key=lambda path: path.parent.name,
+        reverse=True,
+    )
+    return ([snapshot] if snapshot.is_file() and snapshot.stat().st_size else []) + timestamped
+
+
 def _load_report_ip_lists(connection: object, raw_dir: Optional[Path]) -> Tuple[List[Dict[str, str]], str]:
     """Prefer the newest complete raw IP-list export, with SQLite as fallback."""
     if raw_dir:
-        candidates = sorted(
-            (
-                path for path in raw_dir.glob("*/export_iplists.csv")
-                if re.fullmatch(r"\d{8}T\d{6}Z-[0-9A-Fa-f]{8}", path.parent.name)
-                and path.is_file() and path.stat().st_size
-            ),
-            key=lambda path: path.parent.name,
-            reverse=True,
-        )
+        candidates = _raw_reference_candidates(raw_dir, "export_iplists.csv")
         if candidates:
             source = candidates[0]
             members: List[Dict[str, str]] = []
@@ -186,15 +198,7 @@ def _load_report_ip_lists(connection: object, raw_dir: Optional[Path]) -> Tuple[
 def _load_report_workloads(connection: object, raw_dir: Optional[Path]) -> Tuple[List[Dict[str, object]], str]:
     """Prefer the newest derived workload export so expansion uses current labels."""
     if raw_dir:
-        candidates = sorted(
-            (
-                path for path in raw_dir.glob("*/export_wkld.derived.csv")
-                if re.fullmatch(r"\d{8}T\d{6}Z-[0-9A-Fa-f]{8}", path.parent.name)
-                and path.is_file() and path.stat().st_size
-            ),
-            key=lambda path: path.parent.name,
-            reverse=True,
-        )
+        candidates = _raw_reference_candidates(raw_dir, "export_wkld.derived.csv")
         if candidates:
             source = candidates[0]
             workloads: List[Dict[str, object]] = []
@@ -222,15 +226,7 @@ def _load_report_workloads(connection: object, raw_dir: Optional[Path]) -> Tuple
 def _load_report_services(raw_dir: Optional[Path]) -> Tuple[Dict[str, Tuple[str, str]], str]:
     """Load compressed services from the newest timestamped raw run."""
     if raw_dir:
-        candidates = sorted(
-            (
-                path for path in raw_dir.glob("*/export_services.csv")
-                if re.fullmatch(r"\d{8}T\d{6}Z-[0-9A-Fa-f]{8}", path.parent.name)
-                and path.is_file() and path.stat().st_size
-            ),
-            key=lambda path: path.parent.name,
-            reverse=True,
-        )
+        candidates = _raw_reference_candidates(raw_dir, "export_services.csv")
         if candidates:
             source = candidates[0]
             services: Dict[str, Tuple[str, str]] = {}

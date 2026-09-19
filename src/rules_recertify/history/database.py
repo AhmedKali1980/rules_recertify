@@ -37,10 +37,6 @@ CREATE TABLE IF NOT EXISTS rule_history(
  rule_href TEXT NOT NULL, snapshot_at TEXT NOT NULL, content_hash TEXT NOT NULL,
  changed INTEGER NOT NULL, PRIMARY KEY(rule_href, snapshot_at)
 );
-CREATE TABLE IF NOT EXISTS rule_history(
- rule_href TEXT NOT NULL, snapshot_at TEXT NOT NULL, content_hash TEXT NOT NULL,
- changed INTEGER NOT NULL, PRIMARY KEY(rule_href, snapshot_at)
-);
 CREATE TABLE IF NOT EXISTS usage_windows(
  rule_href TEXT NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL,
  status TEXT NOT NULL, flows INTEGER, async_query_href TEXT,
@@ -255,7 +251,8 @@ class Database:
     def complete_policy_snapshot(self, snapshot_id: str, run_id: str,
                                  rows: Iterable[Mapping[str, object]],
                                  snapshot_at: Optional[str] = None,
-                                 snapshot_path: str = "", manifest_path: str = "") -> int:
+                                 snapshot_path: str = "", manifest_path: str = "",
+                                 run_details: Optional[Mapping[str, object]] = None) -> int:
         """Atomically publish a complete inventory and mark missing rules absent."""
         timestamp = snapshot_at or _now()
         materialized = list(rows)
@@ -275,6 +272,13 @@ class Database:
                 (snapshot_id, run_id, "COMPLETE", timestamp, timestamp, count,
                  snapshot_path, manifest_path, "", ""),
             )
+            if run_details is not None:
+                changed = db.execute(
+                    "UPDATE runs SET status='SUCCESS',finished_at=?,details_json=? WHERE run_id=? AND status='RUNNING'",
+                    (timestamp, json.dumps(dict(run_details), sort_keys=True), run_id),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("policy collection run is not running or does not exist")
         return count
 
     def current_policy_snapshot(self) -> Optional[Mapping[str, object]]:

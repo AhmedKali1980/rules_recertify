@@ -397,6 +397,16 @@ workflow. `draft` hrefs are expected in this context and do not require a separa
 active/draft comparison in release 1. Record `--policy-version` and the href in
 the manifest for traceability.
 
+### DEC-020 — Daily policy-only publication
+
+Use `collect-policy` for the daily complete policy inventory. It exports all
+references, labels, rulesets, and rules without requesting traffic. Rule
+presence changes only when the entire inventory and every required CSV have
+been validated and the complete snapshot is committed successfully. Failed or
+partial runs never mark a rule absent. The successful run is materialized under
+`var/raw/snapshot`; the historical combined `collect` command remains available
+only as a transitional compatibility path until traffic collection is split.
+
 ## 8. Residual implementation discoveries
 
 No product-owner decision remains open from the R1–R8 clarification round. The

@@ -270,6 +270,15 @@ and records its metadata in one transaction. Partial imports retain their
 legacy upsert behavior and never mark unseen rules absent. Run-type constants
 distinguish `POLICY_COLLECTION`, `TRAFFIC_COLLECTION`, and `TRAFFIC_BACKFILL`.
 
+`collect-policy` is the daily policy-only publisher. It runs the L1/L3SM
+workload pipeline, exports complete IP Lists and compressed services, then
+exports labels, every ruleset, and every rule without `--traffic-count` or
+`rule-usage`. All CSV contracts are validated before reference ingestion. The
+validated inventory, rule-presence update, completed snapshot metadata, and
+successful run state are committed in one SQLite transaction. A filesystem
+staging copy is checksum-verified and atomically promoted to `var/raw/snapshot`;
+the previous snapshot is restored if the SQLite publication fails.
+
 ## 5. Historical accumulation and 18-month guarantee
 
 ### 5.1 Recommended persistence

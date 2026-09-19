@@ -127,16 +127,18 @@ def _known_application_labels(db: Database, raw_dir: Optional[Path] = None) -> L
     labels = set()
     with db.connect() as connection:
         labels.update(str(row[0]).strip() for row in connection.execute("SELECT DISTINCT app FROM workloads"))
-        for row in connection.execute("SELECT raw_json FROM rules"):
+        for row in connection.execute("SELECT raw_json FROM rules WHERE is_present=1"):
             raw = json.loads(row[0])
             for value in _strings(raw):
                 labels.update(match.strip() for match in re.findall(r"(?:^|[;\n])app:([^;\n]+)", value, re.I))
     if raw_dir:
-        label_exports = sorted(
+        timestamped = sorted(
             (path for path in raw_dir.glob("*/labels.csv")
              if re.fullmatch(r"\d{8}T\d{6}Z-[0-9A-Fa-f]{8}", path.parent.name) and path.is_file()),
             key=lambda path: path.parent.name, reverse=True,
         )
+        snapshot = raw_dir / "snapshot" / "labels.csv"
+        label_exports = ([snapshot] if snapshot.is_file() and snapshot.stat().st_size else []) + timestamped
         if label_exports:
             labels.update(
                 row["value"] for row in read_rows(label_exports[0], ("key", "value"))
@@ -147,7 +149,9 @@ def _known_application_labels(db: Database, raw_dir: Optional[Path] = None) -> L
 
 def _rule_rows(db: Database) -> List[Dict[str, str]]:
     with db.connect() as connection:
-        return [{"raw_json": str(row[0])} for row in connection.execute("SELECT raw_json FROM rules")]
+        return [{"raw_json": str(row[0])} for row in connection.execute(
+            "SELECT raw_json FROM rules WHERE is_present=1"
+        )]
 
 
 def _write_audit_workbook(source: Path, root: Path, statuses: Mapping[int, str]) -> Path:

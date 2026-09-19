@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from .collection import collect
+from .collection import collect, collect_policy
 from .config import ConfigurationError, load_settings
 from .history.database import Database
 from .logging_utils import configure_logging
@@ -36,6 +36,11 @@ def parser() -> argparse.ArgumentParser:
     collect_p.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
     collect_p.add_argument("--pce-stub-dir", type=Path, help="Use local reference CSVs; never contact a PCE")
     collect_p.add_argument("--skip-pce-import", action="store_true", help="Skip workload/IP-list reference import")
+    policy = commands.add_parser(
+        "collect-policy", help="Export and publish the complete policy inventory without traffic queries",
+    )
+    policy.add_argument("--pce-stub-dir", type=Path,
+                        help="Use local workload/IP-list/service CSVs; never contact those PCEs")
     ingest = commands.add_parser("ingest-usage")
     ingest.add_argument("csv", type=Path)
     reference = commands.add_parser("ingest-reference")
@@ -99,6 +104,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps(collect(settings, start, end, args.no_wait,
                                      import_references=not args.skip_pce_import,
                                      pce_stub_dir=args.pce_stub_dir), indent=2, sort_keys=True)); return 0
+        if args.command == "collect-policy":
+            print(json.dumps(
+                collect_policy(settings, pce_stub_dir=args.pce_stub_dir),
+                indent=2, sort_keys=True,
+            )); return 0
         if args.command == "ingest-usage":
             db.initialize(); run_id = "manual-" + uuid.uuid4().hex
             db.begin_run(run_id, "MANUAL_USAGE", {"csv": str(args.csv)})

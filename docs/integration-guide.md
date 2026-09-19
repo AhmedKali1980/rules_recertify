@@ -149,7 +149,7 @@ Edit `config/local.json`. Important settings are:
   FQDNs and credentials;
 - `state_db`: durable local SQLite path;
 - traffic batch/poll timing;
-- `retention_days`, which cannot be lower than 200;
+- `retention_days`, which cannot be lower than 550;
 - `smtp_enabled`.
 
 Use `.env` primarily for optional SMTP secrets. Runtime paths and the normal PCE
@@ -177,7 +177,8 @@ Validate and initialize:
 
 The second command creates
 `/DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite` and the
-version-1 schema. `collect`, `ingest-reference`, `ingest-usage`, and `report` also
+version-2 schema. Existing version-1 databases are migrated transactionally.
+`collect`, `ingest-reference`, `ingest-usage`, and `report` also
 initialize the schema defensively. This is application setup, not an RPM install:
 the installer does not execute `dnf` or modify the operating system.
 
@@ -190,7 +191,7 @@ sqlite3 /DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite \
   '.tables'
 ```
 
-Expected schema version is `1`; integrity must return `ok`.
+Expected schema version is `2`; integrity must return `ok`.
 
 ## 4. Reference-data ingestion
 

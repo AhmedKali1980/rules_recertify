@@ -346,13 +346,13 @@ environments, in the workbook filename. A safe pattern is
 
 Use SQL compatible with SQLite 3.24 or newer for the single-host deployment. The
 production SQLite version is `3.26.0-20.el8_10`, which meets this requirement.
-Keep immutable raw artifacts alongside the database and consider S3 later. The analytical retention
-period is configurable with a minimum and default of **200 days**. It may be
-raised to 365 days without a code change, but configuration validation rejects a
-value below 200.
+Keep auditable raw artifacts alongside the database and consider external
+storage later. The analytical retention minimum and default are **550 days**;
+the default report lookback is **548 days**. This provides an operational margin
+over the required 18 months.
 
-Initial backfill covers up to 90 available PCE days. A complete 180-day view only
-becomes possible after at least another 90 successfully covered daily windows.
+The initial backfill covers the 92 PCE days fixed at initialization. Persistent
+weekly and backfill cursors advance only after a complete successful window.
 Coverage is always reported honestly; no-hit certification requires complete
 coverage for the claimed lookback.
 

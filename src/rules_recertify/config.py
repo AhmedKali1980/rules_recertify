@@ -50,7 +50,7 @@ class Settings:
     raw_dir: str = "var/raw"
     output_dir: str = "var/output"
     log_dir: str = "var/logs"
-    traffic_window_days: int = 1
+    traffic_window_days: int = 7
     traffic_batch_size: int = 100
     traffic_max_results: int = 10000
     query_initial_delay_minutes: int = 30
@@ -60,8 +60,8 @@ class Settings:
     rate_limit_retry_delay_minutes: int = 10
     rate_limit_max_retries: int = 12
     empty_scope_ruleset_name_patterns: Tuple[str, ...] = ()
-    retention_days: int = 200
-    default_lookback_days: int = 180
+    retention_days: int = 550
+    default_lookback_days: int = 548
     policy_version: str = "draft"
     smtp_enabled: bool = False
     dangerous_port_lists: Tuple[str, ...] = ("PORTS_TO_CONTROL", "PORTS_TO_ERADICATE")
@@ -95,8 +95,8 @@ class Settings:
             raise ConfigurationError(
                 "empty_scope_ruleset_name_patterns must contain non-empty strings"
             )
-        if self.retention_days < 200:
-            raise ConfigurationError("retention_days must be at least 200")
+        if self.retention_days < 550:
+            raise ConfigurationError("retention_days must be at least 550")
         if not 1 <= self.default_lookback_days <= self.retention_days:
             raise ConfigurationError("default_lookback_days must fit retention")
         if self.policy_version not in {"active", "draft"}:

@@ -16,7 +16,7 @@ class RuleSearchTest(unittest.TestCase):
             path.write_text("item\nAPP_A\n\nAPP_A\nTCP/22\n", encoding="utf-8")
             self.assertEqual(load_search_items(path), ["APP_A", "TCP/22"])
 
-    def test_latest_rules_excludes_older_rules_not_in_latest_snapshot(self):
+    def test_partial_upsert_does_not_mark_older_rules_absent(self):
         with tempfile.TemporaryDirectory() as directory:
             db = Database(Path(directory) / "state.sqlite"); db.initialize()
             db.upsert_rules([{
@@ -29,7 +29,18 @@ class RuleSearchTest(unittest.TestCase):
             }], "2026-09-15T00:00:00+00:00")
             rules, snapshot = latest_rules(db)
             self.assertEqual(snapshot, "2026-09-15T00:00:00+00:00")
-            self.assertEqual([row["rule_href"] for row in rules], ["/rules/new"])
+            self.assertEqual([row["rule_href"] for row in rules], ["/rules/new", "/rules/old"])
+
+    def test_latest_rules_uses_explicit_current_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(Path(directory) / "state.sqlite"); db.initialize()
+            old={"rule_href":"/rules/old","ruleset_href":"/rulesets/1"}
+            current={"rule_href":"/rules/current","ruleset_href":"/rulesets/1"}
+            db.complete_policy_snapshot("one", "run-1", [old, current], "2026-01-01")
+            db.complete_policy_snapshot("two", "run-2", [current], "2026-01-02")
+            rules, snapshot = latest_rules(db)
+            self.assertEqual(snapshot, "2026-01-02")
+            self.assertEqual([row["rule_href"] for row in rules], ["/rules/current"])
 
     def test_text_items_find_labels_groups_ip_lists_and_named_services(self):
         raw = {

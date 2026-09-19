@@ -61,13 +61,15 @@ def load_search_items(path: Path) -> List[str]:
 
 
 def latest_rules(db: Database) -> Tuple[List[Dict[str, object]], str]:
-    """Return only rules belonging to the most recent rules snapshot."""
+    """Return only rules explicitly present in the current policy inventory."""
     with db.connect() as connection:
-        latest = connection.execute("SELECT MAX(snapshot_at) FROM rules").fetchone()[0]
+        latest = connection.execute(
+            "SELECT MAX(snapshot_at) FROM rules WHERE is_present=1"
+        ).fetchone()[0]
         if not latest:
             return [], ""
         rows = [dict(row) for row in connection.execute(
-            "SELECT * FROM rules WHERE snapshot_at=? ORDER BY ruleset_name,rule_href", (latest,),
+            "SELECT * FROM rules WHERE is_present=1 ORDER BY ruleset_name,rule_href",
         )]
     return rows, str(latest)
 

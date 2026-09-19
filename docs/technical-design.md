@@ -58,13 +58,13 @@ application_scopes:
     env: PRD
   - app: APP_A_LEGACY
     env: UAT
-window_days: 1
+window_days: 7
 query_initial_delay_minutes: 30
 query_poll_interval_minutes: 10
 query_deadline_minutes: 1380
 traffic_batch_size: 500
-default_lookback_days: 180
-retention_days: 200
+default_lookback_days: 548
+retention_days: 550
 timezone: UTC
 ```
 
@@ -257,13 +257,20 @@ catalogue order, deduplicates overlaps, supports `All Services`, and emits only
 canonical `PROTOCOL/PORT[-PORT]` values.
 
 Rule-item search is intentionally independent of usage and flow tables. It
-selects only rows belonging to `MAX(rules.snapshot_at)`, searches normalized
+selects only rows whose explicit `rules.is_present` flag is current, searches normalized
 selector fields from `raw_json`, and expands named services before
 protocol/port interval intersection. Results retain both unmatched inputs and
 match provenance, while workbook metadata records the rule snapshot and service
 reference used.
 
-## 5. Historical accumulation and 180-day guarantee
+Schema version 2 adds explicit current-policy membership, complete policy
+snapshot metadata, weekly traffic cursors, traffic-window status, backfill
+state, and archive metadata. A complete policy snapshot updates rule presence
+and records its metadata in one transaction. Partial imports retain their
+legacy upsert behavior and never mark unseen rules absent. Run-type constants
+distinguish `POLICY_COLLECTION`, `TRAFFIC_COLLECTION`, and `TRAFFIC_BACKFILL`.
+
+## 5. Historical accumulation and 18-month guarantee
 
 ### 5.1 Recommended persistence
 

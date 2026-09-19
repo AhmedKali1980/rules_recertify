@@ -27,6 +27,19 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.traffic_end.isoformat(), "2026-08-27")
         self.assertTrue(args.no_wait)
 
+    def test_backfill_commands_accept_frozen_target_and_identifier(self):
+        initialized = parser().parse_args([
+            "init-backfill-traffic", "--target-end", "2026-09-20",
+            "--backfill-id", "history",
+        ])
+        self.assertEqual(initialized.target_end.isoformat(), "2026-09-20")
+        self.assertEqual(initialized.backfill_id, "history")
+        run = parser().parse_args([
+            "backfill-traffic", "--backfill-id", "history", "--no-wait",
+        ])
+        self.assertEqual(run.backfill_id, "history")
+        self.assertTrue(run.no_wait)
+
     def test_rule_search_accepts_items_output_and_case_mode(self):
         args = parser().parse_args([
             "search-rules", "--items", "items.csv", "--out", "result.xlsx",

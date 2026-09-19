@@ -416,6 +416,15 @@ the next start equals the previous successful end, and an incomplete or failed
 window retains its original boundaries for an identical retry. Only complete
 success advances the cursor; retention pruning remains 550 days.
 
+### DEC-022 — Frozen 92-day backfill
+
+Initialize the traffic backfill once by freezing its target and deriving its
+start at target minus 92 days. Process one oldest-first window per execution,
+with a seven-day maximum and a potentially partial final window. Persist
+`PENDING`, `RUNNING`, `FAILED`, and `COMPLETED`; failure never advances the
+cursor, completion stops subsequent executions, and duplicate initialization is
+rejected. Weekly and backfill cursors coexist but share the traffic engine.
+
 ## 8. Residual implementation discoveries
 
 No product-owner decision remains open from the R1–R8 clarification round. The

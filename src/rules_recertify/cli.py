@@ -9,7 +9,10 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from .collection import collect, collect_policy, collect_traffic
+from .collection import (
+    backfill_traffic, collect, collect_policy, collect_traffic,
+    initialize_backfill_traffic,
+)
 from .config import ConfigurationError, load_settings
 from .history.database import Database
 from .logging_utils import configure_logging
@@ -53,6 +56,25 @@ def parser() -> argparse.ArgumentParser:
         help="Latest available exclusive boundary (default: server-local current date)",
     )
     traffic.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
+    init_backfill = commands.add_parser(
+        "init-backfill-traffic", help="Freeze and initialize the 92-day traffic backfill",
+    )
+    init_backfill.add_argument(
+        "--target-end", type=_date, default=date.today(),
+        help="Frozen exclusive target; start is computed as target minus 92 days",
+    )
+    init_backfill.add_argument(
+        "--backfill-id", default="traffic-92-days",
+        help="Persistent identifier; an existing identifier cannot be reinitialized",
+    )
+    backfill = commands.add_parser(
+        "backfill-traffic", help="Process at most one oldest-first backfill window",
+    )
+    backfill.add_argument(
+        "--backfill-id", default="traffic-92-days",
+        help="Identifier previously created by init-backfill-traffic",
+    )
+    backfill.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
     ingest = commands.add_parser("ingest-usage")
     ingest.add_argument("csv", type=Path)
     reference = commands.add_parser("ingest-reference")
@@ -124,6 +146,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "collect-traffic":
             print(json.dumps(
                 collect_traffic(settings, args.traffic_end, args.traffic_start, args.no_wait),
+                indent=2, sort_keys=True,
+            )); return 0
+        if args.command == "init-backfill-traffic":
+            print(json.dumps(
+                initialize_backfill_traffic(settings, args.target_end, args.backfill_id),
+                indent=2, sort_keys=True,
+            )); return 0
+        if args.command == "backfill-traffic":
+            print(json.dumps(
+                backfill_traffic(settings, args.backfill_id, args.no_wait),
                 indent=2, sort_keys=True,
             )); return 0
         if args.command == "ingest-usage":

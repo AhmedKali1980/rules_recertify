@@ -113,10 +113,30 @@ class HistoryTest(unittest.TestCase):
             self.assertEqual(final["window_start"], "2026-01-08")
             db.update_backfill_window("initial", "run-3", "2026-01-10", True)
             state=db.backfill_state("initial")
-            self.assertEqual(state["status"], "COMPLETE")
+            self.assertEqual(state["status"], "COMPLETED")
             self.assertEqual(state["next_window_start"], "2026-01-10")
             with self.assertRaisesRegex(ValueError, "already complete"):
                 db.begin_backfill_window("initial", "run-4")
+
+    def test_92_day_backfill_has_thirteen_full_windows_and_one_partial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db=Database(Path(directory)/"db.sqlite"); db.initialize()
+            db.initialize_backfill("history", "2026-06-20", "2026-09-20")
+            windows=[]
+            for index in range(14):
+                lease=db.begin_backfill_window("history", f"run-{index}")
+                windows.append((lease["window_start"],lease["window_end"]))
+                db.update_backfill_window("history", f"run-{index}", lease["window_end"], True)
+            state=db.backfill_state("history")
+            self.assertEqual(state["status"],"COMPLETED")
+            self.assertEqual(state["next_window_start"],"2026-09-20")
+            self.assertEqual(
+                [(date.fromisoformat(end)-date.fromisoformat(start)).days for start,end in windows],
+                [7]*13+[1],
+            )
+            self.assertTrue(all(windows[index][1] == windows[index+1][0] for index in range(13)))
+            with self.assertRaisesRegex(ValueError,"cannot be reinitialized"):
+                db.initialize_backfill("history", "2026-06-20", "2026-09-20")
 
     def test_run_types_and_archive_metadata_are_available(self):
         self.assertEqual(

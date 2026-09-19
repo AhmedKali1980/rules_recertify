@@ -289,6 +289,14 @@ Usage rows remain idempotent through their `(rule_href, window_start,
 window_end)` key, and each traffic run retains its fresh selection inputs as
 checksummed artifacts.
 
+`init-backfill-traffic` freezes a 92-day interval in `backfill_states` and is
+deliberately insert-only. `backfill-traffic` asks that state provider for at
+most one oldest-first window, capped at seven days and truncated at the frozen
+target. It calls the same `_collect_traffic_run` engine as weekly collection;
+only its window lifecycle provider differs. State and run completion are
+transactional, failed boundaries do not move, and reaching the target changes
+the terminal state to `COMPLETED`.
+
 ## 5. Historical accumulation and 18-month guarantee
 
 ### 5.1 Recommended persistence

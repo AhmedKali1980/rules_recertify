@@ -2,7 +2,10 @@ import csv, json, os, sqlite3, stat, tempfile, unittest
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
-from rules_recertify.collection import _validated_usage_rows, collect, collect_policy, collect_traffic
+from rules_recertify.collection import (
+    _validated_usage_rows, backfill_traffic, collect, collect_policy, collect_traffic,
+    initialize_backfill_traffic,
+)
 from rules_recertify.config import Settings
 from rules_recertify.history.database import Database
 
@@ -95,6 +98,49 @@ def _policy_reference_stub(root):
 
 
 class CollectionTest(unittest.TestCase):
+ def test_completed_backfill_stops_without_creating_a_run(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d)
+   settings=Settings(pce='p',state_db=str(root/'db.sqlite'),raw_dir=str(root/'raw'))
+   initialize_backfill_traffic(settings,date(2026,9,20),'done')
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    connection.execute("UPDATE backfill_states SET status='COMPLETED',next_window_start=backfill_target_end")
+   result=backfill_traffic(settings,'done')
+   self.assertEqual(result,{'backfill_id':'done','status':'COMPLETED','window_processed':False})
+   self.assertFalse((root/'raw').exists())
+
+ def test_backfill_retries_one_window_and_coexists_with_weekly_cursor(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'
+   binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
+   settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),
+                     raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),
+                     query_initial_delay_minutes=0,batch_cooldown_seconds=0)
+   initialized=initialize_backfill_traffic(settings,date(2026,9,20),'history')
+   self.assertEqual(initialized['backfill_start'],'2026-06-20')
+   failed_env={'FAKE_TRAFFIC_START':'2026-06-20','FAKE_TRAFFIC_END':'2026-06-27',
+               'FAKE_INVALID_QUERY_BODY':'1'}
+   with patch.dict(os.environ,failed_env):
+    with self.assertRaisesRegex(RuntimeError,'cursor was not advanced'):
+     backfill_traffic(settings,'history',no_wait=True)
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    failed=connection.execute("SELECT next_window_start,status FROM backfill_states").fetchone()
+   self.assertEqual(failed,('2026-06-20','FAILED'))
+   with patch.dict(os.environ, {'FAKE_TRAFFIC_START':'2026-06-20','FAKE_TRAFFIC_END':'2026-06-27'}):
+    os.environ.pop('FAKE_INVALID_QUERY_BODY',None)
+    recovered=backfill_traffic(settings,'history',no_wait=True)
+   self.assertEqual(recovered['backfill_status'],'PENDING')
+   with patch.dict(os.environ, {'FAKE_TRAFFIC_START':'2026-09-13','FAKE_TRAFFIC_END':'2026-09-20'}):
+    weekly=collect_traffic(settings,date(2026,9,20),date(2026,9,13),no_wait=True)
+   self.assertEqual(weekly['status'],'SUCCESS')
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    backfill=connection.execute("SELECT next_window_start,status FROM backfill_states").fetchone()
+    weekly_cursor=connection.execute("SELECT last_successful_end FROM traffic_cursors WHERE cursor_name='weekly'").fetchone()[0]
+    usage=connection.execute('SELECT COUNT(*) FROM usage_windows').fetchone()[0]
+   self.assertEqual(backfill,('2026-06-27','PENDING'))
+   self.assertEqual(weekly_cursor,'2026-09-20')
+   self.assertEqual(usage,2)
+
  def test_collect_traffic_uses_contiguous_cursor_without_changing_policy_snapshot(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'

@@ -113,6 +113,25 @@ fenêtre suivante commence exactement à la fin précédente. Un résultat pendi
 expired, inconnu, invalide ou autrement incomplet laisse le curseur sur la même
 fenêtre, qui doit être rejouée intégralement.
 
+Le backfill historique est initialisé une seule fois avec une cible figée ; son
+début est automatiquement fixé à J-92 :
+
+```bash
+./scripts/rules-recertify --config config/local.json init-backfill-traffic \
+  --target-end 2026-09-20
+
+# Une seule fenêtre, au maximum sept jours, par exécution planifiée.
+./scripts/rules-recertify --config config/local.json backfill-traffic
+```
+
+Les fenêtres sont traitées de la plus ancienne à la plus récente. La quatorzième
+fenêtre peut être partielle : 92 jours donnent treize fenêtres de sept jours et
+une dernière fenêtre d'un jour. Les états persistants sont `PENDING`, `RUNNING`,
+`FAILED` et `COMPLETED`. Un échec conserve le même début ; une nouvelle
+initialisation avec le même identifiant est refusée et une exécution après
+`COMPLETED` s'arrête sans créer de run. Le curseur backfill est indépendant du
+curseur hebdomadaire.
+
 L'ancienne commande `collect` reste temporairement disponible pour le workflow
 historique combinant policy et trafic. Elle est transitoire et sera remplacée par
 les commandes dédiées des étapes suivantes ; `--skip-pce-import` ne concerne que

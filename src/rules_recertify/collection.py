@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .config import Settings
-from .history.database import Database, RUN_TYPE_POLICY, RUN_TYPE_TRAFFIC
+from .history.database import (
+    Database, RUN_TYPE_BACKFILL, RUN_TYPE_POLICY, RUN_TYPE_TRAFFIC,
+)
 from .notifications import send_summary
 from .pce_import import import_pce_exports
 from .reference import ingest_reference
@@ -157,6 +159,15 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         run_type="COLLECTION", publish_policy_inventory=True,
     )
 
+        details["current_stage"] = "EXPORTING_RULESETS"
+        db.update_run_details(run_id, details)
+        rulesets_file = run_dir / "rulesets.csv"
+        runner.run(["ruleset-export", "--output-file", str(rulesets_file)])
+        rulesets = list(read_rows(rulesets_file, ("href", "enabled")))
+        if not rulesets or not any(row["href"] for row in rulesets):
+            raise RuntimeError("Complete policy export contains no ruleset")
+        href_file = run_dir / "ruleset_hrefs_all.csv"
+        write_rows(href_file, ["href"], ({"href": row["href"]} for row in rulesets if row["href"]))
 
 def collect_traffic(settings: Settings, available_end: date, initial_start: Optional[date] = None,
                     no_wait: bool = False) -> Dict[str, object]:
@@ -196,11 +207,51 @@ def collect_traffic(settings: Settings, available_end: date, initial_start: Opti
     return result
 
 
+def initialize_backfill_traffic(settings: Settings, target_end: date,
+                                backfill_id: str = "traffic-92-days") -> Dict[str, object]:
+    """Freeze the 92-day historical target and its oldest-first cursor."""
+    if not backfill_id.strip():
+        raise ValueError("backfill_id must not be empty")
+    start = target_end - timedelta(days=92)
+    db = Database(Path(settings.state_db)); db.initialize()
+    db.initialize_backfill(backfill_id, start.isoformat(), target_end.isoformat())
+    return dict(db.backfill_state(backfill_id) or {})
+
+
+def backfill_traffic(settings: Settings, backfill_id: str = "traffic-92-days",
+                     no_wait: bool = False) -> Dict[str, object]:
+    """Process at most one oldest-first backfill window."""
+    db = Database(Path(settings.state_db)); db.initialize()
+    state = db.backfill_state(backfill_id)
+    if state is None:
+        raise ValueError(f"unknown backfill: {backfill_id}; initialize it first")
+    if state["status"] == "COMPLETED":
+        return {"backfill_id": backfill_id, "status": "COMPLETED", "window_processed": False}
+    traffic_start = date.fromisoformat(str(state["next_window_start"]))
+    target_end = date.fromisoformat(str(state["backfill_target_end"]))
+    traffic_end = min(
+        traffic_start + timedelta(days=settings.traffic_window_days), target_end,
+    )
+    result = _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        run_type=RUN_TYPE_BACKFILL, publish_policy_inventory=False,
+        backfill_id=backfill_id,
+    )
+    if result["status"] != "SUCCESS":
+        raise RuntimeError(
+            f"Backfill window [{traffic_start},{traffic_end}) incomplete; cursor was not advanced"
+        )
+    result["backfill_status"] = str(
+        (db.backfill_state(backfill_id) or {}).get("status", "")
+    )
+    return result
+
+
 def _collect_traffic_run(
     settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
     import_references: bool = False, pce_stub_dir: Optional[Path] = None,
     run_type: str = "COLLECTION", publish_policy_inventory: bool = True,
-    cursor_name: Optional[str] = None,
+    cursor_name: Optional[str] = None, backfill_id: Optional[str] = None,
 ) -> Dict[str, object]:
     if traffic_end <= traffic_start:
         raise ValueError("traffic_end must be after traffic_start")
@@ -222,6 +273,7 @@ def _collect_traffic_run(
     )
     status = "ERROR"
     cursor_started = False
+    backfill_started = False
     try:
         if cursor_name:
             db.begin_traffic_window(
@@ -229,6 +281,16 @@ def _collect_traffic_run(
                 traffic_start.isoformat(), traffic_end.isoformat(),
             )
             cursor_started = True
+        if backfill_id:
+            lease = db.begin_backfill_window(
+                backfill_id, run_id, settings.traffic_window_days,
+            )
+            backfill_started = True
+            if (
+                lease["window_start"] != traffic_start.isoformat()
+                or lease["window_end"] != traffic_end.isoformat()
+            ):
+                raise ValueError("backfill window provider changed during collection startup")
         if import_references:
             details["current_stage"] = "IMPORTING_PCE_REFERENCE"
             db.update_run_details(run_id, details)
@@ -506,7 +568,13 @@ def _collect_traffic_run(
         details["status"] = status
         manifest = run_dir / "manifest.json"
         manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
-        if cursor_name and cursor_started:
+        if backfill_id and backfill_started:
+            db.update_backfill_window(
+                backfill_id, run_id, traffic_end.isoformat(), status == "SUCCESS",
+                run_details=details, run_status=status,
+                error=str(details.get("error", "")),
+            )
+        elif cursor_name and cursor_started:
             db.finish_traffic_window(
                 cursor_name, run_type, run_id,
                 traffic_start.isoformat(), traffic_end.isoformat(),

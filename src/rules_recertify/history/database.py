@@ -375,10 +375,13 @@ class Database:
             raise ValueError("backfill target_end must be after start")
         now = _now()
         with self.connect() as db:
-            db.execute(
-                "INSERT INTO backfill_states VALUES(?,?,?,?,?,?,?,?,?)",
-                (backfill_id, start, target_end, start, None, "PENDING", None, now, now),
-            )
+            try:
+                db.execute(
+                    "INSERT INTO backfill_states VALUES(?,?,?,?,?,?,?,?,?)",
+                    (backfill_id, start, target_end, start, None, "PENDING", None, now, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"backfill already exists and cannot be reinitialized: {backfill_id}") from exc
 
     def backfill_state(self, backfill_id: str) -> Optional[Mapping[str, object]]:
         with self.connect() as db:
@@ -388,7 +391,10 @@ class Database:
             return dict(row) if row else None
 
     def update_backfill_window(self, backfill_id: str, run_id: str,
-                               window_end: str, success: bool) -> None:
+                               window_end: str, success: bool,
+                               run_details: Optional[Mapping[str, object]] = None,
+                               run_status: Optional[str] = None,
+                               error: str = "") -> None:
         """Advance backfill only after a successful window."""
         now = _now()
         with self.connect() as db:
@@ -404,7 +410,7 @@ class Database:
             if success:
                 if window_end <= state[0] or window_end > state[1]:
                     raise ValueError("invalid successful backfill window end")
-                status = "COMPLETE" if window_end >= state[1] else "PENDING"
+                status = "COMPLETED" if window_end >= state[1] else "PENDING"
                 db.execute(
                     """UPDATE backfill_states SET next_window_start=?,
                     last_successful_window_end=?,status=?,last_run_id=?,updated_at=?
@@ -416,8 +422,25 @@ class Database:
                     "UPDATE backfill_states SET status='FAILED',last_run_id=?,updated_at=? WHERE backfill_id=?",
                     (run_id, now, backfill_id),
                 )
+            window_status = "SUCCESS" if success else "FAILED"
+            window_changed = db.execute(
+                """UPDATE traffic_windows SET status=?,error=?,finished_at=?
+                WHERE window_type=? AND run_id=? AND status='RUNNING'""",
+                (window_status, error, now, RUN_TYPE_BACKFILL, run_id),
+            ).rowcount
+            if window_changed != 1:
+                raise ValueError("backfill traffic window is not running or does not exist")
+            if run_details is not None:
+                changed = db.execute(
+                    "UPDATE runs SET status=?,finished_at=?,details_json=? WHERE run_id=? AND status='RUNNING'",
+                    (run_status or window_status, now,
+                     json.dumps(dict(run_details), sort_keys=True), run_id),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("backfill run is not running or does not exist")
 
-    def begin_backfill_window(self, backfill_id: str, run_id: str) -> Mapping[str, str]:
+    def begin_backfill_window(self, backfill_id: str, run_id: str,
+                              window_days: int = 7) -> Mapping[str, str]:
         """Mark a pending/failed backfill as running without moving its cursor."""
         now = _now()
         with self.connect() as db:
@@ -427,7 +450,7 @@ class Database:
             ).fetchone()
             if state is None:
                 raise ValueError(f"unknown backfill: {backfill_id}")
-            if state[2] == "COMPLETE":
+            if state[2] == "COMPLETED":
                 raise ValueError(f"backfill is already complete: {backfill_id}")
             if state[2] == "RUNNING":
                 raise ValueError(f"backfill already has a running window: {backfill_id}")
@@ -435,7 +458,18 @@ class Database:
                 "UPDATE backfill_states SET status='RUNNING',last_run_id=?,updated_at=? WHERE backfill_id=?",
                 (run_id, now, backfill_id),
             )
-            return {"window_start": str(state[0]), "target_end": str(state[1])}
+            start = date.fromisoformat(str(state[0]))
+            target = date.fromisoformat(str(state[1]))
+            end = min(start + timedelta(days=window_days), target)
+            db.execute(
+                "INSERT INTO traffic_windows VALUES(?,?,?,?,?,?,?,?)",
+                (RUN_TYPE_BACKFILL, start.isoformat(), end.isoformat(), run_id,
+                 "RUNNING", "", now, None),
+            )
+            return {
+                "window_start": start.isoformat(), "window_end": end.isoformat(),
+                "target_end": target.isoformat(),
+            }
 
     def record_archive(self, run_id: str, archive_kind: str, archive_path: str,
                        sha256: str, size_bytes: int, retained_until: Optional[str],

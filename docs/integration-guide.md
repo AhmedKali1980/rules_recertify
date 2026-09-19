@@ -264,7 +264,34 @@ Successful windows therefore meet exactly at their exclusive boundaries, with
 neither overlap nor a missing day. Usage UPSERT keys preserve idempotence when a
 failed window is replayed. Retention pruning uses the configured 550 days.
 
-### 5.3 Transitional combined collection
+### 5.3 Initial 92-day traffic backfill
+
+Freeze the target once. The command derives and persists `backfill_start` as
+exactly 92 days before that target:
+
+```bash
+./scripts/rules-recertify --config config/local.json init-backfill-traffic \
+  --target-end 2026-09-20 --backfill-id traffic-92-days
+```
+
+Run one window every two days until completion:
+
+```bash
+./scripts/rules-recertify --config config/local.json backfill-traffic \
+  --backfill-id traffic-92-days
+```
+
+Each invocation processes at most one oldest-first window. Windows are capped at
+seven days; a 92-day interval therefore produces thirteen full windows and one
+one-day final window. Persistent states are `PENDING`, `RUNNING`, `FAILED`, and
+`COMPLETED`. Failure retains `next_window_start`, so the exact same interval is
+retried. Initialization is insert-only and refuses an existing identifier,
+including a completed backfill. Once the target is reached, later invocations
+return `COMPLETED` without creating a run. Backfill state and windows are
+separate from the weekly cursor, while both modes call the same export,
+selection, batching, polling, validation, and usage-ingestion engine.
+
+### 5.4 Transitional combined collection
 
 Run after the previous UTC day has closed:
 

@@ -2,8 +2,9 @@ import csv, json, os, sqlite3, stat, tempfile, unittest
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
-from rules_recertify.collection import _validated_usage_rows, collect, collect_policy
+from rules_recertify.collection import _validated_usage_rows, collect, collect_policy, collect_traffic
 from rules_recertify.config import Settings
+from rules_recertify.history.database import Database
 
 FAKE = r'''#!/usr/bin/env python3
 import csv,os,sys
@@ -23,10 +24,12 @@ elif cmd=='rule-export' and '--traffic-count' not in args:
  rows=[{'ruleset_name':'APP','ruleset_scope':'app:APP;env:PRD','ruleset_enabled':'true','rule_type':'allow','rule_enabled':'true','ruleset_href':'/rs/1','rule_href':'/r/1','services':'443 TCP'},{'ruleset_name':'INFRA','ruleset_scope':'','ruleset_enabled':'true','rule_type':'allow','rule_enabled':'true','ruleset_href':'/rs/infra','rule_href':'/r/infra','services':'All Services'}]
  write(['ruleset_name','ruleset_scope','ruleset_enabled','rule_type','rule_enabled','ruleset_href','rule_href','services'],rows[:1] if os.getenv('FAKE_DROP_INFRA') else rows)
 elif cmd=='rule-export':
- q='{"start_date":"2026-08-20T00:00:00Z","end_date":"2026-08-21T00:00:00Z"}'
+ start=os.getenv('FAKE_TRAFFIC_START','2026-08-20'); end=os.getenv('FAKE_TRAFFIC_END','2026-08-21')
+ q='{"start_date":"'+start+'T00:00:00Z","end_date":"'+end+'T00:00:00Z"}'
  write(['ruleset_href','rule_href','async_query_status','flows','flows_by_port','query_body'],[{'ruleset_href':'/rs/1','rule_href':'/r/1','async_query_status':'','flows':'','flows_by_port':'','query_body':q}])
 else:
- q='{"start_date":"2026-08-20T00:00:00Z","end_date":"2026-08-21T00:00:00Z"}'
+ start=os.getenv('FAKE_TRAFFIC_START','2026-08-20'); end=os.getenv('FAKE_TRAFFIC_END','2026-08-21')
+ q='{"start_date":"'+start+'T00:00:00Z","end_date":"'+end+'T00:00:00Z"}'
  rows=[{'ruleset_href':'/rs/1','rule_href':'/r/1','async_query_status':'completed','flows':'3','flows_by_port':'443 TCP (3)','query_body':q}]
  if os.getenv('FAKE_INVALID_QUERY_BODY'):
   rows.append({'ruleset_href':'/rs/1','rule_href':'/r/invalid','async_query_status':'unknown','flows':'','flows_by_port':'','query_body':''})
@@ -92,6 +95,58 @@ def _policy_reference_stub(root):
 
 
 class CollectionTest(unittest.TestCase):
+ def test_collect_traffic_uses_contiguous_cursor_without_changing_policy_snapshot(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'
+   binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
+   settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),
+                     raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),
+                     query_initial_delay_minutes=0,batch_cooldown_seconds=0)
+   db=Database(root/'db.sqlite')
+   db.initialize(); db.complete_policy_snapshot('policy-1','policy-run',[
+    {'rule_href':'/r/policy','ruleset_href':'/rs/policy'}
+   ],'2026-08-19')
+   with patch.dict(os.environ, {'FAKE_TRAFFIC_START':'2026-08-20','FAKE_TRAFFIC_END':'2026-08-27'}):
+    first=collect_traffic(settings,date(2026,8,27),date(2026,8,20),no_wait=True)
+   with patch.dict(os.environ, {'FAKE_TRAFFIC_START':'2026-08-27','FAKE_TRAFFIC_END':'2026-09-03'}):
+    second=collect_traffic(settings,date(2026,9,3),no_wait=True)
+   self.assertEqual((first['traffic_start'],first['traffic_end']),('2026-08-20','2026-08-27'))
+   self.assertEqual((second['traffic_start'],second['traffic_end']),('2026-08-27','2026-09-03'))
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    cursor=connection.execute("SELECT last_successful_end,last_status FROM traffic_cursors WHERE cursor_name='weekly'").fetchone()
+    windows=connection.execute('SELECT window_start,window_end,status FROM traffic_windows ORDER BY window_start').fetchall()
+    rules=connection.execute('SELECT rule_href,is_present FROM rules').fetchall()
+    run_types={row[0] for row in connection.execute('SELECT run_type FROM runs')}
+   self.assertEqual(cursor,('2026-09-03','SUCCESS'))
+   self.assertEqual(windows,[('2026-08-20','2026-08-27','SUCCESS'),('2026-08-27','2026-09-03','SUCCESS')])
+   self.assertEqual(rules,[('/r/policy',1)])
+   self.assertEqual(run_types,{'TRAFFIC_COLLECTION'})
+
+ def test_incomplete_collect_traffic_replays_same_window_and_is_idempotent(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'
+   binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
+   settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),
+                     raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),
+                     query_initial_delay_minutes=0,batch_cooldown_seconds=0)
+   environment={'FAKE_TRAFFIC_START':'2026-08-20','FAKE_TRAFFIC_END':'2026-08-27',
+                'FAKE_INVALID_QUERY_BODY':'1'}
+   with patch.dict(os.environ,environment):
+    with self.assertRaisesRegex(RuntimeError,'cursor was not advanced'):
+     collect_traffic(settings,date(2026,8,27),date(2026,8,20),no_wait=True)
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    failed=connection.execute("SELECT last_successful_end,in_progress_start,last_status FROM traffic_cursors").fetchone()
+   self.assertEqual(failed,(None,'2026-08-20','FAILED'))
+   with patch.dict(os.environ, {'FAKE_TRAFFIC_START':'2026-08-20','FAKE_TRAFFIC_END':'2026-08-27'}, clear=False):
+    os.environ.pop('FAKE_INVALID_QUERY_BODY',None)
+    result=collect_traffic(settings,date(2026,8,27),no_wait=True)
+   self.assertEqual(result['status'],'SUCCESS')
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    cursor=connection.execute("SELECT last_successful_end,last_status FROM traffic_cursors").fetchone()
+    usage=connection.execute('SELECT COUNT(*) FROM usage_windows').fetchone()[0]
+   self.assertEqual(cursor,('2026-08-27','SUCCESS'))
+   self.assertEqual(usage,1)
+
  def test_collect_policy_publishes_complete_inventory_without_traffic(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'

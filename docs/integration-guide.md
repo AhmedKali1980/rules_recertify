@@ -233,7 +233,38 @@ For an offline validation, `--pce-stub-dir` supplies workload, IP-list, and
 service exports while rulesets, labels, and rules continue to come from the
 configured fake/test Workloader. The production command does not use this flag.
 
-### 5.2 Transitional combined collection
+### 5.2 Weekly traffic collection
+
+The first invocation may seed the cursor explicitly. `--traffic-end` represents
+the latest exclusive boundary currently available from the PCE:
+
+```bash
+./scripts/rules-recertify --config config/local.json collect-traffic \
+  --traffic-start 2026-09-06 --traffic-end 2026-09-13
+```
+
+Subsequent invocations omit the start; it is read from SQLite:
+
+```bash
+./scripts/rules-recertify --config config/local.json collect-traffic \
+  --traffic-end 2026-09-20
+```
+
+The command always requests one complete seven-day half-open window. Before
+batching, it freshly exports rulesets, labels, and all rules, then applies the
+existing traffic-only app/environment/scope and configured-exception filter.
+That minimal inventory is retained as a run artifact but is never ingested into
+the current policy snapshot and never changes `rules.is_present`.
+
+The durable `weekly` cursor advances only when every submitted query is
+terminal and valid and no ruleset was omitted. Pending, expired, unknown,
+invalid, or oversized results mark the window failed. Its original start and
+end remain stored, and the next invocation must replay that exact window.
+Successful windows therefore meet exactly at their exclusive boundaries, with
+neither overlap nor a missing day. Usage UPSERT keys preserve idempotence when a
+failed window is replayed. Retention pruning uses the configured 550 days.
+
+### 5.3 Transitional combined collection
 
 Run after the previous UTC day has closed:
 

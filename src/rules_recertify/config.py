@@ -74,8 +74,8 @@ class Settings:
     def validate(self) -> None:
         if not self.pce.strip():
             raise ConfigurationError("pce must not be empty")
-        if self.traffic_window_days < 1:
-            raise ConfigurationError("traffic_window_days must be positive")
+        if self.traffic_window_days != 7:
+            raise ConfigurationError("traffic_window_days must be 7")
         if not 1 <= self.traffic_batch_size <= 500:
             raise ConfigurationError("traffic_batch_size must be between 1 and 500")
         if self.traffic_max_results < 1:

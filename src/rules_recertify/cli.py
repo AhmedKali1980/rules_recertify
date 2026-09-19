@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from .collection import collect, collect_policy
+from .collection import collect, collect_policy, collect_traffic
 from .config import ConfigurationError, load_settings
 from .history.database import Database
 from .logging_utils import configure_logging
@@ -41,6 +41,18 @@ def parser() -> argparse.ArgumentParser:
     )
     policy.add_argument("--pce-stub-dir", type=Path,
                         help="Use local workload/IP-list/service CSVs; never contact those PCEs")
+    traffic = commands.add_parser(
+        "collect-traffic", help="Collect the next cursor-controlled seven-day traffic window",
+    )
+    traffic.add_argument(
+        "--traffic-start", type=_date,
+        help="Seed for the first window only; later runs always use the persisted cursor",
+    )
+    traffic.add_argument(
+        "--traffic-end", type=_date, default=date.today(),
+        help="Latest available exclusive boundary (default: server-local current date)",
+    )
+    traffic.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
     ingest = commands.add_parser("ingest-usage")
     ingest.add_argument("csv", type=Path)
     reference = commands.add_parser("ingest-reference")
@@ -107,6 +119,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "collect-policy":
             print(json.dumps(
                 collect_policy(settings, pce_stub_dir=args.pce_stub_dir),
+                indent=2, sort_keys=True,
+            )); return 0
+        if args.command == "collect-traffic":
+            print(json.dumps(
+                collect_traffic(settings, args.traffic_end, args.traffic_start, args.no_wait),
                 indent=2, sort_keys=True,
             )); return 0
         if args.command == "ingest-usage":

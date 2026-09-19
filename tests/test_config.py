@@ -3,6 +3,13 @@ from pathlib import Path
 from rules_recertify.config import ConfigurationError, load_dotenv, load_settings
 
 class ConfigTest(unittest.TestCase):
+    def test_traffic_window_is_exactly_seven_days(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"c.json"
+            path.write_text(json.dumps({"pce":"p","traffic_window_days":6}))
+            with self.assertRaisesRegex(ConfigurationError,"must be 7"):
+                load_settings(path,Path(directory)/"missing.env")
+
     def test_minimum_retention(self):
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory)/"c.json"; p.write_text(json.dumps({"pce":"p","retention_days":549}))

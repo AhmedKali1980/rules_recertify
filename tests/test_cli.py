@@ -5,10 +5,44 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rules_recertify.cli import main
+from rules_recertify.cli import main, parser
 
 
 class CliTest(unittest.TestCase):
+    def test_collect_policy_accepts_reference_stub_without_traffic_options(self):
+        args = parser().parse_args([
+            "collect-policy", "--pce-stub-dir", "reference stubs",
+        ])
+        self.assertEqual(args.command, "collect-policy")
+        self.assertEqual(args.pce_stub_dir, Path("reference stubs"))
+        self.assertFalse(hasattr(args, "traffic_start"))
+
+    def test_rule_search_accepts_items_output_and_case_mode(self):
+        args = parser().parse_args([
+            "search-rules", "--items", "items.csv", "--out", "result.xlsx",
+            "--case-sensitive",
+        ])
+        self.assertEqual(args.items, Path("items.csv"))
+        self.assertEqual(args.out, Path("result.xlsx"))
+        self.assertTrue(args.case_sensitive)
+
+    def test_batch_report_accepts_microcosmos_workbook(self):
+        args = parser().parse_args([
+            "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx",
+            "--lookback-days", "180", "--as-of", "2026-09-10",
+        ])
+        self.assertEqual(args.microcosmos_xlsx, Path("microcosmos.xlsx"))
+        self.assertEqual(args.as_of.isoformat(), "2026-09-10")
+
+    def test_report_options_form_ordered_application_environment_pairs(self):
+        args = parser().parse_args([
+            "report", "--kear-id", "k", "--logical-application-name", "app",
+            "--application-label", "APP_PRD", "--environment", "PRD",
+            "--application-label", "APP_UAT", "--environment", "UAT",
+        ])
+        self.assertEqual(args.application_label, ["APP_PRD", "APP_UAT"])
+        self.assertEqual(args.environment, ["PRD", "UAT"])
+
     def test_validate_config_displays_effective_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

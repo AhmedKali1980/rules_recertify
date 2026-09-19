@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import shutil
 import time
 import uuid
 from dataclasses import asdict
@@ -11,8 +13,12 @@ from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .config import Settings
-from .history.database import Database
+from .history.database import (
+    Database, RUN_TYPE_BACKFILL, RUN_TYPE_POLICY, RUN_TYPE_TRAFFIC,
+)
 from .notifications import send_summary
+from .pce_import import import_pce_exports
+from .reference import ingest_reference
 from .workloader.batching import (
     partition_and_pack_rulesets,
     select_application_scoped_rulesets,
@@ -30,9 +36,214 @@ LOG = logging.getLogger(__name__)
 RULE_REQUIRED = ("ruleset_href", "rule_href")
 USAGE_REQUIRED = (*RULE_REQUIRED, "async_query_status", "flows", "flows_by_port", "query_body")
 LABEL_REQUIRED = ("key", "value")
+POLICY_REFERENCE_EXPORTS = (
+    "export_wkld.csv", "export_iplists.csv", "export_services.csv",
+    "export_wkld.derived.csv", "export_iplists.derived.csv",
+)
 
 
-def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False) -> Dict[str, object]:
+def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
+    """Export and atomically publish one complete policy inventory."""
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    raw_root = Path(settings.raw_dir)
+    run_dir = raw_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    db = Database(Path(settings.state_db)); db.initialize()
+    details: Dict[str, object] = {
+        "run_id": run_id,
+        "run_type": RUN_TYPE_POLICY,
+        "current_stage": "IMPORTING_PCE_REFERENCE",
+    }
+    db.begin_run(run_id, RUN_TYPE_POLICY, details)
+    config_file = Path(settings.workloader_config_file) if settings.workloader_config_file else None
+    runner = WorkloaderRunner(
+        settings.workloader, settings.pce, run_dir / "workloader.log", config_file,
+        rate_limit_retry_delay_minutes=settings.rate_limit_retry_delay_minutes,
+        rate_limit_max_retries=settings.rate_limit_max_retries,
+    )
+    status = "ERROR"
+    snapshot_backup: Optional[Path] = None
+    snapshot_published = False
+    try:
+        import_pce_exports(run_dir, pce_stub_dir, _pce_import_environment(settings))
+
+        details["current_stage"] = "EXPORTING_RULESETS"
+        db.update_run_details(run_id, details)
+        rulesets_file = run_dir / "rulesets.csv"
+        runner.run(["ruleset-export", "--output-file", str(rulesets_file)])
+        rulesets = list(read_rows(rulesets_file, ("href", "enabled")))
+        if not rulesets or not any(row["href"] for row in rulesets):
+            raise RuntimeError("Complete policy export contains no ruleset")
+        href_file = run_dir / "ruleset_hrefs_all.csv"
+        write_rows(href_file, ["href"], ({"href": row["href"]} for row in rulesets if row["href"]))
+
+        details["current_stage"] = "EXPORTING_LABELS"
+        db.update_run_details(run_id, details)
+        labels_file = run_dir / "labels.csv"
+        runner.run(["label-export", "--output-file", str(labels_file)])
+        labels = list(read_rows(labels_file, LABEL_REQUIRED))
+
+        details["current_stage"] = "EXPORTING_RULE_INVENTORY"
+        db.update_run_details(run_id, details)
+        inventory_file = run_dir / "rules_inventory.csv"
+        runner.run([
+            "rule-export", "--ruleset-hrefs", str(href_file),
+            "--policy-version", settings.policy_version, "--output-file", str(inventory_file),
+        ])
+        inventory = list(read_rows(inventory_file, RULE_REQUIRED))
+        if not inventory:
+            raise RuntimeError("Complete policy export contains no rule")
+        # Re-read every contract before publishing any current-rule state.
+        _validate_policy_exports(run_dir)
+
+        details["current_stage"] = "INGESTING_REFERENCES"
+        db.update_run_details(run_id, details)
+        details["reference_ingest"] = ingest_reference(
+            db, run_dir / "export_wkld.derived.csv", run_dir / "export_iplists.csv", run_id,
+        )
+        details.update({
+            "ruleset_count": len(rulesets),
+            "label_count": len(labels),
+            "rule_count": len(inventory),
+            "reference_exports": [
+                name for name in (*POLICY_REFERENCE_EXPORTS, "export_wkld.l3sm.m.csv")
+                if (run_dir / name).is_file()
+            ],
+        })
+        details["artifacts"] = _record_artifacts(db, run_id, run_dir)
+        details.pop("current_stage", None)
+        details["status"] = "SUCCESS"
+        manifest = run_dir / "manifest.json"
+        manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
+
+        snapshot_backup = _publish_materialized_snapshot(run_dir, raw_root / "snapshot")
+        snapshot_published = True
+        db.complete_policy_snapshot(
+            run_id, run_id, inventory,
+            snapshot_path=str(raw_root / "snapshot"),
+            manifest_path=str(raw_root / "snapshot" / "manifest.json"),
+            run_details=details,
+        )
+        status = "SUCCESS"
+        if snapshot_backup and snapshot_backup.exists():
+            shutil.rmtree(snapshot_backup, ignore_errors=True)
+            snapshot_backup = None
+    except Exception as exc:
+        details["error"] = str(exc)
+        LOG.exception("Policy collection failed")
+        if snapshot_published:
+            _restore_materialized_snapshot(raw_root / "snapshot", snapshot_backup)
+            snapshot_published = False
+        raise
+    finally:
+        details["status"] = status
+        if status != "SUCCESS":
+            manifest = run_dir / "manifest.json"
+            manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
+            db.finish_run(run_id, status, details)
+        if snapshot_backup and snapshot_backup.exists():
+            shutil.rmtree(snapshot_backup, ignore_errors=True)
+        try:
+            send_summary(settings, details)
+        except Exception:
+            LOG.exception("SMTP summary failed without changing policy collection status")
+    return details
+
+
+def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
+            import_references: bool = False, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
+    """Transitional combined policy/reference/traffic collection."""
+    return _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        import_references=import_references, pce_stub_dir=pce_stub_dir,
+        run_type="COLLECTION", publish_policy_inventory=True,
+    )
+
+
+def collect_traffic(settings: Settings, available_end: date, initial_start: Optional[date] = None,
+                    no_wait: bool = False) -> Dict[str, object]:
+    """Collect the next durable, non-overlapping seven-day traffic window."""
+    db = Database(Path(settings.state_db)); db.initialize()
+    cursor = db.traffic_cursor("weekly")
+    cursor_start: Optional[date] = None
+    if cursor:
+        raw_start = (
+            cursor.get("in_progress_start")
+            if cursor.get("last_status") == "FAILED"
+            else cursor.get("last_successful_end")
+        )
+        if raw_start:
+            cursor_start = date.fromisoformat(str(raw_start))
+    if cursor_start and initial_start and cursor_start != initial_start:
+        raise ValueError(
+            f"traffic cursor requires start {cursor_start.isoformat()}, got {initial_start.isoformat()}"
+        )
+    traffic_start = cursor_start or initial_start or (
+        available_end - timedelta(days=settings.traffic_window_days)
+    )
+    traffic_end = traffic_start + timedelta(days=settings.traffic_window_days)
+    if traffic_end > available_end:
+        raise ValueError(
+            f"complete traffic window [{traffic_start},{traffic_end}) is not available at {available_end}"
+        )
+    result = _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        run_type=RUN_TYPE_TRAFFIC, publish_policy_inventory=False,
+        cursor_name="weekly",
+    )
+    if result["status"] != "SUCCESS":
+        raise RuntimeError(
+            f"Traffic window [{traffic_start},{traffic_end}) incomplete; cursor was not advanced"
+        )
+    return result
+
+
+def initialize_backfill_traffic(settings: Settings, target_end: date,
+                                backfill_id: str = "traffic-92-days") -> Dict[str, object]:
+    """Freeze the 92-day historical target and its oldest-first cursor."""
+    if not backfill_id.strip():
+        raise ValueError("backfill_id must not be empty")
+    start = target_end - timedelta(days=92)
+    db = Database(Path(settings.state_db)); db.initialize()
+    db.initialize_backfill(backfill_id, start.isoformat(), target_end.isoformat())
+    return dict(db.backfill_state(backfill_id) or {})
+
+
+def backfill_traffic(settings: Settings, backfill_id: str = "traffic-92-days",
+                     no_wait: bool = False) -> Dict[str, object]:
+    """Process at most one oldest-first backfill window."""
+    db = Database(Path(settings.state_db)); db.initialize()
+    state = db.backfill_state(backfill_id)
+    if state is None:
+        raise ValueError(f"unknown backfill: {backfill_id}; initialize it first")
+    if state["status"] == "COMPLETED":
+        return {"backfill_id": backfill_id, "status": "COMPLETED", "window_processed": False}
+    traffic_start = date.fromisoformat(str(state["next_window_start"]))
+    target_end = date.fromisoformat(str(state["backfill_target_end"]))
+    traffic_end = min(
+        traffic_start + timedelta(days=settings.traffic_window_days), target_end,
+    )
+    result = _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        run_type=RUN_TYPE_BACKFILL, publish_policy_inventory=False,
+        backfill_id=backfill_id,
+    )
+    if result["status"] != "SUCCESS":
+        raise RuntimeError(
+            f"Backfill window [{traffic_start},{traffic_end}) incomplete; cursor was not advanced"
+        )
+    result["backfill_status"] = str(
+        (db.backfill_state(backfill_id) or {}).get("status", "")
+    )
+    return result
+
+
+def _collect_traffic_run(
+    settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
+    import_references: bool = False, pce_stub_dir: Optional[Path] = None,
+    run_type: str = "COLLECTION", publish_policy_inventory: bool = True,
+    cursor_name: Optional[str] = None, backfill_id: Optional[str] = None,
+) -> Dict[str, object]:
     if traffic_end <= traffic_start:
         raise ValueError("traffic_end must be after traffic_start")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
@@ -40,7 +251,8 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
     run_dir.mkdir(parents=True, exist_ok=False)
     db = Database(Path(settings.state_db)); db.initialize()
     details: Dict[str, object] = {"run_id": run_id, "traffic_start": traffic_start.isoformat(), "traffic_end": traffic_end.isoformat(), "batches": [], "current_stage": "EXPORTING_RULESETS"}
-    db.begin_run(run_id, "COLLECTION", details)
+    details["run_type"] = run_type
+    db.begin_run(run_id, run_type, details)
     config_file = Path(settings.workloader_config_file) if settings.workloader_config_file else None
     runner = WorkloaderRunner(
         settings.workloader,
@@ -51,7 +263,39 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         rate_limit_max_retries=settings.rate_limit_max_retries,
     )
     status = "ERROR"
+    cursor_started = False
+    backfill_started = False
     try:
+        if cursor_name:
+            db.begin_traffic_window(
+                cursor_name, run_type, run_id,
+                traffic_start.isoformat(), traffic_end.isoformat(),
+            )
+            cursor_started = True
+        if backfill_id:
+            lease = db.begin_backfill_window(
+                backfill_id, run_id, settings.traffic_window_days,
+            )
+            backfill_started = True
+            if (
+                lease["window_start"] != traffic_start.isoformat()
+                or lease["window_end"] != traffic_end.isoformat()
+            ):
+                raise ValueError("backfill window provider changed during collection startup")
+        if import_references:
+            details["current_stage"] = "IMPORTING_PCE_REFERENCE"
+            db.update_run_details(run_id, details)
+            import_pce_exports(run_dir, pce_stub_dir, _pce_import_environment(settings))
+            details["reference_ingest"] = ingest_reference(
+                db, run_dir / "export_wkld.derived.csv",
+                run_dir / "export_iplists.csv", run_id,
+            )
+            details["reference_exports"] = [
+                "export_wkld.csv", "export_iplists.csv", "export_services.csv",
+                "export_wkld.derived.csv", "export_iplists.derived.csv",
+            ]
+            details["current_stage"] = "EXPORTING_RULESETS"
+            db.update_run_details(run_id, details)
         rulesets_file = run_dir / "rulesets.csv"
         runner.run(["ruleset-export", "--output-file", str(rulesets_file)])
         rulesets = list(read_rows(rulesets_file, ("href", "enabled")))
@@ -75,7 +319,11 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         runner.run(["rule-export", "--ruleset-hrefs", str(href_file), "--policy-version", settings.policy_version, "--output-file", str(inventory_file)])
         inventory = list(read_rows(inventory_file, RULE_REQUIRED))
         ruleset_metadata = _ruleset_metadata(inventory)
-        details["rules"] = db.upsert_rules(inventory, datetime.now(timezone.utc).isoformat())
+        if publish_policy_inventory:
+            details["rules"] = db.upsert_rules(inventory, datetime.now(timezone.utc).isoformat())
+        else:
+            details["rules"] = len(inventory)
+            details["policy_snapshot_updated"] = False
         scoped_rulesets, scope_exclusions = select_application_scoped_rulesets(
             inventory,
             application_labels,
@@ -291,17 +539,11 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         details["invalid_flows_by_port_count"] = sum(
             int(batch.get("invalid_flows_by_port", 0)) for batch in details["batches"]
         )
-        artifacts = []
-        for path in sorted(run_dir.iterdir()):
-            if path.is_file() and path.name != "manifest.json":
-                record = {"path": str(path), "sha256": sha256_file(path)}
-                artifacts.append(record)
-                db.add_artifact(run_id, path.suffix.lstrip(".") or "file", str(path), record["sha256"])
-        details["artifacts"] = artifacts
+        details["artifacts"] = _record_artifacts(db, run_id, run_dir)
         status = "SUCCESS" if (
             not oversized
             and not runtime_oversized
-            and summary["total"] > 0
+            and (summary["total"] > 0 or run_type == RUN_TYPE_TRAFFIC)
             and not summary["pending"]
             and not summary["expired"]
             and not summary["unknown"]
@@ -317,12 +559,101 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         details["status"] = status
         manifest = run_dir / "manifest.json"
         manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
-        db.finish_run(run_id, status, details)
+        if backfill_id and backfill_started:
+            db.update_backfill_window(
+                backfill_id, run_id, traffic_end.isoformat(), status == "SUCCESS",
+                run_details=details, run_status=status,
+                error=str(details.get("error", "")),
+            )
+        elif cursor_name and cursor_started:
+            db.finish_traffic_window(
+                cursor_name, run_type, run_id,
+                traffic_start.isoformat(), traffic_end.isoformat(),
+                status == "SUCCESS", str(details.get("error", "")),
+                run_details=details, run_status=status,
+            )
+        else:
+            db.finish_run(run_id, status, details)
         try:
             send_summary(settings, details)
         except Exception:
             LOG.exception("SMTP summary failed without changing collection status")
     return details
+
+
+def _pce_import_environment(settings: Settings) -> Dict[str, str]:
+    import_keys = {
+        "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH",
+        "EXECUTABLE", "CFG", "PCE_L1_NAME", "PCE_L3SM_NAME",
+        "PCE_L1_FQDN", "PCE_L3SM_FQDN", "RULES_RECERTIFY_ENV_FILE",
+        "BASE_SLEEP", "BACKOFF", "MAX_SLEEP", "JITTER", "TIMEOUT_SEC",
+        "MAX_ATTEMPTS", "POST_SUCCESS_PAUSE_SEC", "POST_FAILURE_PAUSE_SEC",
+        "VERIFY_OUTPUT_FILE",
+    }
+    environment = {key: value for key, value in os.environ.items() if key in import_keys}
+    environment.setdefault("EXECUTABLE", str(settings.workloader))
+    if settings.workloader_config_file:
+        environment.setdefault("CFG", settings.workloader_config_file)
+    return environment
+
+
+def _validate_policy_exports(run_dir: Path) -> None:
+    for name in POLICY_REFERENCE_EXPORTS:
+        path = run_dir / name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f"Policy export is missing or empty: {path}")
+    list(read_rows(run_dir / "export_wkld.derived.csv", (
+        "href", "hostname", "interfaces", "ip_with_default_gw", "app", "env", "managed",
+    )))
+    list(read_rows(run_dir / "export_iplists.csv", ("name", "include")))
+    list(read_rows(run_dir / "export_services.csv", ("name", "service_ports")))
+    list(read_rows(run_dir / "labels.csv", LABEL_REQUIRED))
+    list(read_rows(run_dir / "rulesets.csv", ("href", "enabled")))
+    list(read_rows(run_dir / "rules_inventory.csv", RULE_REQUIRED))
+
+
+def _record_artifacts(db: Database, run_id: str, run_dir: Path) -> List[Dict[str, str]]:
+    artifacts: List[Dict[str, str]] = []
+    for path in sorted(run_dir.iterdir()):
+        if not path.is_file() or path.name == "manifest.json":
+            continue
+        record = {"path": str(path), "sha256": sha256_file(path)}
+        artifacts.append(record)
+        db.add_artifact(run_id, path.suffix.lstrip(".") or "file", str(path), record["sha256"])
+    return artifacts
+
+
+def _publish_materialized_snapshot(run_dir: Path, snapshot_dir: Path) -> Optional[Path]:
+    """Copy a validated run and atomically replace raw/snapshot, retaining a rollback copy."""
+    temporary = snapshot_dir.parent / f".{snapshot_dir.name}-{run_dir.name}.tmp"
+    backup = snapshot_dir.parent / f".{snapshot_dir.name}-{run_dir.name}.backup"
+    if temporary.exists() or backup.exists():
+        raise RuntimeError(f"Stale snapshot staging path exists for run {run_dir.name}")
+    shutil.copytree(run_dir, temporary)
+    for source in run_dir.iterdir():
+        if source.is_file():
+            target = temporary / source.name
+            if not target.is_file() or sha256_file(source) != sha256_file(target):
+                shutil.rmtree(temporary, ignore_errors=True)
+                raise RuntimeError(f"Snapshot verification failed for {source.name}")
+    previous: Optional[Path] = None
+    if snapshot_dir.exists():
+        snapshot_dir.replace(backup)
+        previous = backup
+    try:
+        temporary.replace(snapshot_dir)
+    except Exception:
+        if previous and previous.exists():
+            previous.replace(snapshot_dir)
+        raise
+    return previous
+
+
+def _restore_materialized_snapshot(snapshot_dir: Path, backup: Optional[Path]) -> None:
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir)
+    if backup and backup.exists():
+        backup.replace(snapshot_dir)
 
 
 def _traffic_rule_limit_count(exc: WorkloaderError) -> Optional[int]:

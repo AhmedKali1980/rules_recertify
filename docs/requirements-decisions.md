@@ -187,9 +187,10 @@ Label expressions use AND within a selector group, OR between groups, then apply
 exclusions and ruleset scope.
 
 Expand `All Workloads` against the ruleset scope rather than displaying the
-literal selector. For `app:X;env:Y`, include only reference workloads whose
-`app=X` and `env=Y`, formatted one `hostname (selected_ip)` per line. For
-`env:NULL`, use the environment requested for the report.
+literal selector. Apply every supported dimension present in `ruleset_scope`
+(`app`, `env`, `loc`, and `role`) to the workload reference. Format one workload
+as `short_hostname (ip1;ip2)`, falling back to `name` when `short_hostname` is
+empty. For `env:NULL`, use the environment paired with the selected application.
 
 ### DEC-011 — Workload address selection
 
@@ -211,25 +212,30 @@ IPv6 is expected only on managed workloads but must be parsed rather than reject
 
 ### DEC-012 — IP Lists and Any
 
-Create one expanded entry per IP-list value, retaining the IP-list name in the
-human report. Preserve address/CIDR/range text losslessly in normalized storage so
-future target adaptations remain possible. Represent Any as two entries:
-`0.0.0.0/0` and `::/0`.
+Resolve report IP Lists from the complete `export_iplists.csv`, not from the
+`NZ3_*`-only derived file. Split `include` on `;`, remove each inline `#comment`,
+and retain the IP-list name in the human report. Preserve address/CIDR/range
+text in normalized storage. Represent Any as `0.0.0.0/0` and `::/0`; its address
+count is `2^32 + 2^128`, stored as exact decimal text in Excel.
 
 ## 5. Derived data contracts
 
 ### DEC-013 — Derived IP-list CSV
 
-`export_iplists.derived.csv` is retained as a normalized optional input with:
+`export_iplists.derived.csv` is retained as a normalized derived artifact with:
 
 ```text
 name
 include
 ```
 
-The raw source is produced by Workloader `ipl-export`. Release 1 may use the
-derived file for resolution; if it is not needed, it remains an auditable
-intermediate rather than being removed.
+The raw source is produced by Workloader `ipl-export`. This derived file is
+limited to `NZ3_*` and supports workload/subnet correlation. Report selector
+resolution deliberately uses the complete raw export instead.
+The report prefers the newest non-empty timestamped run-specific raw export,
+explicitly excluding technical directories such as `preflight`, and records
+its path in `Presentation`; the normalized SQLite table is a fallback for
+manual or legacy runs without an available raw file.
 
 ### DEC-014 — Derived workload CSV
 
@@ -277,9 +283,9 @@ remaining columns. Derive the enriched fields as follows:
 - `SUBNET`: the precise member subnet from that matching `NZ3_` IP List which
   contains the selected IP address.
 
-If several `NZ3_` lists or subnets contain an address, retain every unique match
-in deterministic order rather than selecting an arbitrary first match. Boolean
-spelling and source encoding remain adapter-validation details.
+If several `NZ3_` lists or subnets contain an address, use the first workload IP
+and then the first matching IP-list/network in source order. Boolean spelling
+and source encoding remain adapter-validation details.
 
 ## 6. Workbook contract baseline
 
@@ -302,6 +308,13 @@ consumer-required sheet.
 version contains the useful canonical columns; exact target column order and
 types will evolve after downstream ingestion testing.
 
+It also contains `nb_src_ips`, `nb_dst_ips`, and `nb_ports`. Address counts are
+the cardinality of the union represented by expanded IPs, CIDRs, and ranges;
+overlaps are not counted twice and IPv6 is ignored for this corporate IPv4
+scope. Port counts include distinct explicit TCP/UDP ports and expand inclusive
+ranges. `All Services` expands to `0-65535 TCP` and `0-65535 UDP`, for 131072
+protocol/port pairs; portless protocols do not add a numeric count.
+
 ### DEC-016 — Required application arguments
 
 The command requires:
@@ -310,7 +323,12 @@ The command requires:
 - `logical_application_name`: mandatory display name, passed as one quoted shell
   argument when it contains whitespace or apostrophes;
 - one or more Application label values;
-- exactly one Environment label value.
+- exactly one Environment value per Application value, paired by CLI order.
+
+For a scoped ruleset, `ruleset_scope` must match an exact requested pair. For an
+unscoped ruleset, one Source or Destination side must contain the pair, or the
+Application label alone (meaning every requested environment for that
+application). Labels split across opposite sides do not form a pair.
 
 Never use shell `eval`; pass arguments as an array so quotes and apostrophes are
 data rather than command syntax.
@@ -318,9 +336,9 @@ data rather than command syntax.
 The representative KEAR identifier format is a hyphenated UUID such as
 `51be4bf9-2080-432f-9d02-1c0cf0f251d7`, without a `KEAR-` prefix. Input validation
 only requires a non-empty value; normalize it to lowercase. The mandatory KEAR ID
-appears in every workbook sheet and, together with the Environment, in the
-workbook filename. A safe pattern is
-`rules_recertify_<kear_id>_<environment>_<as-of>.xlsx`.
+appears in every workbook sheet and, together with the ordered distinct
+environments, in the workbook filename. A safe pattern is
+`rules_recertify_<kear_id>_<env1-env2>_<as-of>.xlsx`.
 
 ## 7. Persistence and operations
 
@@ -328,13 +346,13 @@ workbook filename. A safe pattern is
 
 Use SQL compatible with SQLite 3.24 or newer for the single-host deployment. The
 production SQLite version is `3.26.0-20.el8_10`, which meets this requirement.
-Keep immutable raw artifacts alongside the database and consider S3 later. The analytical retention
-period is configurable with a minimum and default of **200 days**. It may be
-raised to 365 days without a code change, but configuration validation rejects a
-value below 200.
+Keep auditable raw artifacts alongside the database and consider external
+storage later. The analytical retention minimum and default are **550 days**;
+the default report lookback is **548 days**. This provides an operational margin
+over the required 18 months.
 
-Initial backfill covers up to 90 available PCE days. A complete 180-day view only
-becomes possible after at least another 90 successfully covered daily windows.
+The initial backfill covers the 92 PCE days fixed at initialization. Persistent
+weekly and backfill cursors advance only after a complete successful window.
 Coverage is always reported honestly; no-hit certification requires complete
 coverage for the claimed lookback.
 
@@ -378,6 +396,34 @@ Use the policy representation returned by the established Workloader export
 workflow. `draft` hrefs are expected in this context and do not require a separate
 active/draft comparison in release 1. Record `--policy-version` and the href in
 the manifest for traceability.
+
+### DEC-020 — Daily policy-only publication
+
+Use `collect-policy` for the daily complete policy inventory. It exports all
+references, labels, rulesets, and rules without requesting traffic. Rule
+presence changes only when the entire inventory and every required CSV have
+been validated and the complete snapshot is committed successfully. Failed or
+partial runs never mark a rule absent. The successful run is materialized under
+`var/raw/snapshot`; the historical combined `collect` command remains available
+only as a transitional compatibility path until traffic collection is split.
+
+### DEC-021 — Weekly cursor-controlled traffic collection
+
+Use `collect-traffic` for one seven-day half-open window per invocation. A fresh
+minimal ruleset/label/rule export determines traffic eligibility but never
+replaces the current policy inventory. SQLite is authoritative for continuity:
+the next start equals the previous successful end, and an incomplete or failed
+window retains its original boundaries for an identical retry. Only complete
+success advances the cursor; retention pruning remains 550 days.
+
+### DEC-022 — Frozen 92-day backfill
+
+Initialize the traffic backfill once by freezing its target and deriving its
+start at target minus 92 days. Process one oldest-first window per execution,
+with a seven-day maximum and a potentially partial final window. Persist
+`PENDING`, `RUNNING`, `FAILED`, and `COMPLETED`; failure never advances the
+cursor, completion stops subsequent executions, and duplicate initialization is
+rejected. Weekly and backfill cursors coexist but share the traffic engine.
 
 ## 8. Residual implementation discoveries
 

@@ -310,6 +310,15 @@ historical archives. Verified Sunday archives expire after 550 days. The
 `restore-archive` command safely stages and atomically restores one archive;
 `purge-archives` deletes expired files together with their SQLite metadata.
 
+Production orchestration remains outside the Python business workflow. Three
+shell entry points share `collection_common.sh` and the same non-blocking lock:
+daily policy, weekly traffic, and backfill. The weekly wrapper is cursor-aware,
+so the Sunday 02:00 retry is harmless after a 01:00 success. The backfill
+wrapper combines a Monday-Saturday cron with a persisted 47-hour run gate.
+`check-collection.sh` exposes one monitoring line containing both run states,
+snapshot/cursor freshness, backfill progress, archive presence, lock state and
+disk utilization.
+
 ## 5. Historical accumulation and 18-month guarantee
 
 ### 5.1 Recommended persistence

@@ -1,0 +1,7 @@
+# Rules Recertify production schedule (server local time).
+# Install for the service account only after the supervised manual acceptance.
+10 0 * * * cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/daily-policy-collect.sh
+0 1 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
+0 2 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
+# The wrapper is called daily outside Sunday and persists a 47-hour gate, yielding one attempt every two days.
+0 3 * * 1-6 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/backfill-traffic.sh

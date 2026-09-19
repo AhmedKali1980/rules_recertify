@@ -436,6 +436,17 @@ the raw source is deleted. Failed, backfill, non-Sunday traffic and daily policy
 runs are not historical archives. Consumers prefer the snapshot but retain a
 read-only fallback for legacy timestamped raw directories during migration.
 
+### DEC-024 — Production scheduling and shared operational lock
+
+Use server-local cron time: daily policy at 00:10, Sunday traffic at 01:00 and
+its retry at 02:00. The retry is cursor-aware and is a successful no-op after a
+successful first attempt. Invoke the backfill wrapper Monday through Saturday
+at 03:00; its persisted 47-hour gate implements one attempt every two days
+without overlapping Sunday traffic. All wrappers share one non-blocking lock
+and collision exit code 75. Activate cron only after supervised manual
+acceptance. Monitoring covers policy/traffic status, snapshot and cursor age,
+backfill progress, Sunday archive, lock and server disk metrics.
+
 ## 8. Residual implementation discoveries
 
 No product-owner decision remains open from the R1–R8 clarification round. The

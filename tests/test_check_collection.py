@@ -3,130 +3,68 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
-from rules_recertify.history.database import Database
+from rules_recertify.history.database import Database, RUN_TYPE_POLICY, RUN_TYPE_TRAFFIC
 
 
 class CheckCollectionTest(unittest.TestCase):
-    def test_success_is_reported_on_one_line(self):
+    def _environment(self, root):
+        database_path=root/"state.sqlite"; raw=root/"raw"; snapshot=raw/"snapshot"
+        config=root/"config.json"; env_file=root/".env"
+        config.write_text(json.dumps({"pce":"pce","state_db":str(database_path),"raw_dir":str(raw)}))
+        env_file.write_text(""); env_file.chmod(0o600)
+        database=Database(database_path); database.initialize()
+        database.begin_run("policy-1",RUN_TYPE_POLICY,{})
+        snapshot.mkdir(parents=True); (snapshot/"manifest.json").write_text("{}")
+        database.complete_policy_snapshot(
+            "policy-1","policy-1",[{"rule_href":"/r/1","ruleset_href":"/rs/1"}],
+            snapshot_path=str(snapshot),manifest_path=str(snapshot/"manifest.json"),run_details={},
+        )
+        database.begin_run("traffic-1",RUN_TYPE_TRAFFIC,{})
+        database.begin_traffic_window("weekly",RUN_TYPE_TRAFFIC,"traffic-1","2026-09-13","2026-09-20")
+        database.finish_traffic_window(
+            "weekly",RUN_TYPE_TRAFFIC,"traffic-1","2026-09-13","2026-09-20",True,
+            run_details={},run_status="SUCCESS",
+        )
+        archive=raw/"archives"/"traffic-1.tar.gz"; archive.parent.mkdir(); archive.write_bytes(b"archive")
+        database.record_archive("traffic-1","TRAFFIC",str(archive),"abc",7,"2028-01-01")
+        database.initialize_backfill("traffic-92-days","2026-06-20","2026-09-20")
+        environment=dict(os.environ)
+        environment.update({
+            "RULES_RECERTIFY_CONFIG":str(config),"RULES_RECERTIFY_ENV_FILE":str(env_file),
+            "RULES_RECERTIFY_LOCK":str(root/"collect.lock"),
+            "RULES_RECERTIFY_NOW":"2026-09-20T01:30:00+00:00",
+        })
+        return database,environment,archive
+
+    def test_healthy_production_state_is_reported_on_one_line(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database_path = root / "state.sqlite"
-            raw_dir = root / "raw"
-            config = root / "config.json"
-            env_file = root / ".env"
-            lock = root / "collect.lock"
-            config.write_text(json.dumps({
-                "pce": "pce",
-                "state_db": str(database_path),
-                "raw_dir": str(raw_dir),
-            }), encoding="utf-8")
-            env_file.write_text("", encoding="utf-8")
-            env_file.chmod(0o600)
-
-            database = Database(database_path)
-            database.initialize()
-            details = {
-                "status": "SUCCESS", "batch_count": 1,
-                "batches": [{"batch": 1}], "total": 2, "completed": 2,
-                "pending": 0, "expired": 0, "unknown": 0,
-            }
-            database.begin_run("run-1", "COLLECTION", details)
-            database.finish_run("run-1", "SUCCESS", details)
-            run_dir = raw_dir / "run-1"
-            run_dir.mkdir(parents=True)
-            (run_dir / "manifest.json").write_text(json.dumps(details), encoding="utf-8")
-
-            environment = dict(os.environ)
-            environment.update({
-                "RULES_RECERTIFY_CONFIG": str(config),
-                "RULES_RECERTIFY_ENV_FILE": str(env_file),
-                "RULES_RECERTIFY_LOCK": str(lock),
-            })
-            result = subprocess.run(
-                ["bash", "scripts/check-collection.sh"], env=environment,
-                check=False, capture_output=True, text=True,
-            )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(result.stdout.splitlines()), 1)
-        self.assertIn("OK run=run-1", result.stdout)
-        self.assertIn("completed=2/2", result.stdout)
-        self.assertIn("scope_skipped=0 oversized_skipped=0", result.stdout)
+            _,environment,_=self._environment(Path(directory))
+            result=subprocess.run(["bash","scripts/check-collection.sh"],env=environment,
+                                  capture_output=True,text=True,check=False)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual(len(result.stdout.splitlines()),1)
+        self.assertIn("OK policy=SUCCESS:policy-1 traffic=SUCCESS:traffic-1",result.stdout)
+        self.assertIn("weekly_cursor=2026-09-20",result.stdout)
+        self.assertIn("backfill=PENDING:2026-06-20/2026-09-20",result.stdout)
+        self.assertIn("archive=VERIFIED",result.stdout)
+        self.assertIn("disk_used=",result.stdout)
 
     def test_unlocked_running_run_is_critical(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database_path = root / "state.sqlite"
-            config = root / "config.json"
-            env_file = root / ".env"
-            config.write_text(json.dumps({
-                "pce": "pce", "state_db": str(database_path),
-                "raw_dir": str(root / "raw"),
-            }), encoding="utf-8")
-            env_file.write_text("", encoding="utf-8")
-            env_file.chmod(0o600)
-            database = Database(database_path)
-            database.initialize()
-            database.begin_run("run-interrupted", "COLLECTION", {})
+            database,environment,_=self._environment(Path(directory))
+            database.begin_run("interrupted",RUN_TYPE_POLICY,{})
+            result=subprocess.run(["bash","scripts/check-collection.sh"],env=environment,
+                                  capture_output=True,text=True,check=False)
+        self.assertEqual(result.returncode,2)
+        self.assertIn("interrupted_runs=1",result.stdout)
 
-            environment = dict(os.environ)
-            environment.update({
-                "RULES_RECERTIFY_CONFIG": str(config),
-                "RULES_RECERTIFY_ENV_FILE": str(env_file),
-                "RULES_RECERTIFY_LOCK": str(root / "collect.lock"),
-            })
-            result = subprocess.run(
-                ["bash", "scripts/check-collection.sh"], env=environment,
-                check=False, capture_output=True, text=True,
-            )
-
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(len(result.stdout.splitlines()), 1)
-        self.assertIn("CRITICAL run=run-interrupted", result.stdout)
-        self.assertIn("interrupted_collection", result.stdout)
-
-    def test_error_summarizes_completed_batches_and_failure_stage(self):
+    def test_missing_expected_sunday_archive_is_critical(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            database_path = root / "state.sqlite"
-            raw_dir = root / "raw"
-            config = root / "config.json"
-            env_file = root / ".env"
-            config.write_text(json.dumps({
-                "pce": "pce", "state_db": str(database_path),
-                "raw_dir": str(raw_dir),
-            }), encoding="utf-8")
-            env_file.write_text("", encoding="utf-8")
-            env_file.chmod(0o600)
-            details = {
-                "status": "ERROR", "batch_count": 32,
-                "current_batch": 5, "current_stage": "SUBMITTING",
-                "batches": [
-                    {"batch": number, "total": 500, "completed": 500}
-                    for number in range(1, 5)
-                ],
-                "error": "Workloader was terminated by SIGKILL",
-            }
-            database = Database(database_path)
-            database.initialize()
-            database.begin_run("run-error", "COLLECTION", details)
-            database.finish_run("run-error", "ERROR", details)
-            run_dir = raw_dir / "run-error"
-            run_dir.mkdir(parents=True)
-            (run_dir / "manifest.json").write_text(json.dumps(details), encoding="utf-8")
-            environment = dict(os.environ)
-            environment.update({
-                "RULES_RECERTIFY_CONFIG": str(config),
-                "RULES_RECERTIFY_ENV_FILE": str(env_file),
-                "RULES_RECERTIFY_LOCK": str(root / "collect.lock"),
-            })
-            result = subprocess.run(
-                ["bash", "scripts/check-collection.sh"], env=environment,
-                check=False, capture_output=True, text=True,
-            )
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("batches=4/32 completed=2000/2000", result.stdout)
-        self.assertIn("failed_at=5/SUBMITTING", result.stdout)
+            _,environment,archive=self._environment(Path(directory)); archive.unlink()
+            result=subprocess.run(["bash","scripts/check-collection.sh"],env=environment,
+                                  capture_output=True,text=True,check=False)
+        self.assertEqual(result.returncode,2)
+        self.assertIn("archive=MISSING:traffic-1",result.stdout)

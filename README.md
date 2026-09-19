@@ -164,6 +164,15 @@ tester une restauration et d'appliquer la rétention :
   --as-of 2028-03-23
 ```
 
+Les trois wrappers de production sont `daily-policy-collect.sh`,
+`weekly-traffic-collect.sh` et `backfill-traffic.sh`; ils partagent un verrou
+non bloquant. Le cron de référence (`config/rules-recertify.cron`) lance la
+policy à 00:10, le trafic le dimanche à 01:00 avec retry à 02:00, puis vérifie
+hors dimanche si l'échéance backfill de deux jours est atteinte.
+`check-collection.sh` supervise les derniers runs, l'âge du snapshot, le
+curseur, le backfill, l'archive dominicale, le verrou et l'espace disque. Le
+runbook complet est dans `docs/integration-guide.md`.
+
 L'ancienne commande `collect` reste temporairement disponible pour le workflow
 historique combinant policy et trafic. Elle est transitoire et sera remplacée par
 les commandes dédiées des étapes suivantes ; `--skip-pce-import` ne concerne que

@@ -34,6 +34,7 @@ rm -f "$TARGET/pyproject.toml"
 install -d -m 0750 \
   "$TARGET/var/state" \
   "$TARGET/var/raw" \
+  "$TARGET/var/raw/archives" \
   "$TARGET/var/output" \
   "$TARGET/var/logs"
 
@@ -42,6 +43,10 @@ install -d -m 0750 \
 chmod 0755 "$TARGET/scripts/install-prod.sh" \
   "$TARGET/scripts/rules-recertify" \
   "$TARGET/scripts/daily-collect.sh" \
+  "$TARGET/scripts/collection_common.sh" \
+  "$TARGET/scripts/daily-policy-collect.sh" \
+  "$TARGET/scripts/weekly-traffic-collect.sh" \
+  "$TARGET/scripts/backfill-traffic.sh" \
   "$TARGET/scripts/check-collection.sh" \
   "$TARGET/scripts/import-pce-reference.sh" \
   "$TARGET/scripts/workloader_common.sh" \

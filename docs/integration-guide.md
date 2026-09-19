@@ -430,25 +430,32 @@ grep -E 'Traffic ruleset (selected|excluded)' var/logs/rules-recertify-*.jsonl
 
 ### 5.2 Initial backfill
 
-The PCE exposes about 90 days. Start with smaller windows to validate PCE load,
-then increase cautiously. Each window must be non-overlapping. For example, run
-sequential 7-day windows, newest first. Never sum overlapping counts.
+The frozen 92-day backfill described above is processed oldest first, one window
+of at most seven days per eligible wrapper execution. Never create ad-hoc or
+overlapping windows outside its persisted cursor.
 
-### 5.3 Cron
+### 5.3 Production schedule
 
-Example for a daily launch at 03:15 server time (ensure the host timezone and
-window-generation wrapper are reviewed):
+The reviewed schedule is versioned in `config/rules-recertify.cron` and uses the
+server local timezone:
 
 ```cron
-15 3 * * * cd /DATA/mco/illumio-mco/rules_recertify && /DATA/mco/illumio-mco/rules_recertify/scripts/daily-collect.sh
+10 0 * * * cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/daily-policy-collect.sh
+0 1 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
+0 2 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
+0 3 * * 1-6 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/backfill-traffic.sh
 ```
 
-Use the supplied wrapper template, which computes adjacent UTC dates, activates
-the virtual environment, obtains a non-blocking lock, and preserves the collector
-exit code.
+The 02:00 traffic entry is the one-hour retry. After a 01:00 success, the
+wrapper reads the weekly cursor and exits successfully without collecting the
+following window. The backfill wrapper is invoked Monday through Saturday and
+uses SQLite run history as a persistent 47-hour gate, yielding at most one
+attempt every two days and excluding Sunday.
 
-The repository does not modify crontab automatically. Install the reviewed line
-under the service account only after the PCE integration test succeeds.
+All wrappers source `collection_common.sh`, activate the configured virtual
+environment and acquire the same non-blocking lock. A collision exits with code
+75 and never starts another PCE operation. The repository does not modify
+crontab automatically: install it only after supervised manual acceptance.
 
 ## 6. On-demand report
 
@@ -632,9 +639,77 @@ Run shadow collection for at least one week. Validate disk growth, PCE load,
 completion time, polling values, recovery after interruption, email summaries,
 and gap/backfill handling before enabling the full cron schedule.
 
-## 8. Runtime artifacts and recovery
+## 8. Production runbook
 
-- `var/raw/<run_id>`: immutable run CSVs, Workloader log, and manifest.
+### 8.1 Start and supervised acceptance
+
+Keep cron disabled for the first execution. Run `validate-config`, `init-db`,
+`daily-policy-collect.sh`, `weekly-traffic-collect.sh`, and
+`check-collection.sh` manually under the service account. Initialize the
+historical process once with `init-backfill-traffic`, then test
+`backfill-traffic.sh`. Confirm PCE load, snapshot contents, cursor boundary,
+Sunday archive restoration, logs and monitoring before installing
+`config/rules-recertify.cron`. Finally inspect `crontab -l` and the system cron
+log after the first scheduled executions.
+
+### 8.2 Stop and resume
+
+To stop, comment or remove the four crontab entries. Do not kill a healthy
+collector unless required; the shared lock identifies an active run. To resume,
+run `check-collection.sh`, reconcile an interrupted `RUNNING` state, and rerun
+the failed wrapper manually. Traffic and backfill cursors retain failed window
+boundaries, so recovery replays the same window without a silent gap.
+
+### 8.3 Incident handling and supervision
+
+`check-collection.sh` emits one Nagios-compatible line and checks policy and
+traffic status, interrupted runs, snapshot age (26 hours by default), cursor age
+(192 hours), backfill progress, expected Sunday archive, lock and disk usage.
+Exit codes are 0/1/2/3 for OK/WARNING/CRITICAL/UNKNOWN. Override freshness with
+`RULES_RECERTIFY_SNAPSHOT_MAX_HOURS` and
+`RULES_RECERTIFY_TRAFFIC_MAX_HOURS`. Disk utilization is reported to the server
+monitoring platform; the application does not impose a second disk threshold.
+
+For failed policy, fix the cause and rerun `daily-policy-collect.sh`; the prior
+snapshot remains current. For traffic or backfill, rerun the same wrapper and
+never manually move its cursor. A held lock with an active run is a warning. A
+database `RUNNING` row while the lock is free is critical and must be examined
+in structured and Workloader logs before recovery.
+
+### 8.4 Archive restoration
+
+Restore into an isolated directory and never overwrite the live snapshot:
+
+```bash
+./scripts/rules-recertify --config config/local.json restore-archive \
+  --archive var/raw/archives/<run_id>.tar.gz \
+  --target-dir /tmp/rules-recertify-restore
+```
+
+Compare the restored manifest and the SHA stored in `run_archives` before using
+its contents for investigation or recovery.
+
+### 8.5 Backfill completion
+
+When `next_window_start` reaches the frozen target, the monitor reports
+`COMPLETED` and `backfill-traffic.sh` becomes a successful no-op. Remove only
+the backfill cron entry after verifying all 92 days; retain daily policy and
+Sunday traffic schedules.
+
+### 8.6 Rollback
+
+Before upgrade, disable cron, reconcile the shared lock, checkpoint and back up
+SQLite, and retain the current release and snapshot. Deploy with
+`install-prod.sh`, run migrations/tests and a supervised policy collection. To
+roll back, disable cron again, restore the previous application tree and its
+matching SQLite backup, restore the matching snapshot backup when necessary,
+run `check-collection.sh`, and only then re-enable cron. Never combine newer
+SQLite state with an older binary without a tested migration path.
+
+## 9. Runtime artifacts and recovery
+
+- `var/raw/snapshot`: current materialized policy references and manifest.
+- `var/raw/archives/<run_id>.tar.gz`: verified retained Sunday traffic runs.
 - `var/state/rules_recertify.sqlite`: durable canonical state.
 - `var/logs`: structured JSON-line application logs.
 - `var/output`: on-demand workbooks.
@@ -648,7 +723,7 @@ existing usage result without re-querying the PCE:
   /data/workloader-rule-usage.csv
 ```
 
-## 9. Production ownership and upgrade checklist
+## 10. Production ownership and upgrade checklist
 
 Before the first real collection, verify:
 

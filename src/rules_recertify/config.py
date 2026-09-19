@@ -7,6 +7,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from .reporting.dangerous_ports import PORT_CATALOGS
+
 
 class ConfigurationError(ValueError):
     """Raised when configuration is invalid."""
@@ -48,7 +50,7 @@ class Settings:
     raw_dir: str = "var/raw"
     output_dir: str = "var/output"
     log_dir: str = "var/logs"
-    traffic_window_days: int = 1
+    traffic_window_days: int = 7
     traffic_batch_size: int = 100
     traffic_max_results: int = 10000
     query_initial_delay_minutes: int = 30
@@ -58,10 +60,12 @@ class Settings:
     rate_limit_retry_delay_minutes: int = 10
     rate_limit_max_retries: int = 12
     empty_scope_ruleset_name_patterns: Tuple[str, ...] = ()
-    retention_days: int = 200
-    default_lookback_days: int = 180
+    retention_days: int = 550
+    default_lookback_days: int = 548
     policy_version: str = "draft"
     smtp_enabled: bool = False
+    dangerous_port_lists: Tuple[str, ...] = ("PORTS_TO_CONTROL", "PORTS_TO_ERADICATE")
+    permissive_rule_max_ips: int = 255
 
     @property
     def workloader(self) -> Path:
@@ -91,12 +95,21 @@ class Settings:
             raise ConfigurationError(
                 "empty_scope_ruleset_name_patterns must contain non-empty strings"
             )
-        if self.retention_days < 200:
-            raise ConfigurationError("retention_days must be at least 200")
+        if self.retention_days < 550:
+            raise ConfigurationError("retention_days must be at least 550")
         if not 1 <= self.default_lookback_days <= self.retention_days:
             raise ConfigurationError("default_lookback_days must fit retention")
         if self.policy_version not in {"active", "draft"}:
             raise ConfigurationError("policy_version must be active or draft")
+        if not isinstance(self.dangerous_port_lists, (list, tuple)):
+            raise ConfigurationError("dangerous_port_lists must be a list or comma-separated string")
+        unknown_port_lists = set(self.dangerous_port_lists) - set(PORT_CATALOGS)
+        if unknown_port_lists:
+            raise ConfigurationError(
+                "unknown dangerous_port_lists: " + ", ".join(sorted(unknown_port_lists))
+            )
+        if self.permissive_rule_max_ips < 1:
+            raise ConfigurationError("permissive_rule_max_ips must be positive")
 
 
 def load_settings(path: Path, dotenv: Optional[Path] = None) -> Settings:
@@ -111,6 +124,10 @@ def load_settings(path: Path, dotenv: Optional[Path] = None) -> Settings:
     unknown = set(data) - allowed
     if unknown:
         raise ConfigurationError(f"Unknown configuration keys: {', '.join(sorted(unknown))}")
+    if isinstance(data.get("dangerous_port_lists"), str):
+        data["dangerous_port_lists"] = tuple(
+            item.strip() for item in data["dangerous_port_lists"].split(",") if item.strip()
+        )
     env_map = {
         "pce": "PCE",
         "workloader_dir": "WORKLOADER_DIR",

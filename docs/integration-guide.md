@@ -264,6 +264,30 @@ Successful windows therefore meet exactly at their exclusive boundaries, with
 neither overlap nor a missing day. Usage UPSERT keys preserve idempotence when a
 failed window is replayed. Retention pruning uses the configured 550 days.
 
+### 5.2.1 Raw storage and recovery
+
+The current complete policy materialization is always
+`var/raw/snapshot/`; successful policy staging directories are removed after
+SQLite publication. A successful weekly traffic run whose exclusive end is a
+Sunday is retained as `var/raw/archives/<run_id>.tar.gz`. Before the raw source
+is removed, the archive is fully reopened and validated, hashed with SHA-256,
+atomically published, and registered in `run_archives` in the same transaction
+that advances the weekly cursor. Archive failure therefore prevents cursor
+advancement. Failed runs and backfill runs are not archived.
+
+Operators can validate disaster recovery without touching the live snapshot:
+
+```bash
+./scripts/rules-recertify --config config/local.json restore-archive \
+  --archive var/raw/archives/<run_id>.tar.gz --target-dir /tmp/restore-test
+./scripts/rules-recertify --config config/local.json purge-archives \
+  --as-of 2028-03-23
+```
+
+The purge command removes verified archive records whose `retained_until` is
+strictly before the supplied date. Reports prefer `var/raw/snapshot`; legacy
+timestamped raw directories are accepted only as a migration fallback.
+
 ### 5.3 Initial 92-day traffic backfill
 
 Freeze the target once. The command derives and persists `backfill_start` as

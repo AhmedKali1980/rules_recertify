@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from .archives import purge_expired_archives, restore_archive
 from .collection import (
     backfill_traffic, collect, collect_policy, collect_traffic,
     initialize_backfill_traffic,
@@ -75,6 +76,12 @@ def parser() -> argparse.ArgumentParser:
         help="Identifier previously created by init-backfill-traffic",
     )
     backfill.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
+    restore = commands.add_parser("restore-archive", help="Restore and verify one raw tar.gz archive")
+    restore.add_argument("--archive", type=Path, required=True)
+    restore.add_argument("--target-dir", type=Path,
+                         help="Parent directory for restored run (default: raw_dir/restored)")
+    purge = commands.add_parser("purge-archives", help="Delete archives past retained_until")
+    purge.add_argument("--as-of", type=_date, default=date.today())
     ingest = commands.add_parser("ingest-usage")
     ingest.add_argument("csv", type=Path)
     reference = commands.add_parser("ingest-reference")
@@ -158,6 +165,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 backfill_traffic(settings, args.backfill_id, args.no_wait),
                 indent=2, sort_keys=True,
             )); return 0
+        if args.command == "restore-archive":
+            target_dir = args.target_dir or Path(settings.raw_dir) / "restored"
+            print(restore_archive(args.archive, target_dir)); return 0
+        if args.command == "purge-archives":
+            db.initialize()
+            print(json.dumps(purge_expired_archives(db, args.as_of), indent=2)); return 0
         if args.command == "ingest-usage":
             db.initialize(); run_id = "manual-" + uuid.uuid4().hex
             db.begin_run(run_id, "MANUAL_USAGE", {"csv": str(args.csv)})

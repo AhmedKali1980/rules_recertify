@@ -132,6 +132,38 @@ initialisation avec le même identifiant est refusée et une exécution après
 `COMPLETED` s'arrête sans créer de run. Le curseur backfill est indépendant du
 curseur hebdomadaire.
 
+## Snapshot raw et archives
+
+Le stockage cible ne dépend plus de la présence durable des répertoires de run
+décompressés. Le dernier inventaire policy complet est publié atomiquement dans
+`var/raw/snapshot/`. Il contient les workloads, IP Lists, services, labels,
+rulesets, règles, fichiers dérivés et le manifeste validé. Une fois cette
+publication et la transaction SQLite terminées, le répertoire policy temporaire
+est supprimé.
+
+Une collecte trafic hebdomadaire terminée avec succès et dont la borne de fin
+est un dimanche est conservée sous `var/raw/archives/<run_id>.tar.gz` pendant
+550 jours. L'archive est d'abord écrite sous un nom temporaire, relue en entier,
+contrôlée (chemins sûrs et présence du manifeste), puis son SHA-256 est calculé
+avant le renommage atomique. Les métadonnées sont enregistrées avec la fin de
+fenêtre SQLite avant la suppression du répertoire source. Les runs policy,
+backfill, trafic non dominical et les runs en échec ne créent pas d'archive
+historique.
+
+`report`, `report-batch` et `search-rules` utilisent en priorité le snapshot
+matérialisé. Les anciens sous-répertoires raw horodatés restent lisibles comme
+fallback pendant la transition. Deux commandes d'exploitation permettent de
+tester une restauration et d'appliquer la rétention :
+
+```bash
+./scripts/rules-recertify --config config/local.json restore-archive \
+  --archive var/raw/archives/<run_id>.tar.gz \
+  --target-dir /tmp/rules-recertify-restore
+
+./scripts/rules-recertify --config config/local.json purge-archives \
+  --as-of 2028-03-23
+```
+
 L'ancienne commande `collect` reste temporairement disponible pour le workflow
 historique combinant policy et trafic. Elle est transitoire et sera remplacée par
 les commandes dédiées des étapes suivantes ; `--skip-pce-import` ne concerne que

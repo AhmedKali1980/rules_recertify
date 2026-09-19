@@ -2,6 +2,7 @@ import csv, json, os, sqlite3, stat, tempfile, unittest
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
+from rules_recertify.archives import restore_archive
 from rules_recertify.collection import (
     _validated_usage_rows, backfill_traffic, collect, collect_policy, collect_traffic,
     initialize_backfill_traffic,
@@ -140,6 +141,14 @@ class CollectionTest(unittest.TestCase):
    self.assertEqual(backfill,('2026-06-27','PENDING'))
    self.assertEqual(weekly_cursor,'2026-09-20')
    self.assertEqual(usage,2)
+   archives=list((root/'raw'/'archives').glob('*.tar.gz'))
+   self.assertEqual(len(archives),1)
+   restored=restore_archive(archives[0],root/'restored')
+   self.assertTrue((restored/'manifest.json').is_file())
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    metadata=connection.execute('SELECT status,retained_until FROM run_archives').fetchone()
+   self.assertEqual(metadata[0],'VERIFIED')
+   self.assertIsNotNone(metadata[1])
 
  def test_collect_traffic_uses_contiguous_cursor_without_changing_policy_snapshot(self):
   with tempfile.TemporaryDirectory() as d:
@@ -167,6 +176,27 @@ class CollectionTest(unittest.TestCase):
    self.assertEqual(windows,[('2026-08-20','2026-08-27','SUCCESS'),('2026-08-27','2026-09-03','SUCCESS')])
    self.assertEqual(rules,[('/r/policy',1)])
    self.assertEqual(run_types,{'TRAFFIC_COLLECTION'})
+
+ def test_archive_failure_does_not_advance_weekly_cursor_or_leave_raw_run(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'
+   binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
+   settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),
+                     raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),
+                     query_initial_delay_minutes=0,batch_cooldown_seconds=0)
+   environment={'FAKE_TRAFFIC_START':'2026-09-13','FAKE_TRAFFIC_END':'2026-09-20'}
+   with patch.dict(os.environ,environment), patch(
+       'rules_recertify.collection.prepare_run_archive',side_effect=RuntimeError('disk full')):
+    with self.assertRaisesRegex(RuntimeError,'cursor was not advanced'):
+     collect_traffic(settings,date(2026,9,20),date(2026,9,13),no_wait=True)
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    cursor=connection.execute(
+     "SELECT last_successful_end,in_progress_start,last_status FROM traffic_cursors"
+    ).fetchone()
+    archive_count=connection.execute('SELECT COUNT(*) FROM run_archives').fetchone()[0]
+   self.assertEqual(cursor,(None,'2026-09-13','FAILED'))
+   self.assertEqual(archive_count,0)
+   self.assertFalse(any(path.is_dir() for path in (root/'raw').iterdir()))
 
  def test_incomplete_collect_traffic_replays_same_window_and_is_idempotent(self):
   with tempfile.TemporaryDirectory() as d:
@@ -209,6 +239,15 @@ class CollectionTest(unittest.TestCase):
    self.assertNotIn('rule-usage',commands)
    self.assertTrue((root/'raw'/'snapshot'/'manifest.json').is_file())
    self.assertTrue((root/'raw'/'snapshot'/'export_wkld.derived.csv').is_file())
+   self.assertTrue({
+    'export_wkld.csv','export_iplists.csv','export_services.csv',
+    'export_wkld.derived.csv','export_iplists.derived.csv','labels.csv',
+    'rulesets.csv','rules_inventory.csv','manifest.json',
+   }.issubset({path.name for path in (root/'raw'/'snapshot').iterdir()}))
+   self.assertEqual(
+    [path.name for path in (root/'raw').iterdir() if path.is_dir()],
+    ['snapshot'],
+   )
    with sqlite3.connect(root/'db.sqlite') as connection:
     run_type,status=connection.execute('SELECT run_type,status FROM runs').fetchone()
     rules=connection.execute('SELECT rule_href,is_present FROM rules ORDER BY rule_href').fetchall()

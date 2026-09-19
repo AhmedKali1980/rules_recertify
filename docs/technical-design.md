@@ -297,6 +297,19 @@ only its window lifecycle provider differs. State and run completion are
 transactional, failed boundaries do not move, and reaching the target changes
 the terminal state to `COMPLETED`.
 
+Successful policy publication atomically replaces `var/raw/snapshot` with the
+complete validated reference and policy inventory, then removes the policy run
+directory. Reports prefer this materialized snapshot, while timestamped raw
+directories remain a transition-only fallback. A successful weekly traffic
+window ending on Sunday is written to
+`var/raw/archives/<run_id>.tar.gz`: creation uses a temporary archive, full
+member/path/manifest validation, SHA-256 calculation, atomic rename, and a
+transactional `run_archives` record before source deletion. Failed runs,
+backfills, non-Sunday traffic runs, and daily policy runs are not retained as
+historical archives. Verified Sunday archives expire after 550 days. The
+`restore-archive` command safely stages and atomically restores one archive;
+`purge-archives` deletes expired files together with their SQLite metadata.
+
 ## 5. Historical accumulation and 18-month guarantee
 
 ### 5.1 Recommended persistence

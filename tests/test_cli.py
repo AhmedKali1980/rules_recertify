@@ -40,6 +40,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(run.backfill_id, "history")
         self.assertTrue(run.no_wait)
 
+    def test_archive_maintenance_commands_parse_paths_and_dates(self):
+        restore = parser().parse_args([
+            "restore-archive", "--archive", "archives/run.tar.gz",
+            "--target-dir", "restored runs",
+        ])
+        self.assertEqual(restore.archive,Path("archives/run.tar.gz"))
+        self.assertEqual(restore.target_dir,Path("restored runs"))
+        purge = parser().parse_args(["purge-archives","--as-of","2028-01-01"])
+        self.assertEqual(purge.as_of.isoformat(),"2028-01-01")
+
     def test_rule_search_accepts_items_output_and_case_mode(self):
         args = parser().parse_args([
             "search-rules", "--items", "items.csv", "--out", "result.xlsx",

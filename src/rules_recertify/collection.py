@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .archives import discard_prepared_archive, prepare_run_archive, purge_expired_archives
 from .config import Settings
 from .history.database import (
     Database, RUN_TYPE_BACKFILL, RUN_TYPE_POLICY, RUN_TYPE_TRAFFIC,
@@ -147,6 +148,7 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
             send_summary(settings, details)
         except Exception:
             LOG.exception("SMTP summary failed without changing policy collection status")
+        shutil.rmtree(run_dir, ignore_errors=True)
     return details
 
 
@@ -159,15 +161,6 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         run_type="COLLECTION", publish_policy_inventory=True,
     )
 
-        details["current_stage"] = "EXPORTING_RULESETS"
-        db.update_run_details(run_id, details)
-        rulesets_file = run_dir / "rulesets.csv"
-        runner.run(["ruleset-export", "--output-file", str(rulesets_file)])
-        rulesets = list(read_rows(rulesets_file, ("href", "enabled")))
-        if not rulesets or not any(row["href"] for row in rulesets):
-            raise RuntimeError("Complete policy export contains no ruleset")
-        href_file = run_dir / "ruleset_hrefs_all.csv"
-        write_rows(href_file, ["href"], ({"href": row["href"]} for row in rulesets if row["href"]))
 
 def collect_traffic(settings: Settings, available_end: date, initial_start: Optional[date] = None,
                     no_wait: bool = False) -> Dict[str, object]:
@@ -566,27 +559,74 @@ def _collect_traffic_run(
         raise
     finally:
         details["status"] = status
+        archive_record: Optional[Dict[str, object]] = None
+        prepared_archive = None
+        should_archive = status == "SUCCESS" and (
+            run_type == RUN_TYPE_TRAFFIC and traffic_end.weekday() == 6
+        )
+        if should_archive:
+            retained_until = (date.today() + timedelta(days=settings.retention_days)).isoformat()
+            expected_archive = Path(settings.raw_dir) / "archives" / f"{run_id}.tar.gz"
+            details["archive"] = {
+                "path": str(expected_archive), "retained_until": retained_until,
+            }
+        elif run_type in {RUN_TYPE_TRAFFIC, RUN_TYPE_BACKFILL}:
+            details["raw_disposition"] = "DELETE_AFTER_FINALIZATION"
         manifest = run_dir / "manifest.json"
         manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
+        if should_archive:
+            try:
+                prepared_archive = prepare_run_archive(
+                    run_dir, Path(settings.raw_dir) / "archives",
+                )
+                archive_record = {
+                    "archive_kind": "TRAFFIC",
+                    "archive_path": str(prepared_archive.path),
+                    "sha256": prepared_archive.sha256,
+                    "size_bytes": prepared_archive.size_bytes,
+                    "retained_until": details["archive"]["retained_until"],
+                }
+            except Exception as exc:
+                status = "ERROR"
+                details["status"] = status
+                details["error"] = f"Archive creation failed: {exc}"
+                manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
         if backfill_id and backfill_started:
-            db.update_backfill_window(
-                backfill_id, run_id, traffic_end.isoformat(), status == "SUCCESS",
-                run_details=details, run_status=status,
-                error=str(details.get("error", "")),
-            )
+            try:
+                db.update_backfill_window(
+                    backfill_id, run_id, traffic_end.isoformat(), status == "SUCCESS",
+                    run_details=details, run_status=status,
+                    error=str(details.get("error", "")), archive=archive_record,
+                )
+            except Exception:
+                if prepared_archive:
+                    discard_prepared_archive(prepared_archive)
+                raise
         elif cursor_name and cursor_started:
-            db.finish_traffic_window(
-                cursor_name, run_type, run_id,
-                traffic_start.isoformat(), traffic_end.isoformat(),
-                status == "SUCCESS", str(details.get("error", "")),
-                run_details=details, run_status=status,
-            )
+            try:
+                db.finish_traffic_window(
+                    cursor_name, run_type, run_id,
+                    traffic_start.isoformat(), traffic_end.isoformat(),
+                    status == "SUCCESS", str(details.get("error", "")),
+                    run_details=details, run_status=status, archive=archive_record,
+                )
+            except Exception:
+                if prepared_archive:
+                    discard_prepared_archive(prepared_archive)
+                raise
         else:
             db.finish_run(run_id, status, details)
         try:
             send_summary(settings, details)
         except Exception:
             LOG.exception("SMTP summary failed without changing collection status")
+        if run_type in {RUN_TYPE_TRAFFIC, RUN_TYPE_BACKFILL}:
+            shutil.rmtree(run_dir, ignore_errors=True)
+        if status == "SUCCESS":
+            try:
+                details["purged_archives"] = purge_expired_archives(db, date.today())
+            except Exception:
+                LOG.exception("Archive purge failed without changing collection status")
     return details
 
 

@@ -335,7 +335,8 @@ class Database:
                               window_start: str, window_end: str, success: bool,
                               error: str = "",
                               run_details: Optional[Mapping[str, object]] = None,
-                              run_status: Optional[str] = None) -> None:
+                              run_status: Optional[str] = None,
+                              archive: Optional[Mapping[str, object]] = None) -> None:
         """Finish a window and advance the cursor only on success."""
         now = _now(); status = "SUCCESS" if success else "FAILED"
         with self.connect() as db:
@@ -369,6 +370,8 @@ class Database:
                 ).rowcount
                 if changed != 1:
                     raise ValueError("traffic collection run is not running or does not exist")
+            if archive is not None:
+                _insert_archive(db, run_id, archive, now)
 
     def initialize_backfill(self, backfill_id: str, start: str, target_end: str) -> None:
         if target_end <= start:
@@ -394,7 +397,8 @@ class Database:
                                window_end: str, success: bool,
                                run_details: Optional[Mapping[str, object]] = None,
                                run_status: Optional[str] = None,
-                               error: str = "") -> None:
+                               error: str = "",
+                               archive: Optional[Mapping[str, object]] = None) -> None:
         """Advance backfill only after a successful window."""
         now = _now()
         with self.connect() as db:
@@ -438,6 +442,8 @@ class Database:
                 ).rowcount
                 if changed != 1:
                     raise ValueError("backfill run is not running or does not exist")
+            if archive is not None:
+                _insert_archive(db, run_id, archive, now)
 
     def begin_backfill_window(self, backfill_id: str, run_id: str,
                               window_days: int = 7) -> Mapping[str, str]:
@@ -518,6 +524,18 @@ class Database:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _insert_archive(db: sqlite3.Connection, run_id: str,
+                    archive: Mapping[str, object], created_at: str) -> None:
+    db.execute(
+        "INSERT INTO run_archives VALUES(?,?,?,?,?,?,?,?)",
+        (
+            run_id, archive["archive_kind"], archive["archive_path"],
+            archive["sha256"], int(archive["size_bytes"]), "VERIFIED",
+            archive.get("retained_until"), created_at,
+        ),
+    )
 
 
 def _bool_int(value: object) -> Optional[int]:

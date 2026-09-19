@@ -425,6 +425,17 @@ with a seven-day maximum and a potentially partial final window. Persist
 cursor, completion stops subsequent executions, and duplicate initialization is
 rejected. Weekly and backfill cursors coexist but share the traffic engine.
 
+### DEC-023 — Materialized snapshot and verified raw archives
+
+Publish the latest complete policy inventory atomically at `var/raw/snapshot`
+and remove its staging run only after filesystem and SQLite publication have
+succeeded. Retain only successful weekly traffic runs ending on Sunday as
+`tar.gz` archives for 550 days. Archive publication requires full validation,
+SHA-256 calculation, atomic rename and transactional SQLite registration before
+the raw source is deleted. Failed, backfill, non-Sunday traffic and daily policy
+runs are not historical archives. Consumers prefer the snapshot but retain a
+read-only fallback for legacy timestamped raw directories during migration.
+
 ## 8. Residual implementation discoveries
 
 No product-owner decision remains open from the R1–R8 clarification round. The

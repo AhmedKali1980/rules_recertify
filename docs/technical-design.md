@@ -279,6 +279,16 @@ successful run state are committed in one SQLite transaction. A filesystem
 staging copy is checksum-verified and atomically promoted to `var/raw/snapshot`;
 the previous snapshot is restored if the SQLite publication fails.
 
+`collect-traffic` is the weekly traffic-only runner. It refreshes only the
+rulesets, labels, and complete rule inventory required to apply the existing
+traffic eligibility filter, and never writes that inventory to `rules` or
+`policy_snapshots`. Its `weekly` SQLite cursor defines contiguous seven-day
+half-open windows. Failed or incomplete windows retain both boundaries for an
+identical retry; only a fully successful run advances `last_successful_end`.
+Usage rows remain idempotent through their `(rule_href, window_start,
+window_end)` key, and each traffic run retains its fresh selection inputs as
+checksummed artifacts.
+
 ## 5. Historical accumulation and 18-month guarantee
 
 ### 5.1 Recommended persistence

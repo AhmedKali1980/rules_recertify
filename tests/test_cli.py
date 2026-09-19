@@ -17,6 +17,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.pce_stub_dir, Path("reference stubs"))
         self.assertFalse(hasattr(args, "traffic_start"))
 
+    def test_collect_traffic_accepts_initial_window_seed_and_available_boundary(self):
+        args = parser().parse_args([
+            "collect-traffic", "--traffic-start", "2026-08-20",
+            "--traffic-end", "2026-08-27", "--no-wait",
+        ])
+        self.assertEqual(args.command, "collect-traffic")
+        self.assertEqual(args.traffic_start.isoformat(), "2026-08-20")
+        self.assertEqual(args.traffic_end.isoformat(), "2026-08-27")
+        self.assertTrue(args.no_wait)
+
     def test_rule_search_accepts_items_output_and_case_mode(self):
         args = parser().parse_args([
             "search-rules", "--items", "items.csv", "--out", "result.xlsx",

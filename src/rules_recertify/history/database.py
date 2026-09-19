@@ -299,8 +299,25 @@ class Database:
     def begin_traffic_window(self, cursor_name: str, window_type: str, run_id: str,
                              window_start: str, window_end: str) -> None:
         """Record an in-progress window without advancing its durable cursor."""
+        if window_end <= window_start:
+            raise ValueError("traffic window end must be after start")
         now = _now()
         with self.connect() as db:
+            current = db.execute(
+                "SELECT * FROM traffic_cursors WHERE cursor_name=?", (cursor_name,),
+            ).fetchone()
+            if current:
+                if current["last_status"] == "RUNNING":
+                    raise ValueError("traffic cursor already has a running window")
+                expected_start = current["last_successful_end"]
+                if current["last_status"] == "FAILED" and current["in_progress_start"]:
+                    expected_start = current["in_progress_start"]
+                    if current["in_progress_end"] != window_end:
+                        raise ValueError("failed traffic window must be replayed unchanged")
+                if expected_start and expected_start != window_start:
+                    raise ValueError(
+                        f"traffic window must start at cursor {expected_start}, got {window_start}"
+                    )
             db.execute(
                 """INSERT INTO traffic_cursors VALUES(?,?,?,?,?,?,?)
                 ON CONFLICT(cursor_name) DO UPDATE SET
@@ -316,7 +333,9 @@ class Database:
 
     def finish_traffic_window(self, cursor_name: str, window_type: str, run_id: str,
                               window_start: str, window_end: str, success: bool,
-                              error: str = "") -> None:
+                              error: str = "",
+                              run_details: Optional[Mapping[str, object]] = None,
+                              run_status: Optional[str] = None) -> None:
         """Finish a window and advance the cursor only on success."""
         now = _now(); status = "SUCCESS" if success else "FAILED"
         with self.connect() as db:
@@ -337,13 +356,19 @@ class Database:
                 ).rowcount
             else:
                 cursor_changed = db.execute(
-                    """UPDATE traffic_cursors SET in_progress_start=NULL,in_progress_end=NULL,
-                    last_status='FAILED',last_run_id=?,updated_at=? WHERE cursor_name=?
+                    """UPDATE traffic_cursors SET last_status='FAILED',last_run_id=?,updated_at=? WHERE cursor_name=?
                     AND in_progress_start=? AND in_progress_end=?""",
                     (run_id, now, cursor_name, window_start, window_end),
                 ).rowcount
             if cursor_changed != 1:
                 raise ValueError("traffic cursor does not match the running window")
+            if run_details is not None:
+                changed = db.execute(
+                    "UPDATE runs SET status=?,finished_at=?,details_json=? WHERE run_id=? AND status='RUNNING'",
+                    (run_status or status, now, json.dumps(dict(run_details), sort_keys=True), run_id),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("traffic collection run is not running or does not exist")
 
     def initialize_backfill(self, backfill_id: str, start: str, target_end: str) -> None:
         if target_end <= start:

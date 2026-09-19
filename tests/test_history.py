@@ -88,11 +88,16 @@ class HistoryTest(unittest.TestCase):
             failed=db.traffic_cursor("weekly")
             self.assertIsNone(failed["last_successful_end"])
             self.assertEqual(failed["last_status"], "FAILED")
+            self.assertEqual(failed["in_progress_start"], "2026-01-01")
+            with self.assertRaisesRegex(ValueError, "replayed unchanged"):
+                db.begin_traffic_window("weekly", RUN_TYPE_TRAFFIC, "wrong", "2026-01-01", "2026-01-09")
             db.begin_traffic_window("weekly", RUN_TYPE_TRAFFIC, "run-2", "2026-01-01", "2026-01-08")
             db.finish_traffic_window("weekly", RUN_TYPE_TRAFFIC, "run-2", "2026-01-01", "2026-01-08", True)
             success=db.traffic_cursor("weekly")
             self.assertEqual(success["last_successful_end"], "2026-01-08")
             self.assertEqual(success["last_status"], "SUCCESS")
+            with self.assertRaisesRegex(ValueError, "must start at cursor"):
+                db.begin_traffic_window("weekly", RUN_TYPE_TRAFFIC, "gap", "2026-01-09", "2026-01-16")
 
     def test_backfill_state_retries_and_completes_without_skipping(self):
         with tempfile.TemporaryDirectory() as directory:

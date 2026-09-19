@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .config import Settings
-from .history.database import Database, RUN_TYPE_POLICY
+from .history.database import Database, RUN_TYPE_POLICY, RUN_TYPE_TRAFFIC
 from .notifications import send_summary
 from .pce_import import import_pce_exports
 from .reference import ingest_reference
@@ -150,6 +150,58 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
 
 def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
             import_references: bool = False, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
+    """Transitional combined policy/reference/traffic collection."""
+    return _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        import_references=import_references, pce_stub_dir=pce_stub_dir,
+        run_type="COLLECTION", publish_policy_inventory=True,
+    )
+
+
+def collect_traffic(settings: Settings, available_end: date, initial_start: Optional[date] = None,
+                    no_wait: bool = False) -> Dict[str, object]:
+    """Collect the next durable, non-overlapping seven-day traffic window."""
+    db = Database(Path(settings.state_db)); db.initialize()
+    cursor = db.traffic_cursor("weekly")
+    cursor_start: Optional[date] = None
+    if cursor:
+        raw_start = (
+            cursor.get("in_progress_start")
+            if cursor.get("last_status") == "FAILED"
+            else cursor.get("last_successful_end")
+        )
+        if raw_start:
+            cursor_start = date.fromisoformat(str(raw_start))
+    if cursor_start and initial_start and cursor_start != initial_start:
+        raise ValueError(
+            f"traffic cursor requires start {cursor_start.isoformat()}, got {initial_start.isoformat()}"
+        )
+    traffic_start = cursor_start or initial_start or (
+        available_end - timedelta(days=settings.traffic_window_days)
+    )
+    traffic_end = traffic_start + timedelta(days=settings.traffic_window_days)
+    if traffic_end > available_end:
+        raise ValueError(
+            f"complete traffic window [{traffic_start},{traffic_end}) is not available at {available_end}"
+        )
+    result = _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        run_type=RUN_TYPE_TRAFFIC, publish_policy_inventory=False,
+        cursor_name="weekly",
+    )
+    if result["status"] != "SUCCESS":
+        raise RuntimeError(
+            f"Traffic window [{traffic_start},{traffic_end}) incomplete; cursor was not advanced"
+        )
+    return result
+
+
+def _collect_traffic_run(
+    settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
+    import_references: bool = False, pce_stub_dir: Optional[Path] = None,
+    run_type: str = "COLLECTION", publish_policy_inventory: bool = True,
+    cursor_name: Optional[str] = None,
+) -> Dict[str, object]:
     if traffic_end <= traffic_start:
         raise ValueError("traffic_end must be after traffic_start")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
@@ -157,7 +209,8 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
     run_dir.mkdir(parents=True, exist_ok=False)
     db = Database(Path(settings.state_db)); db.initialize()
     details: Dict[str, object] = {"run_id": run_id, "traffic_start": traffic_start.isoformat(), "traffic_end": traffic_end.isoformat(), "batches": [], "current_stage": "EXPORTING_RULESETS"}
-    db.begin_run(run_id, "COLLECTION", details)
+    details["run_type"] = run_type
+    db.begin_run(run_id, run_type, details)
     config_file = Path(settings.workloader_config_file) if settings.workloader_config_file else None
     runner = WorkloaderRunner(
         settings.workloader,
@@ -168,7 +221,14 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         rate_limit_max_retries=settings.rate_limit_max_retries,
     )
     status = "ERROR"
+    cursor_started = False
     try:
+        if cursor_name:
+            db.begin_traffic_window(
+                cursor_name, run_type, run_id,
+                traffic_start.isoformat(), traffic_end.isoformat(),
+            )
+            cursor_started = True
         if import_references:
             details["current_stage"] = "IMPORTING_PCE_REFERENCE"
             db.update_run_details(run_id, details)
@@ -206,7 +266,11 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         runner.run(["rule-export", "--ruleset-hrefs", str(href_file), "--policy-version", settings.policy_version, "--output-file", str(inventory_file)])
         inventory = list(read_rows(inventory_file, RULE_REQUIRED))
         ruleset_metadata = _ruleset_metadata(inventory)
-        details["rules"] = db.upsert_rules(inventory, datetime.now(timezone.utc).isoformat())
+        if publish_policy_inventory:
+            details["rules"] = db.upsert_rules(inventory, datetime.now(timezone.utc).isoformat())
+        else:
+            details["rules"] = len(inventory)
+            details["policy_snapshot_updated"] = False
         scoped_rulesets, scope_exclusions = select_application_scoped_rulesets(
             inventory,
             application_labels,
@@ -426,7 +490,7 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         status = "SUCCESS" if (
             not oversized
             and not runtime_oversized
-            and summary["total"] > 0
+            and (summary["total"] > 0 or run_type == RUN_TYPE_TRAFFIC)
             and not summary["pending"]
             and not summary["expired"]
             and not summary["unknown"]
@@ -442,7 +506,15 @@ def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait:
         details["status"] = status
         manifest = run_dir / "manifest.json"
         manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
-        db.finish_run(run_id, status, details)
+        if cursor_name and cursor_started:
+            db.finish_traffic_window(
+                cursor_name, run_type, run_id,
+                traffic_start.isoformat(), traffic_end.isoformat(),
+                status == "SUCCESS", str(details.get("error", "")),
+                run_details=details, run_status=status,
+            )
+        else:
+            db.finish_run(run_id, status, details)
         try:
             send_summary(settings, details)
         except Exception:

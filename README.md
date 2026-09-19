@@ -93,6 +93,26 @@ marquée absente uniquement lors de cette publication réussie. Le run validé e
 également copié atomiquement sous `var/raw/snapshot`, avec son manifeste et ses
 checksums. `report`, `report-batch` et `search-rules` ignorent les règles absentes.
 
+La collecte hebdomadaire du trafic est indépendante :
+
+```bash
+# Première exécution : initialisation explicite de la fenêtre.
+./scripts/rules-recertify --config config/local.json collect-traffic \
+  --traffic-start 2026-09-06 --traffic-end 2026-09-13
+
+# Exécutions suivantes : le début vient exclusivement du curseur SQLite.
+./scripts/rules-recertify --config config/local.json collect-traffic \
+  --traffic-end 2026-09-20
+```
+
+`--traffic-end` est la dernière borne exclusive disponible, et non une demande
+de fenêtre arbitraire. `collect-traffic` prend toujours exactement sept jours,
+réexporte rulesets, labels et règles pour calculer son périmètre, puis conserve
+ces CSV comme artefacts sans modifier le snapshot policy. Après succès, la
+fenêtre suivante commence exactement à la fin précédente. Un résultat pending,
+expired, inconnu, invalide ou autrement incomplet laisse le curseur sur la même
+fenêtre, qui doit être rejouée intégralement.
+
 L'ancienne commande `collect` reste temporairement disponible pour le workflow
 historique combinant policy et trafic. Elle est transitoire et sera remplacée par
 les commandes dédiées des étapes suivantes ; `--skip-pce-import` ne concerne que

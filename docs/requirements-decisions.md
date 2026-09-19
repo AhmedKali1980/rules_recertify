@@ -407,6 +407,15 @@ partial runs never mark a rule absent. The successful run is materialized under
 `var/raw/snapshot`; the historical combined `collect` command remains available
 only as a transitional compatibility path until traffic collection is split.
 
+### DEC-021 — Weekly cursor-controlled traffic collection
+
+Use `collect-traffic` for one seven-day half-open window per invocation. A fresh
+minimal ruleset/label/rule export determines traffic eligibility but never
+replaces the current policy inventory. SQLite is authoritative for continuity:
+the next start equals the previous successful end, and an incomplete or failed
+window retains its original boundaries for an identical retry. Only complete
+success advances the cursor; retention pruning remains 550 days.
+
 ## 8. Residual implementation discoveries
 
 No product-owner decision remains open from the R1–R8 clarification round. The

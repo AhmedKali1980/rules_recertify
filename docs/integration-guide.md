@@ -256,6 +256,20 @@ existing traffic-only app/environment/scope and configured-exception filter.
 That minimal inventory is retained as a run artifact but is never ingested into
 the current policy snapshot and never changes `rules.is_present`.
 
+`traffic_environments` optionally restricts Explorer submission to rulesets
+whose scope `env` matches one of the configured values, case-insensitively:
+
+```json
+"traffic_environments": ["PRD", "BCK", "DRP"]
+```
+
+An empty list means every valid environment and preserves previous behavior.
+The restriction applies only to traffic collection and backfill; the complete
+daily policy inventory remains unchanged. When the filter is non-empty,
+name-based empty-scope exceptions are not submitted because their environment
+cannot be proven. Exclusions are audited as
+`ENVIRONMENT_FILTER_MISMATCH` in logs, manifests, and Data Quality.
+
 The durable `weekly` cursor advances only when every submitted query is
 terminal and valid and no ruleset was omitted. Pending, expired, unknown,
 invalid, or oversized results mark the window failed. Its original start and

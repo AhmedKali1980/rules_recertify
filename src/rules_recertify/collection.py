@@ -254,6 +254,7 @@ def _collect_traffic_run(
     db = Database(Path(settings.state_db)); db.initialize()
     details: Dict[str, object] = {"run_id": run_id, "traffic_start": traffic_start.isoformat(), "traffic_end": traffic_end.isoformat(), "batches": [], "current_stage": "EXPORTING_RULESETS"}
     details["run_type"] = run_type
+    details["traffic_environments"] = list(settings.traffic_environments)
     db.begin_run(run_id, run_type, details)
     config_file = Path(settings.workloader_config_file) if settings.workloader_config_file else None
     runner = WorkloaderRunner(
@@ -330,6 +331,7 @@ def _collect_traffic_run(
             inventory,
             application_labels,
             settings.empty_scope_ruleset_name_patterns,
+            settings.traffic_environments,
         )
         details["excluded_scope_rulesets"] = [asdict(item) for item in scope_exclusions]
         details["excluded_scope_ruleset_count"] = len(scope_exclusions)
@@ -357,7 +359,7 @@ def _collect_traffic_run(
             )
         if scope_exclusions:
             LOG.info(
-                "Excluded rulesets without a valid application scope",
+                "Excluded rulesets from traffic scope/environment selection",
                 extra={
                     "excluded_rulesets": len(scope_exclusions),
                     "excluded_rules": details["excluded_scope_rule_count"],

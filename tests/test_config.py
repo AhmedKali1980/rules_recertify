@@ -54,3 +54,18 @@ class ConfigTest(unittest.TestCase):
             path.write_text(json.dumps({"pce":"p","permissive_rule_max_ips":0}))
             with self.assertRaisesRegex(ConfigurationError, "permissive_rule_max_ips"):
                 load_settings(path)
+    def test_traffic_environments_accept_list_or_comma_separated_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            list_path=root/"list.json"
+            list_path.write_text(json.dumps({"pce":"p","traffic_environments":["PRD","BCK"]}))
+            self.assertEqual(load_settings(list_path).traffic_environments, ("PRD", "BCK"))
+            text_path=root/"text.json"
+            text_path.write_text(json.dumps({"pce":"p","traffic_environments":"PRD, DRP"}))
+            self.assertEqual(load_settings(text_path).traffic_environments, ("PRD", "DRP"))
+    def test_traffic_environments_reject_blank_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"c.json"
+            path.write_text(json.dumps({"pce":"p","traffic_environments":["PRD",""]}))
+            with self.assertRaisesRegex(ConfigurationError,"traffic_environments"):
+                load_settings(path)

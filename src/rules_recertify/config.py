@@ -60,6 +60,7 @@ class Settings:
     rate_limit_retry_delay_minutes: int = 10
     rate_limit_max_retries: int = 12
     empty_scope_ruleset_name_patterns: Tuple[str, ...] = ()
+    traffic_environments: Tuple[str, ...] = ()
     retention_days: int = 550
     default_lookback_days: int = 548
     policy_version: str = "draft"
@@ -95,6 +96,13 @@ class Settings:
             raise ConfigurationError(
                 "empty_scope_ruleset_name_patterns must contain non-empty strings"
             )
+        if not isinstance(self.traffic_environments, (list, tuple)):
+            raise ConfigurationError("traffic_environments must be a list or comma-separated string")
+        if any(
+            not isinstance(environment, str) or not environment.strip()
+            for environment in self.traffic_environments
+        ):
+            raise ConfigurationError("traffic_environments must contain non-empty strings")
         if self.retention_days < 550:
             raise ConfigurationError("retention_days must be at least 550")
         if not 1 <= self.default_lookback_days <= self.retention_days:
@@ -128,6 +136,12 @@ def load_settings(path: Path, dotenv: Optional[Path] = None) -> Settings:
         data["dangerous_port_lists"] = tuple(
             item.strip() for item in data["dangerous_port_lists"].split(",") if item.strip()
         )
+    if isinstance(data.get("traffic_environments"), str):
+        data["traffic_environments"] = tuple(
+            item.strip() for item in data["traffic_environments"].split(",") if item.strip()
+        )
+    elif isinstance(data.get("traffic_environments"), list):
+        data["traffic_environments"] = tuple(data["traffic_environments"])
     env_map = {
         "pce": "PCE",
         "workloader_dir": "WORKLOADER_DIR",

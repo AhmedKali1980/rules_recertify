@@ -95,6 +95,20 @@ checksums. `report`, `report-batch` et `search-rules` ignorent les règles absen
 
 La collecte hebdomadaire du trafic est indépendante :
 
+Le périmètre des environnements soumis aux requêtes Explorer peut être limité
+dans `config/local.json` :
+
+```json
+"traffic_environments": ["PRD", "BCK", "DRP"]
+```
+
+La comparaison est insensible à la casse. Une liste vide (`[]`, valeur par
+défaut) conserve tous les environnements. Ce filtre s'applique uniquement au
+rule usage : `collect-policy`, les rapports et `search-rules` continuent de
+conserver toutes les règles. Lorsqu'un filtre est actif, une exception de
+ruleset sans scope est exclue du trafic, car son environnement ne peut pas être
+établi de manière fiable.
+
 ```bash
 # Première exécution : initialisation explicite de la fenêtre.
 ./scripts/rules-recertify --config config/local.json collect-traffic \

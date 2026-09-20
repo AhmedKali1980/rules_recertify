@@ -447,6 +447,15 @@ and collision exit code 75. Activate cron only after supervised manual
 acceptance. Monitoring covers policy/traffic status, snapshot and cursor age,
 backfill progress, Sunday archive, lock and server disk metrics.
 
+### DEC-025 — Optional traffic environment allow-list
+
+Allow `traffic_environments` to restrict weekly and backfill Explorer queries
+to selected ruleset `env` values such as `PRD`, `BCK`, and `DRP`. Matching is
+case-insensitive; an empty list means all environments. This filter never
+reduces the complete policy inventory used by reports and rule search. While it
+is active, empty-scope exceptions are excluded because no reliable environment
+can be established.
+
 ## 8. Residual implementation discoveries
 
 No product-owner decision remains open from the R1–R8 clarification round. The

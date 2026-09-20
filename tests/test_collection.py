@@ -177,6 +177,23 @@ class CollectionTest(unittest.TestCase):
    self.assertEqual(rules,[('/r/policy',1)])
    self.assertEqual(run_types,{'TRAFFIC_COLLECTION'})
 
+ def test_collect_traffic_applies_configured_environment_filter_only_to_usage(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'
+   binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
+   settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),
+                     raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),
+                     traffic_environments=('BCK',),query_initial_delay_minutes=0,
+                     batch_cooldown_seconds=0)
+   result=collect_traffic(settings,date(2026,8,27),date(2026,8,20),no_wait=True)
+   self.assertEqual(result['status'],'SUCCESS')
+   self.assertEqual(result['traffic_environments'],['BCK'])
+   self.assertEqual(result['batches'],[])
+   self.assertEqual(
+    [(item['href'],item['reason']) for item in result['excluded_scope_rulesets']],
+    [('/rs/1','ENVIRONMENT_FILTER_MISMATCH'),('/rs/infra','EMPTY_SCOPE')],
+   )
+
  def test_archive_failure_does_not_advance_weekly_cursor_or_leave_raw_run(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'

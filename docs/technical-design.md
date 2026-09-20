@@ -319,6 +319,12 @@ wrapper combines a Monday-Saturday cron with a persisted 47-hour run gate.
 snapshot/cursor freshness, backfill progress, archive presence, lock state and
 disk utilization.
 
+Before batching, the traffic engine applies the optional
+`traffic_environments` allow-list to the `env` dimension of valid ruleset
+scopes. Empty means no additional restriction. A configured list affects only
+weekly/backfill usage queries, is recorded in the run manifest, and never
+changes the complete policy snapshot.
+
 ## 5. Historical accumulation and 18-month guarantee
 
 ### 5.1 Recommended persistence

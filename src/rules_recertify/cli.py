@@ -133,6 +133,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "rate_limit_retry_delay_minutes": settings.rate_limit_retry_delay_minutes,
                 "rate_limit_max_retries": settings.rate_limit_max_retries,
                 "empty_scope_ruleset_name_patterns": settings.empty_scope_ruleset_name_patterns,
+                "traffic_environments": settings.traffic_environments,
                 "dangerous_port_lists": settings.dangerous_port_lists,
                 "permissive_rule_max_ips": settings.permissive_rule_max_ips,
                 "smtp_enabled": settings.smtp_enabled,

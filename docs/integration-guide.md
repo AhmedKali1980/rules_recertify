@@ -65,6 +65,12 @@ During an upgrade it preserves `.env`, `config/local.json`, `.venv`, and the ent
 Set `workloader_config_file` in `config/local.json` to the absolute Workloader
 `pce.yaml` path. Every managed Workloader invocation passes it with
 `--config-file`, so execution does not depend on the cron working directory.
+Configure Workloader's global `log_file` in `pce.yaml` with a stable path under
+`var/logs` (or leave it unset to use Workloader's default); never point it at a
+timestamped `var/raw/<run_id>` directory. Workloader persists global command-line
+options into `pce.yaml`, so Rules Recertify deliberately does not pass
+`--log-file`. Full command output is captured separately in each run's
+`workloader-output.log`.
 
 ### 2.3 Create the Python environment
 

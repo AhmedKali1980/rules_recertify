@@ -12,6 +12,10 @@ from rules_recertify.history.database import Database, RUN_TYPE_BACKFILL, RUN_TY
 
 FAKE='''#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$RULES_RECERTIFY_TEST_LOG"
+if [[ "$*" == *"collect-policy"* ]]; then
+  mkdir -p "$RULES_RECERTIFY_TEST_SNAPSHOT"
+  printf '{}\\n' > "$RULES_RECERTIFY_TEST_SNAPSHOT/manifest.json"
+fi
 '''
 
 
@@ -26,6 +30,7 @@ class OperationalScriptsTest(unittest.TestCase):
             "RULES_RECERTIFY_CONFIG":str(config),"RULES_RECERTIFY_ENV_FILE":str(env_file),
             "RULES_RECERTIFY_LOCK":str(root/"shared.lock"),"RULES_RECERTIFY_CLI":str(cli),
             "RULES_RECERTIFY_TEST_LOG":str(log),"RULES_RECERTIFY_TRAFFIC_END":"2026-09-20",
+            "RULES_RECERTIFY_TEST_SNAPSHOT":str(root/"raw"/"snapshot"),
             "RULES_RECERTIFY_NOW":"2026-09-19T03:00:00+00:00","RULES_RECERTIFY_WEEKDAY":"6",
         })
         return Database(root/"state.sqlite"),environment,log
@@ -51,6 +56,8 @@ class OperationalScriptsTest(unittest.TestCase):
     def test_sunday_retry_is_noop_after_successful_window(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); database,environment,log=self._setup(root); database.initialize()
+            snapshot=root/"raw"/"snapshot"; snapshot.mkdir(parents=True)
+            (snapshot/"manifest.json").write_text("{}")
             database.begin_traffic_window("weekly",RUN_TYPE_TRAFFIC,"run","2026-09-13","2026-09-20")
             database.finish_traffic_window("weekly",RUN_TYPE_TRAFFIC,"run","2026-09-13","2026-09-20",True)
             result=subprocess.run(["bash","scripts/weekly-traffic-collect.sh"],env=environment,
@@ -65,11 +72,15 @@ class OperationalScriptsTest(unittest.TestCase):
             result=subprocess.run(["bash","scripts/weekly-traffic-collect.sh"],env=environment,
                                   capture_output=True,text=True,check=False)
             self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn("collect-policy",log.read_text())
             self.assertIn("collect-traffic --traffic-end 2026-09-20",log.read_text())
+            self.assertTrue((root/"raw"/"snapshot"/"manifest.json").is_file())
 
     def test_backfill_daily_cron_is_gated_to_one_attempt_per_two_days(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); database,environment,log=self._setup(root); database.initialize()
+            snapshot=root/"raw"/"snapshot"; snapshot.mkdir(parents=True)
+            (snapshot/"manifest.json").write_text("{}")
             database.initialize_backfill("traffic-92-days","2026-06-20","2026-09-20")
             database.begin_run("recent",RUN_TYPE_BACKFILL,{})
             with database.connect() as connection:

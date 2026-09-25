@@ -94,7 +94,7 @@ elif str(policy[1]).upper() != "SUCCESS" and not (
     critical.append(f"policy={policy[1]}:{policy[0]}")
 if traffic is None:
     warning.append("traffic=NOT_FOUND")
-elif str(traffic[1]).upper() != "SUCCESS" and not (
+elif str(traffic[1]).upper() not in {"SUCCESS", "SUCCESS_WITH_EXCEPTIONS"} and not (
     str(traffic[1]).upper() == "RUNNING" and lock_state == "HELD"
 ):
     critical.append(f"traffic={traffic[1]}:{traffic[0]}")

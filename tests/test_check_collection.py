@@ -61,6 +61,19 @@ class CheckCollectionTest(unittest.TestCase):
         self.assertEqual(result.returncode,2)
         self.assertIn("interrupted_runs=1",result.stdout)
 
+    def test_success_with_exceptions_is_healthy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database,environment,_=self._environment(Path(directory))
+            with database.connect() as connection:
+                connection.execute(
+                    "UPDATE runs SET status='SUCCESS_WITH_EXCEPTIONS' "
+                    "WHERE run_id='traffic-1'"
+                )
+            result=subprocess.run(["bash","scripts/check-collection.sh"],env=environment,
+                                  capture_output=True,text=True,check=False)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn("traffic=SUCCESS_WITH_EXCEPTIONS:traffic-1",result.stdout)
+
     def test_missing_expected_sunday_archive_is_critical(self):
         with tempfile.TemporaryDirectory() as directory:
             _,environment,archive=self._environment(Path(directory)); archive.unlink()

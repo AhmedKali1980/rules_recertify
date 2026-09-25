@@ -199,6 +199,28 @@ class Database:
                 (json.dumps(details, sort_keys=True), run_id),
             )
 
+    def certification_coverage(self) -> Mapping[str, int]:
+        """Return unique calendar-day coverage from successful traffic windows."""
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT DISTINCT window_start,window_end FROM traffic_windows "
+                "WHERE status='SUCCESS' ORDER BY window_start,window_end"
+            ).fetchall()
+        intervals = sorted(
+            (date.fromisoformat(str(row[0])), date.fromisoformat(str(row[1])))
+            for row in rows if str(row[1]) > str(row[0])
+        )
+        merged: List[List[date]] = []
+        for start, end in intervals:
+            if not merged or start > merged[-1][1]:
+                merged.append([start, end])
+            elif end > merged[-1][1]:
+                merged[-1][1] = end
+        return {
+            "certifiable_days": sum((end - start).days for start, end in merged),
+            "successful_window_count": len(intervals),
+        }
+
     def add_quality(self, run_id: str, category: str, object_id: str, message: str) -> None:
         with self.connect() as db:
             db.execute("INSERT OR IGNORE INTO data_quality VALUES(?,?,?,?)", (run_id, category, object_id, message))

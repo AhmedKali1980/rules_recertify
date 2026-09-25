@@ -428,8 +428,10 @@ rejected. Weekly and backfill cursors coexist but share the traffic engine.
 ### DEC-023 — Materialized snapshot and verified raw archives
 
 Publish the latest complete policy inventory atomically at `var/raw/snapshot`
-and remove its staging run only after filesystem and SQLite publication have
-succeeded. Retain only successful weekly traffic runs ending on Sunday as
+as the single stable path for Run-team queries. Traffic and backfill wrappers
+bootstrap a policy collection if that snapshot is absent. Remove its staging
+run only after filesystem and SQLite publication have succeeded. Retain only
+successful weekly traffic runs ending on Sunday as
 `tar.gz` archives for 550 days. Archive publication requires full validation,
 SHA-256 calculation, atomic rename and transactional SQLite registration before
 the raw source is deleted. Failed, backfill, non-Sunday traffic and daily policy

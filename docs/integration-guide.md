@@ -27,8 +27,8 @@ an operator or another system runs `report` only when a deliverable is needed.
 - Network/PCE credentials already accepted by Workloader.
 
 No online package lookup is required by collection, ingestion, SQLite, or tests.
-`openpyxl` is imported only by commands that read or generate workbooks
-(`report`, `report-batch`, and `search-rules`).
+`openpyxl` is imported only when a workbook is generated (`report`,
+`report-batch`, `search-rules`, and the final traffic/backfill audit).
 
 The standard production installation root is:
 
@@ -235,6 +235,12 @@ manifest are materialized atomically under `var/raw/snapshot`; reports and
 `search-rules` read only rules with `is_present=1` and prefer snapshot reference
 exports when timestamped raw runs are no longer available.
 
+Traffic and backfill executions alone do not publish policy snapshots; their
+timestamped directories are transient traffic workspaces. The production
+traffic/backfill wrappers now detect a missing `snapshot/manifest.json` and run
+`collect-policy` once before continuing. An operator can bootstrap it directly
+with `./scripts/daily-policy-collect.sh`.
+
 For an offline validation, `--pce-stub-dir` supplies workload, IP-list, and
 service exports while rulesets, labels, and rules continue to come from the
 configured fake/test Workloader. The production command does not use this flag.
@@ -273,27 +279,51 @@ An empty list means every valid environment and preserves previous behavior.
 The restriction applies only to traffic collection and backfill; the complete
 daily policy inventory remains unchanged. When the filter is non-empty,
 name-based empty-scope exceptions are not submitted because their environment
-cannot be proven. Exclusions are audited as
-`ENVIRONMENT_FILTER_MISMATCH` in logs, manifests, and Data Quality.
+cannot be proven. Exclusions are audited as `ENVIRONMENT_FILTER_MISMATCH` in
+logs, manifests, and the workbook's `Not In Scope` sheet. They are
+intentionally not Data Quality defects.
 
-The durable `weekly` cursor advances only when every submitted query is
-terminal and valid and no ruleset was omitted. Pending, expired, unknown,
-invalid, or oversized results mark the window failed. Its original start and
-end remain stored, and the next invocation must replay that exact window.
+The durable cursor uses three outcomes. `SUCCESS` means a complete clean run.
+`SUCCESS_WITH_EXCEPTIONS` means the run completed with documented, non-blocking
+exceptions (an empty/unknown async status or invalid returned row); the cursor
+still advances. `WARNING` is reserved for blocking incompleteness: pending or
+expired queries, oversized rulesets, or inventory rules with no result. A
+warning retains the original start and end so the next invocation replays that
+exact window.
 Successful windows therefore meet exactly at their exclusive boundaries, with
 neither overlap nor a missing day. Usage UPSERT keys preserve idempotence when a
 failed window is replayed. Retention pruning uses the configured 550 days.
+
+Every traffic/backfill run writes `traffic-audit-<run_id>.xlsx` under
+`output_dir`. It contains a final summary plus complete processed,
+`NOT_IN_SCOPE`, documented-exception, blocking-problem, and all-rule views. If
+SMTP is enabled, the same summary is rendered in the final email body and the
+workbook is attached. Workbook-generation failure is recorded explicitly in
+the run details without changing the traffic completeness decision.
+
+The English final email also reports elapsed run time, unique certifiable
+calendar-day coverage across successful SQLite traffic windows, the number of
+unique successful windows, and the SQLite file size in bytes and human-readable
+units. Overlapping weekly/backfill windows are merged for day coverage rather
+than counted twice.
 
 ### 5.2.1 Raw storage and recovery
 
 The current complete policy materialization is always
 `var/raw/snapshot/`; successful policy staging directories are removed after
-SQLite publication. A successful weekly traffic run whose exclusive end is a
-Sunday is retained as `var/raw/archives/<run_id>.tar.gz`. Before the raw source
+SQLite publication. The weekly traffic and backfill wrappers bootstrap
+`collect-policy` when `snapshot/manifest.json` is missing, so a traffic-only
+deployment cannot silently continue without the stable policy extract. A failed
+policy run leaves the previous snapshot unchanged. A successful weekly traffic run
+whose exclusive end is a Sunday is retained as
+`var/raw/archives/<run_id>.tar.gz`. Before the raw source
 is removed, the archive is fully reopened and validated, hashed with SHA-256,
 atomically published, and registered in `run_archives` in the same transaction
 that advances the weekly cursor. Archive failure therefore prevents cursor
-advancement. Failed runs and backfill runs are not archived.
+advancement. Failed runs and backfill runs are not archived. Therefore an empty
+archive directory during backfill is expected: the transient raw directory is
+deleted after finalization and the durable audit workbook remains in
+`output_dir`.
 
 Operators can validate disaster recovery without touching the live snapshot:
 

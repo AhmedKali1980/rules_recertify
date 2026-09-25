@@ -99,6 +99,24 @@ class HistoryTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must start at cursor"):
                 db.begin_traffic_window("weekly", RUN_TYPE_TRAFFIC, "gap", "2026-01-09", "2026-01-16")
 
+    def test_certification_coverage_counts_unique_successful_days(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db=Database(Path(directory)/"db.sqlite"); db.initialize()
+            with db.connect() as connection:
+                connection.executemany(
+                    "INSERT INTO traffic_windows VALUES(?,?,?,?,?,?,?,?)",
+                    [
+                        (RUN_TYPE_BACKFILL,"2026-01-01","2026-01-08","one","SUCCESS","","now","now"),
+                        (RUN_TYPE_BACKFILL,"2026-01-08","2026-01-15","two","SUCCESS","","now","now"),
+                        (RUN_TYPE_TRAFFIC,"2026-01-08","2026-01-15","duplicate","SUCCESS","","now","now"),
+                        (RUN_TYPE_TRAFFIC,"2026-01-15","2026-01-22","failed","FAILED","","now","now"),
+                    ],
+                )
+            self.assertEqual(db.certification_coverage(), {
+                "certifiable_days": 14,
+                "successful_window_count": 2,
+            })
+
     def test_backfill_state_retries_and_completes_without_skipping(self):
         with tempfile.TemporaryDirectory() as directory:
             db=Database(Path(directory)/"db.sqlite"); db.initialize()

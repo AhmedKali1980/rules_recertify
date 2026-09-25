@@ -123,9 +123,24 @@ ruleset sans scope est exclue du trafic, car son environnement ne peut pas être
 de fenêtre arbitraire. `collect-traffic` prend toujours exactement sept jours,
 réexporte rulesets, labels et règles pour calculer son périmètre, puis conserve
 ces CSV comme artefacts sans modifier le snapshot policy. Après succès, la
-fenêtre suivante commence exactement à la fin précédente. Un résultat pending,
-expired, inconnu, invalide ou autrement incomplet laisse le curseur sur la même
-fenêtre, qui doit être rejouée intégralement.
+fenêtre suivante commence exactement à la fin précédente. Les statuts finaux
+sont `SUCCESS`, `SUCCESS_WITH_EXCEPTIONS` et `WARNING`. Les exceptions
+documentées (statut async vide/inconnu ou ligne invalide) n'empêchent plus le
+curseur d'avancer. En revanche, une requête pending/expired, un ruleset trop
+grand ou une règle attendue sans aucun résultat produit `WARNING` et conserve la
+même fenêtre pour reprise.
+
+Chaque exécution trafic ou backfill produit durablement dans `output_dir` un
+`traffic-audit-<run_id>.xlsx` avec les onglets `Rules Treated`, `Not In Scope`,
+`Problematic Rules` et `All Rules`. Le résumé final et ce classeur sont envoyés
+par courriel lorsque SMTP est activé. Un filtre d'environnement non concordant
+est classé `NOT_IN_SCOPE`, et non comme un défaut de qualité.
+
+Le mail final est rédigé en anglais et affiche également la durée du run, le
+nombre total de jours de trafic certifiables actuellement couverts par les
+fenêtres SQLite réussies (sans compter deux fois les chevauchements), le nombre
+de fenêtres correspondantes et la taille du fichier SQLite en octets et en
+unité lisible.
 
 Le backfill historique est initialisé une seule fois avec une cible figée ; son
 début est automatiquement fixé à J-92 :
@@ -153,7 +168,10 @@ décompressés. Le dernier inventaire policy complet est publié atomiquement da
 `var/raw/snapshot/`. Il contient les workloads, IP Lists, services, labels,
 rulesets, règles, fichiers dérivés et le manifeste validé. Une fois cette
 publication et la transaction SQLite terminées, le répertoire policy temporaire
-est supprimé.
+est supprimé. Les wrappers trafic et backfill vérifient ce snapshot avant de
+démarrer ; s'il manque, ils lancent automatiquement `collect-policy`. Ainsi,
+`var/raw/snapshot` est toujours le seul chemin stable du dernier extract policy
+complet et validé.
 
 Une collecte trafic hebdomadaire terminée avec succès et dont la borne de fin
 est un dimanche est conservée sous `var/raw/archives/<run_id>.tar.gz` pendant
@@ -162,7 +180,9 @@ contrôlée (chemins sûrs et présence du manifeste), puis son SHA-256 est calc
 avant le renommage atomique. Les métadonnées sont enregistrées avec la fin de
 fenêtre SQLite avant la suppression du répertoire source. Les runs policy,
 backfill, trafic non dominical et les runs en échec ne créent pas d'archive
-historique.
+historique. Il est donc normal que `var/raw/archives` reste vide pendant un
+backfill : son raw temporaire est supprimé après finalisation, tandis que son
+classeur d'audit reste dans `output_dir`.
 
 `report`, `report-batch` et `search-rules` utilisent en priorité le snapshot
 matérialisé. Les anciens sous-répertoires raw horodatés restent lisibles comme

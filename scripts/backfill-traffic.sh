@@ -3,6 +3,7 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/collection_common.sh"
 rr_prepare
 rr_lock
+rr_ensure_snapshot
 
 NOW="${RULES_RECERTIFY_NOW:-$(date --iso-8601=seconds)}"
 if [[ "${RULES_RECERTIFY_WEEKDAY:-$(date +%u)}" -eq 7 ]]; then

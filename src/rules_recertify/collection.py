@@ -20,6 +20,12 @@ from .history.database import (
 from .notifications import send_summary
 from .pce_import import import_pce_exports
 from .reference import ingest_reference
+from .reporting.traffic_audit import (
+    SUCCESS_STATUSES,
+    build_traffic_audit_rows,
+    classify_traffic_outcome,
+    write_traffic_audit_workbook,
+)
 from .workloader.batching import (
     partition_and_pack_rulesets,
     select_application_scoped_rulesets,
@@ -45,6 +51,7 @@ POLICY_REFERENCE_EXPORTS = (
 
 def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
     """Export and atomically publish one complete policy inventory."""
+    started_monotonic = time.monotonic()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     raw_root = Path(settings.raw_dir)
     run_dir = raw_root / run_id
@@ -145,6 +152,11 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
         if snapshot_backup and snapshot_backup.exists():
             shutil.rmtree(snapshot_backup, ignore_errors=True)
         try:
+            _add_operational_summary(details, db, settings, started_monotonic)
+        except Exception as exc:
+            details["operational_summary_error"] = str(exc)
+            LOG.exception("Operational summary failed without suppressing notification")
+        try:
             send_summary(settings, details)
         except Exception:
             LOG.exception("SMTP summary failed without changing policy collection status")
@@ -193,7 +205,7 @@ def collect_traffic(settings: Settings, available_end: date, initial_start: Opti
         run_type=RUN_TYPE_TRAFFIC, publish_policy_inventory=False,
         cursor_name="weekly",
     )
-    if result["status"] != "SUCCESS":
+    if result["status"] not in SUCCESS_STATUSES:
         raise RuntimeError(
             f"Traffic window [{traffic_start},{traffic_end}) incomplete; cursor was not advanced"
         )
@@ -230,7 +242,7 @@ def backfill_traffic(settings: Settings, backfill_id: str = "traffic-92-days",
         run_type=RUN_TYPE_BACKFILL, publish_policy_inventory=False,
         backfill_id=backfill_id,
     )
-    if result["status"] != "SUCCESS":
+    if result["status"] not in SUCCESS_STATUSES:
         raise RuntimeError(
             f"Backfill window [{traffic_start},{traffic_end}) incomplete; cursor was not advanced"
         )
@@ -246,6 +258,7 @@ def _collect_traffic_run(
     run_type: str = "COLLECTION", publish_policy_inventory: bool = True,
     cursor_name: Optional[str] = None, backfill_id: Optional[str] = None,
 ) -> Dict[str, object]:
+    started_monotonic = time.monotonic()
     if traffic_end <= traffic_start:
         raise ValueError("traffic_end must be after traffic_start")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
@@ -268,6 +281,10 @@ def _collect_traffic_run(
     status = "ERROR"
     cursor_started = False
     backfill_started = False
+    usage_by_rule: Dict[str, Dict[str, object]] = {}
+    invalid_query_rules: List[str] = []
+    invalid_port_rules: List[str] = []
+    traffic_audit_path: Optional[Path] = None
     try:
         if cursor_name:
             db.begin_traffic_window(
@@ -340,12 +357,13 @@ def _collect_traffic_run(
         )
         for item in scope_exclusions:
             metadata = ruleset_metadata[item.href]
-            db.add_quality(
-                run_id,
-                f"RULESET_SKIPPED_{item.reason}",
-                item.href,
-                f"Ruleset excluded from traffic collection: scope={item.scope!r}",
-            )
+            if item.reason != "ENVIRONMENT_FILTER_MISMATCH":
+                db.add_quality(
+                    run_id,
+                    f"RULESET_SKIPPED_{item.reason}",
+                    item.href,
+                    f"Ruleset excluded from traffic collection: scope={item.scope!r}",
+                )
             LOG.info(
                 "Traffic ruleset excluded",
                 extra={
@@ -478,6 +496,10 @@ def _collect_traffic_run(
             cast_batches.append(batch_result)
             if batch_result["output"]:
                 usage_rows = list(read_rows(Path(str(batch_result["output"])), USAGE_REQUIRED))
+                for usage_row in usage_rows:
+                    copied = dict(usage_row)
+                    copied["_batch"] = index
+                    usage_by_rule[str(usage_row.get("rule_href", ""))] = copied
                 valid_usage_rows, invalid_usage_rows, invalid_port_rows = _validated_usage_rows(
                     usage_rows, traffic_start, traffic_end
                 )
@@ -485,6 +507,7 @@ def _collect_traffic_run(
                 batch_result["invalid_flows_by_port"] = len(invalid_port_rows)
                 for row in invalid_usage_rows:
                     rule_href = row.get("rule_href", "")
+                    invalid_query_rules.append(rule_href)
                     db.add_quality(
                         run_id,
                         "USAGE_SKIPPED_INVALID_QUERY_BODY",
@@ -502,6 +525,7 @@ def _collect_traffic_run(
                     )
                 for row in invalid_port_rows:
                     rule_href = row.get("rule_href", "")
+                    invalid_port_rules.append(rule_href)
                     db.add_quality(
                         run_id,
                         "USAGE_SKIPPED_INVALID_FLOWS_BY_PORT",
@@ -543,17 +567,40 @@ def _collect_traffic_run(
         details["invalid_flows_by_port_count"] = sum(
             int(batch.get("invalid_flows_by_port", 0)) for batch in details["batches"]
         )
+        excluded_reasons = {item.href: item.reason for item in scope_exclusions}
+        oversized_reasons = {
+            item.href: "RULESET_SKIPPED_OVERSIZED" for item in oversized
+        }
+        oversized_reasons.update({
+            item.href: "RULESET_SKIPPED_TRAFFIC_RULE_LIMIT_EXCEEDED"
+            for item, _reported_count in runtime_oversized
+        })
+        audit_rows, audit_counts = build_traffic_audit_rows(
+            inventory, usage_by_rule, excluded_reasons, oversized_reasons,
+            invalid_query_rules, invalid_port_rules,
+        )
+        details.update(audit_counts)
+        status, blocking_reasons, exception_reasons = classify_traffic_outcome(
+            details, allow_empty=run_type == RUN_TYPE_TRAFFIC,
+        )
+        details["blocking_reasons"] = blocking_reasons
+        details["documented_exception_reasons"] = exception_reasons
+        details["status"] = status
+        traffic_audit_path = (
+            Path(settings.output_dir) / f"traffic-audit-{run_id}.xlsx"
+        )
+        try:
+            write_traffic_audit_workbook(traffic_audit_path, details, audit_rows)
+            details["traffic_audit_workbook"] = str(traffic_audit_path)
+            db.add_artifact(
+                run_id, "TRAFFIC_AUDIT_XLSX", str(traffic_audit_path),
+                sha256_file(traffic_audit_path), len(audit_rows),
+            )
+        except Exception as exc:
+            traffic_audit_path = None
+            details["traffic_audit_error"] = str(exc)
+            LOG.warning("Traffic audit workbook generation failed: %s", exc)
         details["artifacts"] = _record_artifacts(db, run_id, run_dir)
-        status = "SUCCESS" if (
-            not oversized
-            and not runtime_oversized
-            and (summary["total"] > 0 or run_type == RUN_TYPE_TRAFFIC)
-            and not summary["pending"]
-            and not summary["expired"]
-            and not summary["unknown"]
-            and not details["invalid_query_body_count"]
-            and not details["invalid_flows_by_port_count"]
-        ) else "WARNING"
         details["pruned_usage_windows"] = db.prune(settings.retention_days)
     except Exception as exc:
         details["error"] = str(exc)
@@ -563,7 +610,7 @@ def _collect_traffic_run(
         details["status"] = status
         archive_record: Optional[Dict[str, object]] = None
         prepared_archive = None
-        should_archive = status == "SUCCESS" and (
+        should_archive = status in SUCCESS_STATUSES and (
             run_type == RUN_TYPE_TRAFFIC and traffic_end.weekday() == 6
         )
         if should_archive:
@@ -596,7 +643,7 @@ def _collect_traffic_run(
         if backfill_id and backfill_started:
             try:
                 db.update_backfill_window(
-                    backfill_id, run_id, traffic_end.isoformat(), status == "SUCCESS",
+                    backfill_id, run_id, traffic_end.isoformat(), status in SUCCESS_STATUSES,
                     run_details=details, run_status=status,
                     error=str(details.get("error", "")), archive=archive_record,
                 )
@@ -609,7 +656,7 @@ def _collect_traffic_run(
                 db.finish_traffic_window(
                     cursor_name, run_type, run_id,
                     traffic_start.isoformat(), traffic_end.isoformat(),
-                    status == "SUCCESS", str(details.get("error", "")),
+                    status in SUCCESS_STATUSES, str(details.get("error", "")),
                     run_details=details, run_status=status, archive=archive_record,
                 )
             except Exception:
@@ -619,17 +666,44 @@ def _collect_traffic_run(
         else:
             db.finish_run(run_id, status, details)
         try:
-            send_summary(settings, details)
+            _add_operational_summary(details, db, settings, started_monotonic)
+        except Exception as exc:
+            details["operational_summary_error"] = str(exc)
+            LOG.exception("Operational summary failed without suppressing notification")
+        try:
+            send_summary(settings, details, traffic_audit_path)
         except Exception:
             LOG.exception("SMTP summary failed without changing collection status")
         if run_type in {RUN_TYPE_TRAFFIC, RUN_TYPE_BACKFILL}:
             shutil.rmtree(run_dir, ignore_errors=True)
-        if status == "SUCCESS":
+        if status in SUCCESS_STATUSES:
             try:
                 details["purged_archives"] = purge_expired_archives(db, date.today())
             except Exception:
                 LOG.exception("Archive purge failed without changing collection status")
     return details
+
+
+def _add_operational_summary(
+    details: Dict[str, object], db: Database, settings: Settings, started_monotonic: float,
+) -> None:
+    details["execution_duration_seconds"] = round(
+        max(0.0, time.monotonic() - started_monotonic), 1
+    )
+    details.update(db.certification_coverage())
+    database_path = Path(settings.state_db)
+    database_size = database_path.stat().st_size if database_path.is_file() else 0
+    details["sqlite_database_size_bytes"] = database_size
+    details["sqlite_database_size_human"] = _format_bytes(database_size)
+
+
+def _format_bytes(size: int) -> str:
+    value = float(max(0, size))
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return f"{int(value)} {unit}" if unit == "B" else f"{value:.2f} {unit}"
+        value /= 1024
+    return f"{size} B"
 
 
 def _pce_import_environment(settings: Settings) -> Dict[str, str]:

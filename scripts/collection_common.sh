@@ -29,3 +29,23 @@ rr_lock() {
 rr_cli() {
   "$CLI" --config "$CONFIG" --env-file "$ENV_FILE" "$@"
 }
+
+rr_ensure_snapshot() {
+  local raw_dir manifest
+  raw_dir="$(python3 - "$CONFIG" "$ENV_FILE" <<'PY'
+import sys
+from pathlib import Path
+from rules_recertify.config import load_settings
+print(load_settings(Path(sys.argv[1]), Path(sys.argv[2])).raw_dir)
+PY
+)"
+  manifest="${raw_dir}/snapshot/manifest.json"
+  if [[ ! -s "$manifest" ]]; then
+    printf 'Policy snapshot missing; creating it before traffic collection: %s\n' "$manifest"
+    rr_cli collect-policy
+  fi
+  if [[ ! -s "$manifest" ]]; then
+    printf 'Policy snapshot was not created: %s\n' "$manifest" >&2
+    return 1
+  fi
+}

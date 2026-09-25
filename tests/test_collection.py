@@ -110,7 +110,7 @@ class CollectionTest(unittest.TestCase):
    self.assertEqual(result,{'backfill_id':'done','status':'COMPLETED','window_processed':False})
    self.assertFalse((root/'raw').exists())
 
- def test_backfill_retries_one_window_and_coexists_with_weekly_cursor(self):
+ def test_backfill_advances_with_documented_exceptions_and_coexists_with_weekly_cursor(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'
    binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
@@ -122,14 +122,11 @@ class CollectionTest(unittest.TestCase):
    failed_env={'FAKE_TRAFFIC_START':'2026-06-20','FAKE_TRAFFIC_END':'2026-06-27',
                'FAKE_INVALID_QUERY_BODY':'1'}
    with patch.dict(os.environ,failed_env):
-    with self.assertRaisesRegex(RuntimeError,'cursor was not advanced'):
-     backfill_traffic(settings,'history',no_wait=True)
-   with sqlite3.connect(root/'db.sqlite') as connection:
-    failed=connection.execute("SELECT next_window_start,status FROM backfill_states").fetchone()
-   self.assertEqual(failed,('2026-06-20','FAILED'))
-   with patch.dict(os.environ, {'FAKE_TRAFFIC_START':'2026-06-20','FAKE_TRAFFIC_END':'2026-06-27'}):
-    os.environ.pop('FAKE_INVALID_QUERY_BODY',None)
     recovered=backfill_traffic(settings,'history',no_wait=True)
+   self.assertEqual(recovered['status'],'SUCCESS_WITH_EXCEPTIONS')
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    advanced=connection.execute("SELECT next_window_start,status FROM backfill_states").fetchone()
+   self.assertEqual(advanced,('2026-06-27','PENDING'))
    self.assertEqual(recovered['backfill_status'],'PENDING')
    with patch.dict(os.environ, {'FAKE_TRAFFIC_START':'2026-09-13','FAKE_TRAFFIC_END':'2026-09-20'}):
     weekly=collect_traffic(settings,date(2026,9,20),date(2026,9,13),no_wait=True)
@@ -193,6 +190,9 @@ class CollectionTest(unittest.TestCase):
     [(item['href'],item['reason']) for item in result['excluded_scope_rulesets']],
     [('/rs/1','ENVIRONMENT_FILTER_MISMATCH'),('/rs/infra','EMPTY_SCOPE')],
    )
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    categories={row[0] for row in connection.execute('SELECT category FROM data_quality')}
+   self.assertNotIn('RULESET_SKIPPED_ENVIRONMENT_FILTER_MISMATCH',categories)
 
  def test_archive_failure_does_not_advance_weekly_cursor_or_leave_raw_run(self):
   with tempfile.TemporaryDirectory() as d:
@@ -215,7 +215,7 @@ class CollectionTest(unittest.TestCase):
    self.assertEqual(archive_count,0)
    self.assertFalse(any(path.is_dir() for path in (root/'raw').iterdir()))
 
- def test_incomplete_collect_traffic_replays_same_window_and_is_idempotent(self):
+ def test_documented_exception_advances_weekly_cursor_and_is_idempotent(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'
    binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
@@ -225,15 +225,8 @@ class CollectionTest(unittest.TestCase):
    environment={'FAKE_TRAFFIC_START':'2026-08-20','FAKE_TRAFFIC_END':'2026-08-27',
                 'FAKE_INVALID_QUERY_BODY':'1'}
    with patch.dict(os.environ,environment):
-    with self.assertRaisesRegex(RuntimeError,'cursor was not advanced'):
-     collect_traffic(settings,date(2026,8,27),date(2026,8,20),no_wait=True)
-   with sqlite3.connect(root/'db.sqlite') as connection:
-    failed=connection.execute("SELECT last_successful_end,in_progress_start,last_status FROM traffic_cursors").fetchone()
-   self.assertEqual(failed,(None,'2026-08-20','FAILED'))
-   with patch.dict(os.environ, {'FAKE_TRAFFIC_START':'2026-08-20','FAKE_TRAFFIC_END':'2026-08-27'}, clear=False):
-    os.environ.pop('FAKE_INVALID_QUERY_BODY',None)
-    result=collect_traffic(settings,date(2026,8,27),no_wait=True)
-   self.assertEqual(result['status'],'SUCCESS')
+    result=collect_traffic(settings,date(2026,8,27),date(2026,8,20),no_wait=True)
+   self.assertEqual(result['status'],'SUCCESS_WITH_EXCEPTIONS')
    with sqlite3.connect(root/'db.sqlite') as connection:
     cursor=connection.execute("SELECT last_successful_end,last_status FROM traffic_cursors").fetchone()
     usage=connection.execute('SELECT COUNT(*) FROM usage_windows').fetchone()[0]
@@ -251,6 +244,10 @@ class CollectionTest(unittest.TestCase):
     result=collect_policy(settings,_policy_reference_stub(root))
    self.assertEqual(result['status'],'SUCCESS')
    self.assertEqual(result['rule_count'],2)
+   self.assertGreaterEqual(result['execution_duration_seconds'],0)
+   self.assertEqual(result['certifiable_days'],0)
+   self.assertGreater(result['sqlite_database_size_bytes'],0)
+   self.assertTrue(result['sqlite_database_size_human'].endswith(('KiB','MiB')))
    commands=command_log.read_text()
    self.assertNotIn('--traffic-count',commands)
    self.assertNotIn('rule-usage',commands)
@@ -346,7 +343,7 @@ class CollectionTest(unittest.TestCase):
    settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),query_initial_delay_minutes=0)
    with patch.dict(os.environ, {'FAKE_INVALID_QUERY_BODY':'1'}):
     result=collect(settings,date(2026,8,20),date(2026,8,21),no_wait=True)
-   self.assertEqual(result['status'],'WARNING')
+   self.assertEqual(result['status'],'SUCCESS_WITH_EXCEPTIONS')
    self.assertEqual(result['invalid_query_body_count'],1)
    with sqlite3.connect(root/'db.sqlite') as connection:
     categories={row[0] for row in connection.execute('SELECT category FROM data_quality')}

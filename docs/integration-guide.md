@@ -10,7 +10,7 @@ The `scripts/rules-recertify` entrypoint exposes:
 | `init-db` | Create/upgrade the local SQLite schema |
 | `collect` | Export policy, submit/poll traffic queries, and persist usage |
 | `ingest-usage` | Ingest an existing Workloader `rule-usage` CSV |
-| `ingest-reference` | Ingest derived workload and IP-list CSVs |
+| `ingest-reference` | Ingest derived workloads and the complete raw IP-list CSV |
 | `report` | Generate an application workbook on demand |
 
 Collection and report delivery are deliberately separate. Cron runs `collect`;
@@ -27,7 +27,8 @@ an operator or another system runs `report` only when a deliverable is needed.
 - Network/PCE credentials already accepted by Workloader.
 
 No online package lookup is required by collection, ingestion, SQLite, or tests.
-`openpyxl` is imported only by `report`.
+`openpyxl` is imported only when a workbook is generated (`report`,
+`report-batch`, `search-rules`, and the final traffic/backfill audit).
 
 The standard production installation root is:
 
@@ -64,6 +65,12 @@ During an upgrade it preserves `.env`, `config/local.json`, `.venv`, and the ent
 Set `workloader_config_file` in `config/local.json` to the absolute Workloader
 `pce.yaml` path. Every managed Workloader invocation passes it with
 `--config-file`, so execution does not depend on the cron working directory.
+Configure Workloader's global `log_file` in `pce.yaml` with a stable path under
+`var/logs` (or leave it unset to use Workloader's default); never point it at a
+timestamped `var/raw/<run_id>` directory. Workloader persists global command-line
+options into `pce.yaml`, so Rules Recertify deliberately does not pass
+`--log-file`. Full command output is captured separately in each run's
+`workloader-output.log`.
 
 ### 2.3 Create the Python environment
 
@@ -144,18 +151,20 @@ chmod 600 .env
 Edit `config/local.json`. Important settings are:
 
 - `workloader_dir`: directory containing the Workloader binary;
+- `workloader_config_file`: Workloader `pce.yaml`, which owns PCE profiles,
+  FQDNs and credentials;
 - `state_db`: durable local SQLite path;
 - traffic batch/poll timing;
-- `retention_days`, which cannot be lower than 200;
+- `retention_days`, which cannot be lower than 550;
 - `smtp_enabled`.
 
-Edit `.env` for PCE/Workloader environment overrides and SMTP values. The parser
-never evaluates shell syntax. Do not run `source .env`; do not commit it.
+Use `.env` primarily for optional SMTP secrets. Runtime paths and the normal PCE
+selection belong in `config/local.json` and `pce.yaml`. The parser never
+evaluates shell syntax. Do not run `source .env`; do not commit it.
 
-`PCE`, `WORKLOADER_DIR`, and `STATE_DB` in `.env` override values from
-`config/local.json`. They are commented out in new installations to avoid an
-accidental override. For an installation created from an earlier template, check
-only these non-secret keys:
+Legacy `PCE`, `WORKLOADER_DIR`, and `STATE_DB` values in `.env` still override
+`config/local.json`; new installations should not define them. For an
+installation created from an earlier template, check these non-secret keys:
 
 ```bash
 grep -E '^(PCE|WORKLOADER_DIR|STATE_DB)=' .env || true
@@ -174,7 +183,8 @@ Validate and initialize:
 
 The second command creates
 `/DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite` and the
-version-1 schema. `collect`, `ingest-reference`, `ingest-usage`, and `report` also
+version-2 schema. Existing version-1 databases are migrated transactionally.
+`collect-policy`, `collect`, `ingest-reference`, `ingest-usage`, and `report` also
 initialize the schema defensively. This is application setup, not an RPM install:
 the installer does not execute `dnf` or modify the operating system.
 
@@ -187,17 +197,17 @@ sqlite3 /DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite \
   '.tables'
 ```
 
-Expected schema version is `1`; integrity must return `ok`.
+Expected schema version is `2`; integrity must return `ok`.
 
 ## 4. Reference-data ingestion
 
-Produce `export_wkld.derived.csv` and `export_iplists.derived.csv` with the existing
-approved extraction/derivation process, then run:
+Produce the reference exports with the approved extraction/derivation process,
+then ingest derived workloads and the complete IP-list export:
 
 ```bash
 ./scripts/rules-recertify --config config/local.json ingest-reference \
   --workloads /data/export_wkld.derived.csv \
-  --ip-lists /data/export_iplists.derived.csv
+  --ip-lists /data/export_iplists.csv
 ```
 
 The adapter accepts comma or semicolon CSV delimiters and UTF-8 with or without a
@@ -207,7 +217,155 @@ current workload/IP-list snapshot.
 
 ## 5. Collection
 
-### 5.1 One daily UTC window
+### 5.1 Daily complete policy inventory
+
+Run the policy-only command daily. It exports L1 and L3SM workloads, IP Lists,
+compressed services, labels, every ruleset, and every rule, then validates and
+ingests them without submitting any Explorer or rule-usage query:
+
+```bash
+./scripts/rules-recertify --config config/local.json collect-policy
+```
+
+The run type is `POLICY_COLLECTION`. Current-rule membership is published only
+after every required CSV has passed validation and reference ingestion has
+completed. A failed run therefore leaves `rules.is_present` and the previous
+`policy_snapshots` record untouched. On success, the complete validated run and
+manifest are materialized atomically under `var/raw/snapshot`; reports and
+`search-rules` read only rules with `is_present=1` and prefer snapshot reference
+exports when timestamped raw runs are no longer available.
+
+Traffic and backfill executions alone do not publish policy snapshots; their
+timestamped directories are transient traffic workspaces. The production
+traffic/backfill wrappers now detect a missing `snapshot/manifest.json` and run
+`collect-policy` once before continuing. An operator can bootstrap it directly
+with `./scripts/daily-policy-collect.sh`.
+
+For an offline validation, `--pce-stub-dir` supplies workload, IP-list, and
+service exports while rulesets, labels, and rules continue to come from the
+configured fake/test Workloader. The production command does not use this flag.
+
+### 5.2 Weekly traffic collection
+
+The first invocation may seed the cursor explicitly. `--traffic-end` represents
+the latest exclusive boundary currently available from the PCE:
+
+```bash
+./scripts/rules-recertify --config config/local.json collect-traffic \
+  --traffic-start 2026-09-06 --traffic-end 2026-09-13
+```
+
+Subsequent invocations omit the start; it is read from SQLite:
+
+```bash
+./scripts/rules-recertify --config config/local.json collect-traffic \
+  --traffic-end 2026-09-20
+```
+
+The command always requests one complete seven-day half-open window. Before
+batching, it freshly exports rulesets, labels, and all rules, then applies the
+existing traffic-only app/environment/scope and configured-exception filter.
+That minimal inventory is retained as a run artifact but is never ingested into
+the current policy snapshot and never changes `rules.is_present`.
+
+`traffic_environments` optionally restricts Explorer submission to rulesets
+whose scope `env` matches one of the configured values, case-insensitively:
+
+```json
+"traffic_environments": ["PRD", "BCK", "DRP"]
+```
+
+An empty list means every valid environment and preserves previous behavior.
+The restriction applies only to traffic collection and backfill; the complete
+daily policy inventory remains unchanged. When the filter is non-empty,
+name-based empty-scope exceptions are not submitted because their environment
+cannot be proven. Exclusions are audited as `ENVIRONMENT_FILTER_MISMATCH` in
+logs, manifests, and the workbook's `Not In Scope` sheet. They are
+intentionally not Data Quality defects.
+
+The durable cursor uses three outcomes. `SUCCESS` means a complete clean run.
+`SUCCESS_WITH_EXCEPTIONS` means the run completed with documented, non-blocking
+exceptions (an empty/unknown async status or invalid returned row); the cursor
+still advances. `WARNING` is reserved for blocking incompleteness: pending or
+expired queries, oversized rulesets, or inventory rules with no result. A
+warning retains the original start and end so the next invocation replays that
+exact window.
+Successful windows therefore meet exactly at their exclusive boundaries, with
+neither overlap nor a missing day. Usage UPSERT keys preserve idempotence when a
+failed window is replayed. Retention pruning uses the configured 550 days.
+
+Every traffic/backfill run writes `traffic-audit-<run_id>.xlsx` under
+`output_dir`. It contains a final summary plus complete processed,
+`NOT_IN_SCOPE`, documented-exception, blocking-problem, and all-rule views. If
+SMTP is enabled, the same summary is rendered in the final email body and the
+workbook is attached. Workbook-generation failure is recorded explicitly in
+the run details without changing the traffic completeness decision.
+
+The English final email also reports elapsed run time, unique certifiable
+calendar-day coverage across successful SQLite traffic windows, the number of
+unique successful windows, and the SQLite file size in bytes and human-readable
+units. Overlapping weekly/backfill windows are merged for day coverage rather
+than counted twice.
+
+### 5.2.1 Raw storage and recovery
+
+The current complete policy materialization is always
+`var/raw/snapshot/`; successful policy staging directories are removed after
+SQLite publication. The weekly traffic and backfill wrappers bootstrap
+`collect-policy` when `snapshot/manifest.json` is missing, so a traffic-only
+deployment cannot silently continue without the stable policy extract. A failed
+policy run leaves the previous snapshot unchanged. A successful weekly traffic run
+whose exclusive end is a Sunday is retained as
+`var/raw/archives/<run_id>.tar.gz`. Before the raw source
+is removed, the archive is fully reopened and validated, hashed with SHA-256,
+atomically published, and registered in `run_archives` in the same transaction
+that advances the weekly cursor. Archive failure therefore prevents cursor
+advancement. Failed runs and backfill runs are not archived. Therefore an empty
+archive directory during backfill is expected: the transient raw directory is
+deleted after finalization and the durable audit workbook remains in
+`output_dir`.
+
+Operators can validate disaster recovery without touching the live snapshot:
+
+```bash
+./scripts/rules-recertify --config config/local.json restore-archive \
+  --archive var/raw/archives/<run_id>.tar.gz --target-dir /tmp/restore-test
+./scripts/rules-recertify --config config/local.json purge-archives \
+  --as-of 2028-03-23
+```
+
+The purge command removes verified archive records whose `retained_until` is
+strictly before the supplied date. Reports prefer `var/raw/snapshot`; legacy
+timestamped raw directories are accepted only as a migration fallback.
+
+### 5.3 Initial 92-day traffic backfill
+
+Freeze the target once. The command derives and persists `backfill_start` as
+exactly 92 days before that target:
+
+```bash
+./scripts/rules-recertify --config config/local.json init-backfill-traffic \
+  --target-end 2026-09-20 --backfill-id traffic-92-days
+```
+
+Run one window every two days until completion:
+
+```bash
+./scripts/rules-recertify --config config/local.json backfill-traffic \
+  --backfill-id traffic-92-days
+```
+
+Each invocation processes at most one oldest-first window. Windows are capped at
+seven days; a 92-day interval therefore produces thirteen full windows and one
+one-day final window. Persistent states are `PENDING`, `RUNNING`, `FAILED`, and
+`COMPLETED`. Failure retains `next_window_start`, so the exact same interval is
+retried. Initialization is insert-only and refuses an existing identifier,
+including a completed backfill. Once the target is reached, later invocations
+return `COMPLETED` without creating a run. Backfill state and windows are
+separate from the weekly cursor, while both modes call the same export,
+selection, batching, polling, validation, and usage-ingestion engine.
+
+### 5.4 Transitional combined collection
 
 Run after the previous UTC day has closed:
 
@@ -219,19 +377,25 @@ Run after the previous UTC day has closed:
 
 The collector:
 
-1. exports all enabled and disabled rulesets;
-2. exports labels and builds the authoritative set of `app` label values;
-3. inventories rules without traffic expansion;
-4. admits only rulesets whose complete scope contains exactly `app:<value>` and
+1. exports L1 workloads, managed L3SM workloads, and the complete L1 IP Lists,
+   then produces and ingests the derived reference data;
+2. exports all enabled and disabled rulesets;
+3. exports labels and builds the authoritative set of `app` label values;
+4. inventories rules without traffic expansion;
+5. admits only rulesets whose complete scope contains exactly `app:<value>` and
    `env:<value>` (in either order) and whose application value exists in the
    label export;
-5. counts and bin-packs whole eligible rulesets up to the configured rule limit;
-6. submits sequential `rule-export --traffic-count --expand-svcs` batches;
-7. polls `rule-usage` and logs completion progress;
-8. never replaces a completed usage window with a later pending result;
-9. commits usage and port observations to SQLite;
-10. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
-11. sends one non-blocking SMTP summary.
+6. counts and bin-packs whole eligible rulesets up to the configured rule limit;
+7. submits sequential `rule-export --traffic-count --expand-svcs` batches;
+8. polls `rule-usage` and logs completion progress;
+9. never replaces a completed usage window with a later pending result;
+10. commits usage and port observations to SQLite;
+11. writes raw artifacts and `manifest.json` under `var/raw/<run_id>`;
+12. sends one non-blocking SMTP summary.
+
+This legacy `collect` command temporarily remains available while the traffic
+workflow is split into its dedicated command. New daily scheduling must use
+`collect-policy`; the legacy command is not the target production scheduler.
 
 Check the latest collection with a single concise status line:
 
@@ -316,25 +480,32 @@ grep -E 'Traffic ruleset (selected|excluded)' var/logs/rules-recertify-*.jsonl
 
 ### 5.2 Initial backfill
 
-The PCE exposes about 90 days. Start with smaller windows to validate PCE load,
-then increase cautiously. Each window must be non-overlapping. For example, run
-sequential 7-day windows, newest first. Never sum overlapping counts.
+The frozen 92-day backfill described above is processed oldest first, one window
+of at most seven days per eligible wrapper execution. Never create ad-hoc or
+overlapping windows outside its persisted cursor.
 
-### 5.3 Cron
+### 5.3 Production schedule
 
-Example for a daily launch at 03:15 server time (ensure the host timezone and
-window-generation wrapper are reviewed):
+The reviewed schedule is versioned in `config/rules-recertify.cron` and uses the
+server local timezone:
 
 ```cron
-15 3 * * * cd /DATA/mco/illumio-mco/rules_recertify && /DATA/mco/illumio-mco/rules_recertify/scripts/daily-collect.sh
+10 0 * * * cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/daily-policy-collect.sh
+0 1 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
+0 2 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
+0 3 * * 1-6 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/backfill-traffic.sh
 ```
 
-Use the supplied wrapper template, which computes adjacent UTC dates, activates
-the virtual environment, obtains a non-blocking lock, and preserves the collector
-exit code.
+The 02:00 traffic entry is the one-hour retry. After a 01:00 success, the
+wrapper reads the weekly cursor and exits successfully without collecting the
+following window. The backfill wrapper is invoked Monday through Saturday and
+uses SQLite run history as a persistent 47-hour gate, yielding at most one
+attempt every two days and excluding Sunday.
 
-The repository does not modify crontab automatically. Install the reviewed line
-under the service account only after the PCE integration test succeeds.
+All wrappers source `collection_common.sh`, activate the configured virtual
+environment and acquire the same non-blocking lock. A collision exits with code
+75 and never starts another PCE operation. The repository does not modify
+crontab automatically: install it only after supervised manual acceptance.
 
 ## 6. On-demand report
 
@@ -342,25 +513,142 @@ under the service account only after the PCE integration test succeeds.
 ./scripts/rules-recertify --config config/local.json report \
   --kear-id 51be4bf9-2080-432f-9d02-1c0cf0f251d7 \
   --logical-application-name "My Consolidated Application" \
-  --application-label APP_A \
-  --application-label APP_A_LEGACY \
-  --environment PRD \
+  --application-label APP_A --environment PRD \
+  --application-label APP_A_LEGACY --environment UAT \
   --lookback-days 180
 ```
 
 The output is written atomically below `output_dir`, with KEAR ID and Environment
 in its filename. Inspect `Presentation`, `Raw Rules`, `Expanded Rules`,
 `Rule Usage`, and `Data Quality`. The KEAR ID is present on every sheet.
+Each `--application-label` is paired by position with one `--environment`; the
+two options must therefore occur the same number of times. Scoped rulesets must
+match an exact pair. An unscoped ruleset is selected only when one source or
+destination side contains that exact pair, or contains the application label
+without an environment label (meaning every requested environment for that
+application).
 
-In `Expanded Rules`, an `All Workloads` source or destination is resolved from
-the ingested workload reference and the ruleset scope. For example,
-`app:APM_PAYMENT;env:PRD` produces one `hostname (ip_with_default_gw)` line for
-each matching PRD workload. Managed workloads use `ip_with_default_gw`; the
-reference ingestion's selected addresses are used for other workload types.
+### 6.1 Bulk reports from Microcosmos
 
-## 7. Test procedure
+Use `report-batch --microcosmos-xlsx <file.xlsx>` to generate reports for every
+non-empty `Kear Id` in the active sheet. The workbook must expose `Kear Id`,
+`Application Name`, `Module`, `Account`, `Account Leader`,
+`Microsegmentation Solution`, `Environment`, and `Entity`. The application name
+becomes the logical report name. A Microcosmos module matches application labels
+whose suffix after the second underscore equals that module, case-insensitively
+(for example, `APM_RBS_FACTOBOT` maps to `FACTOBOT`). Unknown modules and
+inconsistent application names are skipped and recorded in the audit workbook.
 
-### 7.1 Offline automated suite
+The batch root is `output_dir/<UTC timestamp>`. Reports are grouped below
+`PRD/<sanitized Entity>` and `NONPRD/<sanitized Entity>`. Rows for the same KEAR
+and category are consolidated into one report; NONPRD preserves each original
+environment in its application/environment pairs while using `NONPRD` in the
+filename. Labels are also discovered from the newest timestamped `labels.csv`.
+A known label with no matching rule in SQLite is skipped rather than aborting
+the batch.
+
+The timestamp root contains a copy named
+`<input>.rules-recertify-status.xlsx`. Its appended `Rules Recertify Status`
+column records either the relative generated report path or the reason the row
+was skipped (empty KEAR/environment, unknown module, missing rule, or
+inconsistent application name).
+
+In `Expanded Rules`, sources and destinations are resolved from the ingested
+references, preferring the newest timestamped raw `export_wkld.derived.csv`
+over the SQLite workload snapshot and using the complete `export_iplists.csv`.
+Label,
+explicit-workload, and `All Workloads` selectors render one entry as
+`short_hostname (ip1;ip2)`; `name` is used when `short_hostname` is empty.
+Managed workloads use `ip_with_default_gw`, while unmanaged workloads use the
+ordered IPv4 values parsed from `interfaces`.
+Selectors containing both `app` and `env` are matched directly against those
+labels (plus any `loc`/`role`) on both source and destination sides. They are not
+cross-filtered by a second report pair. Selectors without `app` remain
+constrained by the requested report pairs.
+Label selector dimensions use Illumio boolean semantics: different dimensions
+are ANDed, while repeated values inside one dimension are ORed. For example,
+`app:A;env:PRD;role:PSM;role:PSMP` means app A AND PRD AND (PSM OR PSMP), on
+both source and destination sides.
+When an application label is present but `env` is absent, the selector matches
+all environments; report-level environment pairs must not add an implicit
+filter. A selector without `app` remains constrained by the report pairs.
+
+IP-list selectors render as `IP List: name (member1;member2)`. Members are
+split on `;` during reference ingestion and inline `#comment` suffixes are
+removed. An IP List that cannot be resolved remains visibly marked
+`[unresolved]` rather than being silently discarded.
+Reporting resolves these selectors from the complete raw `export_iplists.csv`;
+the `NZ3_*`-only derived export remains dedicated to workload/subnet
+correlation. At report time, the newest non-empty
+`raw_dir/<YYYYMMDDTHHMMSSZ-8hex>/export_iplists.csv` is parsed directly and takes precedence
+over the SQLite snapshot. This makes reports self-healing when SQLite was
+populated by an older release that stored only `NZ3_*` members. SQLite remains
+the fallback when no raw export exists. The `Presentation` sheet records the
+selected file path or the SQLite fallback for auditability. Technical folders
+such as `raw/preflight` are never eligible.
+
+The `Expanded Rules` sheet also contains `nb_src_ips`, `nb_dst_ips`, and
+`nb_ports`. Address counts represent the union cardinality of workload IPs,
+IP-list addresses, ranges, and subnets rather than the number of displayed
+items. Corporate rules are IPv4-only, so `Any` (`0.0.0.0/0` plus `::/0` in the
+source selector) counts only `2^32`, or `4294967296`. The port count is the
+number of distinct explicit TCP/UDP ports and expands inclusive ranges.
+`All Services` is displayed as `0-65535 TCP;0-65535 UDP` in `Expanded Rules`
+and therefore counts `131072` protocol/port pairs.
+
+Named Illumio service objects are exported from L1 with
+`svc-export --compressed` into `export_services.csv`. Reporting loads the
+newest non-empty file under a timestamped raw run (never `raw/preflight`) and
+resolves each name from the `name` and `service_ports` columns. Expanded Rules
+keeps the service name followed by its compressed TCP/UDP definition; Octoflow,
+port cardinality, and dangerous-port detection all consume that same expanded
+value. Explicit ports combined with a named service remain present. The chosen
+service reference path is recorded in `Presentation`.
+
+`Expanded Rules.dangerous_ports` intersects each rule's TCP/UDP ports with the
+catalogues selected by the `dangerous_port_lists` setting. Supported names are
+`PORTS_TO_CONTROL`, `PORTS_TO_ERADICATE`, and `PORTS_ADMIN`; configuration may
+use a JSON list or a comma-separated string. Output uses canonical values such
+as `TCP/22` and `TCP/5900-5906`. The unexplained `/3` and `/14` suffixes from a
+legacy spreadsheet are not protocol or port syntax and are not emitted without
+an authoritative severity mapping.
+
+The `Octoflow` sheet exposes the 25-column consumer contract. The
+`dangerous_ports` column immediately follows `dangerous_rule` and contains the
+exact value computed for `Expanded Rules.dangerous_ports`. Its NZ3 zones are
+computed by full containment of expanded IPv4 addresses, ranges, or subnets;
+unmatched sides become `Any`. `permissive_rule_max_ips` (default 255) controls
+the strict-greater-than threshold for `permissive_rule`. Rule imports populate
+`rule_history`: the first observation is `creation_time`, and the latest
+content-changing observation is `last_modified`. Historical changes predating
+this schema cannot be reconstructed. `last_hit` uses the latest positive,
+completed usage window independently of the report lookback.
+
+## 7. Rule-item search
+
+`search-rules` reads one item per row from a one-column CSV, text, or XLSX file
+and searches only rules explicitly marked present by the latest successful
+complete policy snapshot. Searchable selectors include ruleset scopes, labels and exclusions,
+label groups and exclusions, IP Lists, explicit workloads, and services.
+Text matching is literal and case-insensitive unless `--case-sensitive` is
+used.
+
+Port inputs support slash or Workloader notation, single ports, and inclusive
+ranges. A semicolon-separated port list uses intersection semantics: a rule is
+reported when at least one requested interval overlaps an allowed TCP/UDP
+interval. Named services are expanded from the newest timestamped
+`export_services.csv` before matching. The output workbook contains `Summary`,
+`Results`, and `Metadata`; unmatched inputs are explicitly retained as
+`NOT_USED_IN_ANY_RULE`.
+
+```bash
+./scripts/rules-recertify --config config/local.json search-rules \
+  --items /data/search_items.csv --out /data/rules_items_search.xlsx
+```
+
+## 8. Test procedure
+
+### 8.1 Offline automated suite
 
 ```bash
 PYTHONPATH=src python3.9 -m unittest discover -s tests -v
@@ -370,7 +658,7 @@ python3.9 -m compileall -q src tests
 The suite includes a fake Workloader end-to-end collection test and does not
 contact the PCE.
 
-### 7.2 Development smoke test
+### 8.2 Development smoke test
 
 ```bash
 cp config/example.json /tmp/rules-recertify-test.json
@@ -378,7 +666,7 @@ PYTHONPATH=src python3 -m rules_recertify.cli \
   --config /tmp/rules-recertify-test.json validate-config
 ```
 
-### 7.3 PCE integration acceptance
+### 8.3 PCE integration acceptance
 
 Use a non-production/test PCE and a small ruleset set where possible. Confirm:
 
@@ -395,15 +683,83 @@ Use a non-production/test PCE and a small ruleset set where possible. Confirm:
    dates, KEAR ID, and application selection are correct;
 10. the downstream system accepts the workbook baseline.
 
-### 7.4 Operational acceptance
+### 8.4 Operational acceptance
 
 Run shadow collection for at least one week. Validate disk growth, PCE load,
 completion time, polling values, recovery after interruption, email summaries,
 and gap/backfill handling before enabling the full cron schedule.
 
-## 8. Runtime artifacts and recovery
+## 8. Production runbook
 
-- `var/raw/<run_id>`: immutable run CSVs, Workloader log, and manifest.
+### 8.1 Start and supervised acceptance
+
+Keep cron disabled for the first execution. Run `validate-config`, `init-db`,
+`daily-policy-collect.sh`, `weekly-traffic-collect.sh`, and
+`check-collection.sh` manually under the service account. Initialize the
+historical process once with `init-backfill-traffic`, then test
+`backfill-traffic.sh`. Confirm PCE load, snapshot contents, cursor boundary,
+Sunday archive restoration, logs and monitoring before installing
+`config/rules-recertify.cron`. Finally inspect `crontab -l` and the system cron
+log after the first scheduled executions.
+
+### 8.2 Stop and resume
+
+To stop, comment or remove the four crontab entries. Do not kill a healthy
+collector unless required; the shared lock identifies an active run. To resume,
+run `check-collection.sh`, reconcile an interrupted `RUNNING` state, and rerun
+the failed wrapper manually. Traffic and backfill cursors retain failed window
+boundaries, so recovery replays the same window without a silent gap.
+
+### 8.3 Incident handling and supervision
+
+`check-collection.sh` emits one Nagios-compatible line and checks policy and
+traffic status, interrupted runs, snapshot age (26 hours by default), cursor age
+(192 hours), backfill progress, expected Sunday archive, lock and disk usage.
+Exit codes are 0/1/2/3 for OK/WARNING/CRITICAL/UNKNOWN. Override freshness with
+`RULES_RECERTIFY_SNAPSHOT_MAX_HOURS` and
+`RULES_RECERTIFY_TRAFFIC_MAX_HOURS`. Disk utilization is reported to the server
+monitoring platform; the application does not impose a second disk threshold.
+
+For failed policy, fix the cause and rerun `daily-policy-collect.sh`; the prior
+snapshot remains current. For traffic or backfill, rerun the same wrapper and
+never manually move its cursor. A held lock with an active run is a warning. A
+database `RUNNING` row while the lock is free is critical and must be examined
+in structured and Workloader logs before recovery.
+
+### 8.4 Archive restoration
+
+Restore into an isolated directory and never overwrite the live snapshot:
+
+```bash
+./scripts/rules-recertify --config config/local.json restore-archive \
+  --archive var/raw/archives/<run_id>.tar.gz \
+  --target-dir /tmp/rules-recertify-restore
+```
+
+Compare the restored manifest and the SHA stored in `run_archives` before using
+its contents for investigation or recovery.
+
+### 8.5 Backfill completion
+
+When `next_window_start` reaches the frozen target, the monitor reports
+`COMPLETED` and `backfill-traffic.sh` becomes a successful no-op. Remove only
+the backfill cron entry after verifying all 92 days; retain daily policy and
+Sunday traffic schedules.
+
+### 8.6 Rollback
+
+Before upgrade, disable cron, reconcile the shared lock, checkpoint and back up
+SQLite, and retain the current release and snapshot. Deploy with
+`install-prod.sh`, run migrations/tests and a supervised policy collection. To
+roll back, disable cron again, restore the previous application tree and its
+matching SQLite backup, restore the matching snapshot backup when necessary,
+run `check-collection.sh`, and only then re-enable cron. Never combine newer
+SQLite state with an older binary without a tested migration path.
+
+## 9. Runtime artifacts and recovery
+
+- `var/raw/snapshot`: current materialized policy references and manifest.
+- `var/raw/archives/<run_id>.tar.gz`: verified retained Sunday traffic runs.
 - `var/state/rules_recertify.sqlite`: durable canonical state.
 - `var/logs`: structured JSON-line application logs.
 - `var/output`: on-demand workbooks.
@@ -417,7 +773,7 @@ existing usage result without re-querying the PCE:
   /data/workloader-rule-usage.csv
 ```
 
-## 9. Production ownership and upgrade checklist
+## 10. Production ownership and upgrade checklist
 
 Before the first real collection, verify:
 

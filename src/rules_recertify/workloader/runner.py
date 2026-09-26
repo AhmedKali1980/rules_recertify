@@ -45,7 +45,12 @@ class WorkloaderRunner:
         command = [str(self.binary)]
         if self.config_file:
             command.extend(["--config-file", str(self.config_file)])
-        command.extend(["--pce", self.pce, "--log-file", str(self.log_file), *map(str, args)])
+        # Workloader persists global CLI options back into pce.yaml. Passing a
+        # per-run --log-file would therefore leave a stale path after the raw
+        # run directory is removed and prevent the next invocation from even
+        # starting. Its stable log_file belongs in pce.yaml; complete command
+        # output is still captured per run in workloader-output.log below.
+        command.extend(["--pce", self.pce, *map(str, args)])
         LOG.info("Executing Workloader command: %s", " ".join(command))
         process_output = self.log_file.with_name("workloader-output.log")
         process_output.parent.mkdir(parents=True, exist_ok=True)

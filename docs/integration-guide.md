@@ -365,6 +365,42 @@ return `COMPLETED` without creating a run. Backfill state and windows are
 separate from the weekly cursor, while both modes call the same export,
 selection, batching, polling, validation, and usage-ingestion engine.
 
+For a supervised manual run that must survive SSH disconnection, launch the
+production wrapper with `nohup` and redirect all three standard streams:
+
+```bash
+cd /DATA/mco/illumio-mco/rules_recertify
+mkdir -p var/logs
+LOG="var/logs/backfill-traffic-$(date +%Y%m%dT%H%M%S).log"
+nohup ./scripts/backfill-traffic.sh >"$LOG" 2>&1 </dev/null &
+PID=$!
+printf 'PID: %s\nLog: %s\n' "$PID" "$LOG"
+disown
+```
+
+The wrapper acquires the shared collection lock, verifies or bootstraps the
+policy snapshot, and reads the persisted `traffic-92-days` backfill state. It
+processes exactly the interval beginning at `next_window_start`, advances that
+cursor only after `SUCCESS` or `SUCCESS_WITH_EXCEPTIONS`, and retries the same
+interval after a blocking failure. The wrapper also enforces its production
+47-hour attempt gate; when the previous attempt is newer, it exits successfully
+without starting a run. Use `tail -f "$LOG"` to follow the detached process;
+leaving `tail` with Ctrl+C does not stop the collection.
+
+During a supervised stabilization phase, an operator may deliberately bypass
+only the 47-hour attempt gate:
+
+```bash
+nohup ./scripts/backfill-traffic.sh --force >"$LOG" 2>&1 </dev/null &
+```
+
+`--force` does not bypass the shared lock, the Sunday exclusion, snapshot
+validation, the persisted cursor, or the protection against a backfill already
+marked `RUNNING`. It therefore cannot create an ad-hoc window: the CLI still
+reads `next_window_start` and processes at most that one pending seven-day
+window. Do not use `--force` from cron; it is intended for an explicitly
+supervised recovery or stabilization run.
+
 ### 5.4 Transitional combined collection
 
 Run after the previous UTC day has closed:

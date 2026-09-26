@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/collection_common.sh"
+
+FORCE=false
+while (($#)); do
+  case "$1" in
+    --force) FORCE=true ;;
+    -h|--help)
+      printf '%s\n' 'Usage: backfill-traffic.sh [--force]'
+      printf '%s\n' '  --force  Bypass only the 47-hour attempt gate.'
+      exit 0
+      ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
 rr_prepare
 rr_lock
 rr_ensure_snapshot
@@ -12,7 +27,7 @@ if [[ "${RULES_RECERTIFY_WEEKDAY:-$(date +%u)}" -eq 7 ]]; then
 fi
 
 set +e
-python3 - "$CONFIG" "$ENV_FILE" "$NOW" <<'PY'
+python3 - "$CONFIG" "$ENV_FILE" "$NOW" "$FORCE" <<'PY'
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,6 +42,9 @@ if state is None:
     raise SystemExit(3)
 if state["status"] == "COMPLETED":
     raise SystemExit(10)
+if sys.argv[4] == "true":
+    print("Forced backfill requested; bypassing the 47-hour attempt gate.")
+    raise SystemExit(0)
 now = datetime.fromisoformat(sys.argv[3])
 with database.connect() as connection:
     row = connection.execute(

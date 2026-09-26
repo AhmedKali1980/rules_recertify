@@ -91,6 +91,21 @@ class OperationalScriptsTest(unittest.TestCase):
             self.assertIn("less than two days",result.stdout)
             self.assertFalse(log.exists())
 
+    def test_forced_backfill_bypasses_only_attempt_age_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); database,environment,log=self._setup(root); database.initialize()
+            snapshot=root/"raw"/"snapshot"; snapshot.mkdir(parents=True)
+            (snapshot/"manifest.json").write_text("{}")
+            database.initialize_backfill("traffic-92-days","2026-06-20","2026-09-20")
+            database.begin_run("recent",RUN_TYPE_BACKFILL,{})
+            with database.connect() as connection:
+                connection.execute("UPDATE runs SET started_at=? WHERE run_id='recent'",("2026-09-18T03:00:00+00:00",))
+            result=subprocess.run(["bash","scripts/backfill-traffic.sh","--force"],env=environment,
+                                  capture_output=True,text=True,check=False)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn("bypassing the 47-hour",result.stdout)
+            self.assertIn("backfill-traffic --backfill-id traffic-92-days",log.read_text())
+
     def test_reference_cron_has_daily_weekly_retry_and_backfill_entries(self):
         cron=Path("config/rules-recertify.cron").read_text()
         self.assertIn("10 0 * * *",cron)

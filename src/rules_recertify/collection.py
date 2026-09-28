@@ -160,6 +160,18 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
         shutil.rmtree(run_dir, ignore_errors=True)
     return details
 
+        details["current_stage"] = "EXPORTING_RULE_INVENTORY"
+        db.update_run_details(run_id, details)
+        inventory_file = run_dir / "rules_inventory.csv"
+        runner.run([
+            "rule-export", "--ruleset-hrefs", str(href_file),
+            "--policy-version", settings.policy_version, "--output-file", str(inventory_file),
+        ])
+        inventory = list(read_rows(inventory_file, RULE_REQUIRED))
+        if not inventory:
+            raise RuntimeError("Complete policy export contains no rule")
+        # Re-read every contract before publishing any current-rule state.
+        _validate_policy_exports(run_dir)
 
 def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
             import_references: bool = False, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:

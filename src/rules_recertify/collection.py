@@ -248,6 +248,15 @@ def backfill_traffic(settings: Settings, backfill_id: str = "traffic-92-days",
     )
     return result
 
+        details["current_stage"] = "EXPORTING_RULESETS"
+        db.update_run_details(run_id, details)
+        rulesets_file = run_dir / "rulesets.csv"
+        runner.run(["ruleset-export", "--output-file", str(rulesets_file)])
+        rulesets = list(read_rows(rulesets_file, ("href", "enabled")))
+        if not rulesets or not any(row["href"] for row in rulesets):
+            raise RuntimeError("Complete policy export contains no ruleset")
+        href_file = run_dir / "ruleset_hrefs_all.csv"
+        write_rows(href_file, ["href"], ({"href": row["href"]} for row in rulesets if row["href"]))
 
 def _collect_traffic_run(
     settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,

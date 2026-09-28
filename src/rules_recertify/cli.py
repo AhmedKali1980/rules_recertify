@@ -9,12 +9,19 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from .collection import collect
+from .archives import purge_expired_archives, restore_archive
+from .collection import (
+    backfill_traffic, collect, collect_policy, collect_traffic,
+    initialize_backfill_traffic,
+)
 from .config import ConfigurationError, load_settings
 from .history.database import Database
 from .logging_utils import configure_logging
+from .notifications import send_summary
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
+from .reporting.microcosmos import generate_microcosmos_reports
+from .reporting.rule_search import generate_rule_search_workbook
 from .workloader.csvio import read_rows
 
 LOG = logging.getLogger(__name__)
@@ -28,10 +35,59 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("validate-config")
     commands.add_parser("init-db")
+    commands.add_parser("test-email", help="Send a standalone SMTP configuration test")
     collect_p = commands.add_parser("collect")
     collect_p.add_argument("--traffic-start", type=_date)
     collect_p.add_argument("--traffic-end", type=_date)
     collect_p.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
+    collect_p.add_argument("--pce-stub-dir", type=Path, help="Use local reference CSVs; never contact a PCE")
+    collect_p.add_argument("--skip-pce-import", action="store_true", help="Skip workload/IP-list reference import")
+    policy = commands.add_parser(
+        "collect-policy", help="Export and publish the complete policy inventory without traffic queries",
+    )
+    policy.add_argument("--pce-stub-dir", type=Path,
+                        help="Use local workload/IP-list/service CSVs; never contact those PCEs")
+    traffic = commands.add_parser(
+        "collect-traffic", help="Collect the next cursor-controlled seven-day traffic window",
+    )
+    traffic.add_argument(
+        "--traffic-start", type=_date,
+        help="Seed for the first window only; later runs always use the persisted cursor",
+    )
+    traffic.add_argument(
+        "--traffic-end", type=_date, default=date.today(),
+        help="Latest available exclusive boundary (default: server-local current date)",
+    )
+    traffic.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
+    init_backfill = commands.add_parser(
+        "init-backfill-traffic", help="Freeze and initialize the 92-day traffic backfill",
+    )
+    init_backfill.add_argument(
+        "--target-end", type=_date, default=date.today(),
+        help="Frozen exclusive target; start is computed as target minus 92 days",
+    )
+    init_backfill.add_argument(
+        "--backfill-id", default="traffic-92-days",
+        help="Persistent identifier; an existing identifier cannot be reinitialized",
+    )
+    backfill = commands.add_parser(
+        "backfill-traffic", help="Process at most one oldest-first backfill window",
+    )
+    backfill.add_argument(
+        "--backfill-id", default="traffic-92-days",
+        help="Identifier previously created by init-backfill-traffic",
+    )
+    backfill.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
+    backfill_status = commands.add_parser(
+        "backfill-status", help="Show persisted backfill state and recent backfill runs",
+    )
+    backfill_status.add_argument("--backfill-id", default="traffic-92-days")
+    restore = commands.add_parser("restore-archive", help="Restore and verify one raw tar.gz archive")
+    restore.add_argument("--archive", type=Path, required=True)
+    restore.add_argument("--target-dir", type=Path,
+                         help="Parent directory for restored run (default: raw_dir/restored)")
+    purge = commands.add_parser("purge-archives", help="Delete archives past retained_until")
+    purge.add_argument("--as-of", type=_date, default=date.today())
     ingest = commands.add_parser("ingest-usage")
     ingest.add_argument("csv", type=Path)
     reference = commands.add_parser("ingest-reference")
@@ -41,9 +97,23 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--kear-id", required=True)
     report.add_argument("--logical-application-name", required=True)
     report.add_argument("--application-label", action="append", required=True)
-    report.add_argument("--environment", required=True)
+    report.add_argument("--environment", action="append", required=True)
     report.add_argument("--lookback-days", type=int)
     report.add_argument("--as-of", type=_date, default=date.today())
+    batch_report = commands.add_parser("report-batch", help="Generate reports from a Microcosmos XLSX export")
+    batch_report.add_argument("--microcosmos-xlsx", type=Path, required=True,
+                              help="Microcosmos XLSX used to generate all non-empty Kear Id rows")
+    batch_report.add_argument("--lookback-days", type=int)
+    batch_report.add_argument("--as-of", type=_date, default=date.today())
+    search = commands.add_parser(
+        "search-rules", help="Find items in the latest SQLite rule snapshot",
+    )
+    search.add_argument("--items", type=Path, required=True,
+                        help="One-column CSV, TXT, or XLSX file containing search items")
+    search.add_argument("--out", type=Path,
+                        help="Output XLSX path (default: output_dir/rules_items_search_<UTC timestamp>.xlsx)")
+    search.add_argument("--case-sensitive", action="store_true",
+                        help="Use case-sensitive text matching (ports are unaffected)")
     return root
 
 
@@ -69,14 +139,87 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "rate_limit_retry_delay_minutes": settings.rate_limit_retry_delay_minutes,
                 "rate_limit_max_retries": settings.rate_limit_max_retries,
                 "empty_scope_ruleset_name_patterns": settings.empty_scope_ruleset_name_patterns,
+                "traffic_environments": settings.traffic_environments,
+                "dangerous_port_lists": settings.dangerous_port_lists,
+                "permissive_rule_max_ips": settings.permissive_rule_max_ips,
                 "smtp_enabled": settings.smtp_enabled,
             }, indent=2)); return 0
         if args.command == "init-db":
             db.initialize(); print(settings.state_db); return 0
+        if args.command == "test-email":
+            if not settings.smtp_enabled:
+                raise ConfigurationError("smtp_enabled must be true to send a test email")
+            test_id = "smtp-test-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            sent = send_summary(settings, {
+                "run_id": test_id, "run_type": "SMTP_TEST", "status": "SUCCESS",
+            })
+            if not sent:
+                raise RuntimeError("SMTP test message was not sent")
+            print(json.dumps({"status": "sent", "run_id": test_id}, indent=2))
+            return 0
         if args.command == "collect":
             end = args.traffic_end or date.today()
             start = args.traffic_start or end - timedelta(days=settings.traffic_window_days)
-            print(json.dumps(collect(settings, start, end, args.no_wait), indent=2, sort_keys=True)); return 0
+            print(json.dumps(collect(settings, start, end, args.no_wait,
+                                     import_references=not args.skip_pce_import,
+                                     pce_stub_dir=args.pce_stub_dir), indent=2, sort_keys=True)); return 0
+        if args.command == "collect-policy":
+            print(json.dumps(
+                collect_policy(settings, pce_stub_dir=args.pce_stub_dir),
+                indent=2, sort_keys=True,
+            )); return 0
+        if args.command == "collect-traffic":
+            print(json.dumps(
+                collect_traffic(settings, args.traffic_end, args.traffic_start, args.no_wait),
+                indent=2, sort_keys=True,
+            )); return 0
+        if args.command == "init-backfill-traffic":
+            print(json.dumps(
+                initialize_backfill_traffic(settings, args.target_end, args.backfill_id),
+                indent=2, sort_keys=True,
+            )); return 0
+        if args.command == "backfill-traffic":
+            print(json.dumps(
+                backfill_traffic(settings, args.backfill_id, args.no_wait),
+                indent=2, sort_keys=True,
+            )); return 0
+        if args.command == "backfill-status":
+            db.initialize()
+            state = db.backfill_state(args.backfill_id)
+            if state is None:
+                raise ValueError(f"unknown backfill: {args.backfill_id}")
+            with db.connect() as connection:
+                rows = connection.execute(
+                    "SELECT run_id,status,started_at,finished_at,details_json "
+                    "FROM runs WHERE run_type='TRAFFIC_BACKFILL' "
+                    "ORDER BY started_at DESC LIMIT 5"
+                ).fetchall()
+            recent = []
+            for row in rows:
+                details = json.loads(str(row[4] or "{}"))
+                recent.append({
+                    "run_id": row[0], "status": row[1],
+                    "started_at": row[2], "finished_at": row[3],
+                    "traffic_start": details.get("traffic_start"),
+                    "traffic_end": details.get("traffic_end"),
+                    "current_stage": details.get("current_stage"),
+                    "current_batch": details.get("current_batch"),
+                    "batch_count": details.get("batch_count"),
+                })
+            print(json.dumps({
+                "backfill": dict(state),
+                "active_run": next(
+                    (run for run in recent if run["status"] == "RUNNING"), None,
+                ),
+                "recent_runs": recent,
+            }, indent=2, sort_keys=True))
+            return 0
+        if args.command == "restore-archive":
+            target_dir = args.target_dir or Path(settings.raw_dir) / "restored"
+            print(restore_archive(args.archive, target_dir)); return 0
+        if args.command == "purge-archives":
+            db.initialize()
+            print(json.dumps(purge_expired_archives(db, args.as_of), indent=2)); return 0
         if args.command == "ingest-usage":
             db.initialize(); run_id = "manual-" + uuid.uuid4().hex
             db.begin_run(run_id, "MANUAL_USAGE", {"csv": str(args.csv)})
@@ -92,9 +235,37 @@ def main(argv: Optional[List[str]] = None) -> int:
             db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
             if not 1 <= lookback <= settings.retention_days:
                 raise ValueError("lookback-days must be between 1 and retention_days")
+            if len(args.application_label) != len(args.environment):
+                raise ValueError("each --application-label must have one corresponding --environment")
             target = generate_workbook(db, Path(settings.output_dir), args.kear_id, args.logical_application_name,
-                                       args.application_label, args.environment, lookback, args.as_of)
+                                       args.application_label, args.environment, lookback, args.as_of,
+                                       raw_dir=Path(settings.raw_dir),
+                                       dangerous_port_lists=settings.dangerous_port_lists,
+                                       device=settings.pce,
+                                       permissive_rule_max_ips=settings.permissive_rule_max_ips)
             print(target); return 0
+        if args.command == "report-batch":
+            db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
+            if not 1 <= lookback <= settings.retention_days:
+                raise ValueError("lookback-days must be between 1 and retention_days")
+            targets = generate_microcosmos_reports(
+                db, args.microcosmos_xlsx, Path(settings.output_dir), Path(settings.raw_dir),
+                lookback, args.as_of,
+                dangerous_port_lists=settings.dangerous_port_lists,
+                device=settings.pce,
+                permissive_rule_max_ips=settings.permissive_rule_max_ips,
+            )
+            print("\n".join(str(target) for target in targets)); return 0
+        if args.command == "search-rules":
+            db.initialize()
+            target = args.out or Path(settings.output_dir) / (
+                "rules_items_search_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
+            )
+            print(generate_rule_search_workbook(
+                db, args.items, target, raw_dir=Path(settings.raw_dir),
+                case_sensitive=args.case_sensitive,
+            ))
+            return 0
         raise AssertionError("unhandled command")
     except (ConfigurationError, ValueError, RuntimeError) as exc:
         LOG.error("%s", exc)

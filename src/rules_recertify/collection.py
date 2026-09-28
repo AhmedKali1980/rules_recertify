@@ -228,6 +228,132 @@ def initialize_backfill_traffic(settings: Settings, target_end: date,
     db.initialize_backfill(backfill_id, start.isoformat(), target_end.isoformat())
     return dict(db.backfill_state(backfill_id) or {})
 
+        details["current_stage"] = "INGESTING_REFERENCES"
+        db.update_run_details(run_id, details)
+        details["reference_ingest"] = ingest_reference(
+            db, run_dir / "export_wkld.derived.csv", run_dir / "export_iplists.csv", run_id,
+        )
+        details.update({
+            "ruleset_count": len(rulesets),
+            "label_count": len(labels),
+            "rule_count": len(inventory),
+            "reference_exports": [
+                name for name in (*POLICY_REFERENCE_EXPORTS, "export_wkld.l3sm.m.csv")
+                if (run_dir / name).is_file()
+            ],
+        })
+        details["artifacts"] = _record_artifacts(db, run_id, run_dir)
+        details["current_stage"] = "FINALIZED"
+        details["status"] = "SUCCESS"
+        manifest = run_dir / "manifest.json"
+        manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
+
+        snapshot_backup = _publish_materialized_snapshot(run_dir, raw_root / "snapshot")
+        snapshot_published = True
+        db.complete_policy_snapshot(
+            run_id, run_id, inventory,
+            snapshot_path=str(raw_root / "snapshot"),
+            manifest_path=str(raw_root / "snapshot" / "manifest.json"),
+            run_details=details,
+        )
+        status = "SUCCESS"
+        if snapshot_backup and snapshot_backup.exists():
+            shutil.rmtree(snapshot_backup, ignore_errors=True)
+            snapshot_backup = None
+    except Exception as exc:
+        details["error"] = str(exc)
+        LOG.exception("Policy collection failed")
+        if snapshot_published:
+            _restore_materialized_snapshot(raw_root / "snapshot", snapshot_backup)
+            snapshot_published = False
+        raise
+    finally:
+        details["status"] = status
+        if status != "SUCCESS":
+            manifest = run_dir / "manifest.json"
+            manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
+            db.finish_run(run_id, status, details)
+        if snapshot_backup and snapshot_backup.exists():
+            shutil.rmtree(snapshot_backup, ignore_errors=True)
+        try:
+            _add_operational_summary(details, db, settings, started_monotonic)
+        except Exception as exc:
+            details["operational_summary_error"] = str(exc)
+            LOG.exception("Operational summary failed without suppressing notification")
+        _send_and_record_summary(db, run_id, settings, details)
+        shutil.rmtree(run_dir, ignore_errors=True)
+    return details
+
+        details["current_stage"] = "EXPORTING_RULE_INVENTORY"
+        db.update_run_details(run_id, details)
+        inventory_file = run_dir / "rules_inventory.csv"
+        runner.run([
+            "rule-export", "--ruleset-hrefs", str(href_file),
+            "--policy-version", settings.policy_version, "--output-file", str(inventory_file),
+        ])
+        inventory = list(read_rows(inventory_file, RULE_REQUIRED))
+        if not inventory:
+            raise RuntimeError("Complete policy export contains no rule")
+        # Re-read every contract before publishing any current-rule state.
+        _validate_policy_exports(run_dir)
+
+def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
+            import_references: bool = False, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
+    """Transitional combined policy/reference/traffic collection."""
+    return _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        import_references=import_references, pce_stub_dir=pce_stub_dir,
+        run_type="COLLECTION", publish_policy_inventory=True,
+    )
+
+
+def collect_traffic(settings: Settings, available_end: date, initial_start: Optional[date] = None,
+                    no_wait: bool = False) -> Dict[str, object]:
+    """Collect the next durable, non-overlapping seven-day traffic window."""
+    db = Database(Path(settings.state_db)); db.initialize()
+    cursor = db.traffic_cursor("weekly")
+    cursor_start: Optional[date] = None
+    if cursor:
+        raw_start = (
+            cursor.get("in_progress_start")
+            if cursor.get("last_status") == "FAILED"
+            else cursor.get("last_successful_end")
+        )
+        if raw_start:
+            cursor_start = date.fromisoformat(str(raw_start))
+    if cursor_start and initial_start and cursor_start != initial_start:
+        raise ValueError(
+            f"traffic cursor requires start {cursor_start.isoformat()}, got {initial_start.isoformat()}"
+        )
+    traffic_start = cursor_start or initial_start or (
+        available_end - timedelta(days=settings.traffic_window_days)
+    )
+    traffic_end = traffic_start + timedelta(days=settings.traffic_window_days)
+    if traffic_end > available_end:
+        raise ValueError(
+            f"complete traffic window [{traffic_start},{traffic_end}) is not available at {available_end}"
+        )
+    result = _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        run_type=RUN_TYPE_TRAFFIC, publish_policy_inventory=False,
+        cursor_name="weekly",
+    )
+    if result["status"] not in SUCCESS_STATUSES:
+        raise RuntimeError(
+            f"Traffic window [{traffic_start},{traffic_end}) incomplete; cursor was not advanced"
+        )
+    return result
+
+
+def initialize_backfill_traffic(settings: Settings, target_end: date,
+                                backfill_id: str = "traffic-92-days") -> Dict[str, object]:
+    """Freeze the 92-day historical target and its oldest-first cursor."""
+    if not backfill_id.strip():
+        raise ValueError("backfill_id must not be empty")
+    start = target_end - timedelta(days=92)
+    db = Database(Path(settings.state_db)); db.initialize()
+    db.initialize_backfill(backfill_id, start.isoformat(), target_end.isoformat())
+    return dict(db.backfill_state(backfill_id) or {})
 
 def backfill_traffic(settings: Settings, backfill_id: str = "traffic-92-days",
                      no_wait: bool = False) -> Dict[str, object]:

@@ -8,6 +8,10 @@ from pathlib import Path
 class ProductionInstallerTest(unittest.TestCase):
     def test_installer_validates_sources_before_overlay(self):
         script = Path("scripts/install-prod.sh").read_text()
+        self.assertEqual(
+            Path("config/release-id").read_text().strip(),
+            "traffic-workflows-v2-indent-fix-2",
+        )
         validation = script.index('"$PYTHON_BIN" -m compileall -q "$SOURCE/src"')
         overlay = script.index("# Overlay version-controlled application files")
         self.assertLess(validation, overlay)

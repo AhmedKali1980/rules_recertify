@@ -62,6 +62,11 @@ and `var/logs` with mode `0750`. On a first install it creates
 `config/local.json` from the production example and `.env` with mode `0600`.
 During an upgrade it preserves `.env`, `config/local.json`, `.venv`, and the entire
 `var` tree. It does not install RPMs, credentials, cron, or Python wheels.
+Before replacing application files, it compiles the complete Python source tree
+and runs `bash -n` over every operational shell script. An indentation, syntax,
+or merge error therefore aborts deployment before the working production code is
+overlaid. Set `RULES_RECERTIFY_PYTHON` when `python3` is not the intended
+production interpreter.
 Set `workloader_config_file` in `config/local.json` to the absolute Workloader
 `pce.yaml` path. Every managed Workloader invocation passes it with
 `--config-file`, so execution does not depend on the cron working directory.
@@ -420,6 +425,21 @@ marked `RUNNING`. It therefore cannot create an ad-hoc window: the CLI still
 reads `next_window_start` and processes at most that one pending seven-day
 window. Do not use `--force` from cron; it is intended for an explicitly
 supervised recovery or stabilization run.
+
+Immediately after a detached launch, verify the persisted state instead of
+assuming that the previously displayed run is the active one:
+
+```bash
+./scripts/rules-recertify \
+  --config config/local.json --env-file .env \
+  backfill-status --backfill-id traffic-92-days
+```
+
+`active_run` is non-null only after the new CLI run has been created in SQLite.
+`recent_runs` keeps the preceding `WARNING` visible for comparison, while the
+new run must appear first with `status: RUNNING`. If `active_run` is null, read
+the detached wrapper log: it exited before starting collection (for example,
+because of the shared lock, Sunday exclusion, missing snapshot, or CLI error).
 
 ### 5.4 Transitional combined collection
 

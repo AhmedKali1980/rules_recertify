@@ -78,6 +78,10 @@ def parser() -> argparse.ArgumentParser:
         help="Identifier previously created by init-backfill-traffic",
     )
     backfill.add_argument("--no-wait", action="store_true", help="Poll once; intended for integration testing")
+    backfill_status = commands.add_parser(
+        "backfill-status", help="Show persisted backfill state and recent backfill runs",
+    )
+    backfill_status.add_argument("--backfill-id", default="traffic-92-days")
     restore = commands.add_parser("restore-archive", help="Restore and verify one raw tar.gz archive")
     restore.add_argument("--archive", type=Path, required=True)
     restore.add_argument("--target-dir", type=Path,
@@ -179,6 +183,37 @@ def main(argv: Optional[List[str]] = None) -> int:
                 backfill_traffic(settings, args.backfill_id, args.no_wait),
                 indent=2, sort_keys=True,
             )); return 0
+        if args.command == "backfill-status":
+            db.initialize()
+            state = db.backfill_state(args.backfill_id)
+            if state is None:
+                raise ValueError(f"unknown backfill: {args.backfill_id}")
+            with db.connect() as connection:
+                rows = connection.execute(
+                    "SELECT run_id,status,started_at,finished_at,details_json "
+                    "FROM runs WHERE run_type='TRAFFIC_BACKFILL' "
+                    "ORDER BY started_at DESC LIMIT 5"
+                ).fetchall()
+            recent = []
+            for row in rows:
+                details = json.loads(str(row[4] or "{}"))
+                recent.append({
+                    "run_id": row[0], "status": row[1],
+                    "started_at": row[2], "finished_at": row[3],
+                    "traffic_start": details.get("traffic_start"),
+                    "traffic_end": details.get("traffic_end"),
+                    "current_stage": details.get("current_stage"),
+                    "current_batch": details.get("current_batch"),
+                    "batch_count": details.get("batch_count"),
+                })
+            print(json.dumps({
+                "backfill": dict(state),
+                "active_run": next(
+                    (run for run in recent if run["status"] == "RUNNING"), None,
+                ),
+                "recent_runs": recent,
+            }, indent=2, sort_keys=True))
+            return 0
         if args.command == "restore-archive":
             target_dir = args.target_dir or Path(settings.raw_dir) / "restored"
             print(restore_archive(args.archive, target_dir)); return 0

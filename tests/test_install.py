@@ -6,6 +6,13 @@ from pathlib import Path
 
 
 class ProductionInstallerTest(unittest.TestCase):
+    def test_installer_validates_sources_before_overlay(self):
+        script = Path("scripts/install-prod.sh").read_text()
+        validation = script.index('"$PYTHON_BIN" -m compileall -q "$SOURCE/src"')
+        overlay = script.index("# Overlay version-controlled application files")
+        self.assertLess(validation, overlay)
+        self.assertIn('bash -n "$script"', script)
+
     def test_install_and_upgrade_preserve_local_state(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "rules_recertify"

@@ -5,12 +5,21 @@ SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${RULES_RECERTIFY_HOME:-/DATA/mco/illumio-mco/rules_recertify}"
 OWNER="${RULES_RECERTIFY_OWNER:-$(id -un)}"
 GROUP="${RULES_RECERTIFY_GROUP:-$(id -gn)}"
+PYTHON_BIN="${RULES_RECERTIFY_PYTHON:-python3}"
 
 if [[ "$TARGET" != /DATA/mco/illumio-mco/rules_recertify && "${RULES_RECERTIFY_ALLOW_NONSTANDARD_HOME:-0}" != 1 ]]; then
   printf 'Refusing non-standard target: %s\n' "$TARGET" >&2
   printf '%s\n' 'A non-standard path additionally requires RULES_RECERTIFY_ALLOW_NONSTANDARD_HOME=1.' >&2
   exit 64
 fi
+
+# Refuse to overlay a syntactically invalid release onto the preserved
+# production configuration and state. This catches indentation and merge
+# damage before any target file is replaced.
+"$PYTHON_BIN" -m compileall -q "$SOURCE/src"
+for script in "$SOURCE"/scripts/*.sh "$SOURCE/scripts/rules-recertify"; do
+  bash -n "$script"
+done
 
 install -d -m 0750 "$TARGET"
 

@@ -40,6 +40,40 @@ class CliTest(unittest.TestCase):
         ])
         self.assertEqual(run.backfill_id, "history")
         self.assertTrue(run.no_wait)
+        status = parser().parse_args(["backfill-status", "--backfill-id", "history"])
+        self.assertEqual(status.backfill_id, "history")
+
+    def test_backfill_status_distinguishes_active_and_previous_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.json"
+            env_file = root / "missing.env"
+            database_path = root / "state.sqlite"
+            config.write_text(json.dumps({"pce": "p", "state_db": str(database_path)}))
+            from rules_recertify.history.database import Database, RUN_TYPE_BACKFILL
+            database = Database(database_path)
+            database.initialize()
+            database.initialize_backfill("history", "2026-06-20", "2026-09-20")
+            database.begin_run("old", RUN_TYPE_BACKFILL, {
+                "traffic_start": "2026-06-20", "traffic_end": "2026-06-27",
+            })
+            database.finish_run("old", "WARNING", {
+                "traffic_start": "2026-06-20", "traffic_end": "2026-06-27",
+            })
+            database.begin_run("new", RUN_TYPE_BACKFILL, {
+                "traffic_start": "2026-06-20", "traffic_end": "2026-06-27",
+                "current_stage": "EXPORTING_RULESETS",
+            })
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = main([
+                    "--config", str(config), "--env-file", str(env_file),
+                    "backfill-status", "--backfill-id", "history",
+                ])
+            payload = json.loads(output.getvalue())
+            self.assertEqual(result, 0)
+            self.assertEqual(payload["active_run"]["run_id"], "new")
+            self.assertEqual(payload["recent_runs"][1]["status"], "WARNING")
 
     def test_archive_maintenance_commands_parse_paths_and_dates(self):
         restore = parser().parse_args([

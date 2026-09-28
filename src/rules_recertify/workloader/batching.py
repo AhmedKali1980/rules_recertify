@@ -51,6 +51,7 @@ def select_application_scoped_rulesets(
     rows: Iterable[Mapping[str, str]],
     application_labels: Iterable[str],
     empty_scope_ruleset_name_patterns: Iterable[str] = (),
+    traffic_environments: Iterable[str] = (),
 ) -> Tuple[List[RulesetCount], List[ExcludedRuleset]]:
     """Select application scopes and configured name-based empty-scope exceptions."""
     known_apps = {value.strip() for value in application_labels if value.strip()}
@@ -58,6 +59,9 @@ def select_application_scoped_rulesets(
         value.strip().casefold()
         for value in empty_scope_ruleset_name_patterns
         if value.strip()
+    }
+    allowed_environments = {
+        value.strip().casefold() for value in traffic_environments if value.strip()
     }
     rulesets: Dict[str, List[str]] = {}
     ruleset_names: Dict[str, List[str]] = {}
@@ -82,12 +86,19 @@ def select_application_scoped_rulesets(
             for pattern in empty_scope_patterns
         ):
             reason = "EMPTY_SCOPE"
+        elif not scope and allowed_environments:
+            reason = "ENVIRONMENT_FILTER_MISMATCH"
         elif scope:
             dimensions = _parse_application_scope(scope)
             if dimensions is None:
                 reason = "INVALID_SCOPE_FORMAT"
             elif dimensions["app"] not in known_apps:
                 reason = "UNKNOWN_APPLICATION_LABEL"
+            elif (
+                allowed_environments
+                and dimensions["env"].casefold() not in allowed_environments
+            ):
+                reason = "ENVIRONMENT_FILTER_MISMATCH"
         if reason:
             excluded.append(ExcludedRuleset(href, len(scopes), scope, reason))
         else:

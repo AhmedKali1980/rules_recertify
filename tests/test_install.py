@@ -21,6 +21,11 @@ class ProductionInstallerTest(unittest.TestCase):
             self.assertEqual((target / ".env").stat().st_mode & 0o777, 0o600)
             self.assertEqual((target / "scripts/rules-recertify").stat().st_mode & 0o777, 0o755)
             self.assertEqual((target / "scripts/check-collection.sh").stat().st_mode & 0o777, 0o755)
+            for script in (
+                "daily-policy-collect.sh", "weekly-traffic-collect.sh", "backfill-traffic.sh",
+            ):
+                self.assertEqual((target / "scripts" / script).stat().st_mode & 0o777, 0o755)
+            self.assertTrue((target / "var/raw/archives").is_dir())
             (target / ".env").write_text("PCE=preserved\n", encoding="utf-8")
             (target / "config/local.json").write_text('{"preserved": true}\n', encoding="utf-8")
             (target / "var/state/sentinel").write_text("state", encoding="utf-8")

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+printf '%s\n' 'WARNING: daily-collect.sh is the transitional combined collector; production must use the dedicated wrappers.' >&2
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${RULES_RECERTIFY_CONFIG:-${ROOT}/config/local.json}"
 VENV="${RULES_RECERTIFY_VENV:-${ROOT}/.venv}"

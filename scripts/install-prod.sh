@@ -5,12 +5,28 @@ SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${RULES_RECERTIFY_HOME:-/DATA/mco/illumio-mco/rules_recertify}"
 OWNER="${RULES_RECERTIFY_OWNER:-$(id -un)}"
 GROUP="${RULES_RECERTIFY_GROUP:-$(id -gn)}"
+PYTHON_BIN="${RULES_RECERTIFY_PYTHON:-python3}"
+RELEASE_ID_FILE="$SOURCE/config/release-id"
 
 if [[ "$TARGET" != /DATA/mco/illumio-mco/rules_recertify && "${RULES_RECERTIFY_ALLOW_NONSTANDARD_HOME:-0}" != 1 ]]; then
   printf 'Refusing non-standard target: %s\n' "$TARGET" >&2
   printf '%s\n' 'A non-standard path additionally requires RULES_RECERTIFY_ALLOW_NONSTANDARD_HOME=1.' >&2
   exit 64
 fi
+
+if [[ ! -s "$RELEASE_ID_FILE" ]]; then
+  printf 'Missing release identity: %s\n' "$RELEASE_ID_FILE" >&2
+  exit 65
+fi
+printf 'Validating release: %s\n' "$(<"$RELEASE_ID_FILE")"
+
+# Refuse to overlay a syntactically invalid release onto the preserved
+# production configuration and state. This catches indentation and merge
+# damage before any target file is replaced.
+"$PYTHON_BIN" -m compileall -q "$SOURCE/src"
+for script in "$SOURCE"/scripts/*.sh "$SOURCE/scripts/rules-recertify"; do
+  bash -n "$script"
+done
 
 install -d -m 0750 "$TARGET"
 
@@ -34,6 +50,7 @@ rm -f "$TARGET/pyproject.toml"
 install -d -m 0750 \
   "$TARGET/var/state" \
   "$TARGET/var/raw" \
+  "$TARGET/var/raw/archives" \
   "$TARGET/var/output" \
   "$TARGET/var/logs"
 
@@ -42,7 +59,17 @@ install -d -m 0750 \
 chmod 0755 "$TARGET/scripts/install-prod.sh" \
   "$TARGET/scripts/rules-recertify" \
   "$TARGET/scripts/daily-collect.sh" \
-  "$TARGET/scripts/check-collection.sh"
+  "$TARGET/scripts/collection_common.sh" \
+  "$TARGET/scripts/daily-policy-collect.sh" \
+  "$TARGET/scripts/weekly-traffic-collect.sh" \
+  "$TARGET/scripts/backfill-traffic.sh" \
+  "$TARGET/scripts/check-collection.sh" \
+  "$TARGET/scripts/import-pce-reference.sh" \
+  "$TARGET/scripts/workloader_common.sh" \
+  "$TARGET/scripts/workloader-wkld-export.sh" \
+  "$TARGET/scripts/workloader-wkld-l3sm-managed-export.sh" \
+  "$TARGET/scripts/workloader-ipl-export.sh" \
+  "$TARGET/scripts/workloader-svc-export.sh"
 
 if [[ ! -e "$TARGET/config/local.json" ]]; then
   install -m 0640 "$TARGET/config/production.example.json" "$TARGET/config/local.json"

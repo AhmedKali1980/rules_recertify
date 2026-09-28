@@ -1,12 +1,12 @@
 {
   "pce": "pce-prd-l3.wr",
-  "workloader_dir": "/DATA/WORKLOADER/ver12",
-  "workloader_config_file": "/DATA/WORKLOADER/ver12/pce.yaml",
+  "workloader_dir": "/DATA/mco/illumio-mco/rules_recertify/workloader",
+  "workloader_config_file": "/DATA/mco/illumio-mco/rules_recertify/workloader/pce.yaml",
   "state_db": "/DATA/mco/illumio-mco/rules_recertify/var/state/rules_recertify.sqlite",
   "raw_dir": "/DATA/mco/illumio-mco/rules_recertify/var/raw",
   "output_dir": "/DATA/mco/illumio-mco/rules_recertify/var/output",
   "log_dir": "/DATA/mco/illumio-mco/rules_recertify/var/logs",
-  "traffic_window_days": 1,
+  "traffic_window_days": 7,
   "traffic_batch_size": 100,
   "traffic_max_results": 10000,
   "query_initial_delay_minutes": 30,
@@ -16,8 +16,11 @@
   "rate_limit_retry_delay_minutes": 10,
   "rate_limit_max_retries": 12,
   "empty_scope_ruleset_name_patterns": ["OUTBOUND2APA"],
-  "retention_days": 200,
-  "default_lookback_days": 180,
+  "traffic_environments": [],
+  "retention_days": 550,
+  "default_lookback_days": 548,
   "policy_version": "draft",
-  "smtp_enabled": false
+  "smtp_enabled": false,
+  "dangerous_port_lists": ["PORTS_TO_CONTROL", "PORTS_TO_ERADICATE"],
+  "permissive_rule_max_ips": 255
 }

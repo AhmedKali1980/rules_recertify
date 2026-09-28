@@ -4,7 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 from rules_recertify.archives import restore_archive
 from rules_recertify.collection import (
-    _validated_usage_rows, backfill_traffic, collect, collect_policy, collect_traffic,
+    _initial_traffic_run_details, _validated_usage_rows,
+    backfill_traffic, collect, collect_policy, collect_traffic,
     initialize_backfill_traffic,
 )
 from rules_recertify.config import Settings
@@ -99,6 +100,15 @@ def _policy_reference_stub(root):
 
 
 class CollectionTest(unittest.TestCase):
+ def test_initial_traffic_details_have_explicit_export_stage(self):
+  details = _initial_traffic_run_details(
+   "run", date(2026,6,20), date(2026,6,27), "TRAFFIC_BACKFILL", ("PRD",),
+  )
+  self.assertEqual(details["current_stage"], "EXPORTING_RULESETS")
+  self.assertEqual(details["traffic_start"], "2026-06-20")
+  self.assertEqual(details["traffic_end"], "2026-06-27")
+  self.assertEqual(details["traffic_environments"], ["PRD"])
+
  def test_completed_backfill_stops_without_creating_a_run(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d)

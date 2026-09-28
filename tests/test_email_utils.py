@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from rules_recertify.collection import _send_and_record_summary
+from rules_recertify.collection_engine import _send_and_record_summary
 from rules_recertify.config import Settings
 from rules_recertify.email_utils import parse_recipients, send_email
 from rules_recertify.history.database import Database
@@ -78,7 +78,7 @@ class EmailUtilsTest(unittest.TestCase):
             database.begin_run("run", "TRAFFIC_BACKFILL", details)
             database.finish_run("run", "WARNING", details)
             with patch(
-                "rules_recertify.collection.send_summary",
+                "rules_recertify.collection_engine.send_summary",
                 side_effect=RuntimeError("SMTP unavailable"),
             ):
                 _send_and_record_summary(

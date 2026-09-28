@@ -10,7 +10,7 @@ class ProductionInstallerTest(unittest.TestCase):
         script = Path("scripts/install-prod.sh").read_text()
         self.assertEqual(
             Path("config/release-id").read_text().strip(),
-            "traffic-workflows-v2-indent-fix-2",
+            "traffic-workflows-v2-collection-engine",
         )
         validation = script.index('"$PYTHON_BIN" -m compileall -q "$SOURCE/src"')
         overlay = script.index("# Overlay version-controlled application files")

@@ -67,6 +67,10 @@ and runs `bash -n` over every operational shell script. An indentation, syntax,
 or merge error therefore aborts deployment before the working production code is
 overlaid. Set `RULES_RECERTIFY_PYTHON` when `python3` is not the intended
 production interpreter.
+The collection implementation is stored in `collection_engine.py`;
+`collection.py` is intentionally a small compatibility module. This layout
+also makes a damaged legacy aggregate file immediately distinguishable from a
+current release artifact.
 Set `workloader_config_file` in `config/local.json` to the absolute Workloader
 `pce.yaml` path. Every managed Workloader invocation passes it with
 `--config-file`, so execution does not depend on the cron working directory.

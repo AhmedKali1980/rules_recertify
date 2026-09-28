@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .archives import purge_expired_archives, restore_archive
-from .collection import (
+from .collection_engine import (
     backfill_traffic, collect, collect_policy, collect_traffic,
     initialize_backfill_traffic,
 )

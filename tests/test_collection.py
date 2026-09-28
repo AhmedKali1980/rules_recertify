@@ -3,7 +3,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 from rules_recertify.archives import restore_archive
-from rules_recertify.collection import (
+from rules_recertify.collection_engine import (
     _initial_traffic_run_details, _validated_usage_rows,
     backfill_traffic, collect, collect_policy, collect_traffic,
     initialize_backfill_traffic,
@@ -213,7 +213,7 @@ class CollectionTest(unittest.TestCase):
                      query_initial_delay_minutes=0,batch_cooldown_seconds=0)
    environment={'FAKE_TRAFFIC_START':'2026-09-13','FAKE_TRAFFIC_END':'2026-09-20'}
    with patch.dict(os.environ,environment), patch(
-       'rules_recertify.collection.prepare_run_archive',side_effect=RuntimeError('disk full')):
+       'rules_recertify.collection_engine.prepare_run_archive',side_effect=RuntimeError('disk full')):
     with self.assertRaisesRegex(RuntimeError,'cursor was not advanced'):
      collect_traffic(settings,date(2026,9,20),date(2026,9,13),no_wait=True)
    with sqlite3.connect(root/'db.sqlite') as connection:

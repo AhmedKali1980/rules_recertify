@@ -21,14 +21,16 @@ def classify_traffic_outcome(
     def count(name: str) -> int:
         return int(details.get(name, 0) or 0)
 
-    if count("total") == 0 and not allow_empty:
+    documented_absence_count = (
+        count("skipped_oversized_ruleset_count")
+        + count("runtime_oversized_ruleset_count")
+        + count("missing_result_count")
+    )
+    if count("total") == 0 and not allow_empty and not documented_absence_count:
         blocking.append("NO_TRAFFIC_RESULTS")
     for field, reason in (
         ("pending", "ASYNC_QUERIES_PENDING"),
         ("expired", "ASYNC_QUERIES_EXPIRED"),
-        ("skipped_oversized_ruleset_count", "RULESETS_SKIPPED_OVERSIZED"),
-        ("runtime_oversized_ruleset_count", "RULESETS_SKIPPED_RUNTIME_OVERSIZED"),
-        ("missing_result_count", "RULES_WITHOUT_RESULT"),
     ):
         if count(field):
             blocking.append(reason)
@@ -37,6 +39,9 @@ def classify_traffic_outcome(
         ("unknown", "ASYNC_STATUS_UNKNOWN_OR_EMPTY"),
         ("invalid_query_body_count", "INVALID_QUERY_BODY"),
         ("invalid_flows_by_port_count", "INVALID_PORT_DETAILS"),
+        ("skipped_oversized_ruleset_count", "RULESETS_SKIPPED_OVERSIZED"),
+        ("runtime_oversized_ruleset_count", "RULESETS_SKIPPED_RUNTIME_OVERSIZED"),
+        ("missing_result_count", "RULES_WITHOUT_RESULT"),
     ):
         if count(field):
             exceptions.append(reason)
@@ -74,10 +79,10 @@ def build_traffic_audit_rows(
             outcome = "NOT_IN_SCOPE"
             reason = excluded_reasons[ruleset_href]
         elif ruleset_href in oversized_rulesets:
-            outcome = "BLOCKING_PROBLEM"
+            outcome = "DOCUMENTED_EXCEPTION"
             reason = oversized_rulesets[ruleset_href]
         elif usage is None:
-            outcome = "BLOCKING_PROBLEM"
+            outcome = "DOCUMENTED_EXCEPTION"
             reason = "NO_RESULT_RETURNED"
         else:
             async_status = str(usage.get("async_query_status", "")).strip().lower()

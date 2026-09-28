@@ -119,7 +119,7 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
             ],
         })
         details["artifacts"] = _record_artifacts(db, run_id, run_dir)
-        details.pop("current_stage", None)
+        details["current_stage"] = "FINALIZED"
         details["status"] = "SUCCESS"
         manifest = run_dir / "manifest.json"
         manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
@@ -156,10 +156,7 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
         except Exception as exc:
             details["operational_summary_error"] = str(exc)
             LOG.exception("Operational summary failed without suppressing notification")
-        try:
-            send_summary(settings, details)
-        except Exception:
-            LOG.exception("SMTP summary failed without changing policy collection status")
+        _send_and_record_summary(db, run_id, settings, details)
         shutil.rmtree(run_dir, ignore_errors=True)
     return details
 
@@ -251,6 +248,141 @@ def backfill_traffic(settings: Settings, backfill_id: str = "traffic-92-days",
     )
     return result
 
+        details["current_stage"] = "EXPORTING_RULESETS"
+        db.update_run_details(run_id, details)
+        rulesets_file = run_dir / "rulesets.csv"
+        runner.run(["ruleset-export", "--output-file", str(rulesets_file)])
+        rulesets = list(read_rows(rulesets_file, ("href", "enabled")))
+        if not rulesets or not any(row["href"] for row in rulesets):
+            raise RuntimeError("Complete policy export contains no ruleset")
+        href_file = run_dir / "ruleset_hrefs_all.csv"
+        write_rows(href_file, ["href"], ({"href": row["href"]} for row in rulesets if row["href"]))
+
+        details["current_stage"] = "EXPORTING_LABELS"
+        db.update_run_details(run_id, details)
+        labels_file = run_dir / "labels.csv"
+        runner.run(["label-export", "--output-file", str(labels_file)])
+        labels = list(read_rows(labels_file, LABEL_REQUIRED))
+
+        details["current_stage"] = "EXPORTING_RULE_INVENTORY"
+        db.update_run_details(run_id, details)
+        inventory_file = run_dir / "rules_inventory.csv"
+        runner.run([
+            "rule-export", "--ruleset-hrefs", str(href_file),
+            "--policy-version", settings.policy_version, "--output-file", str(inventory_file),
+        ])
+        inventory = list(read_rows(inventory_file, RULE_REQUIRED))
+        if not inventory:
+            raise RuntimeError("Complete policy export contains no rule")
+        # Re-read every contract before publishing any current-rule state.
+        _validate_policy_exports(run_dir)
+
+        details["current_stage"] = "INGESTING_REFERENCES"
+        db.update_run_details(run_id, details)
+        details["reference_ingest"] = ingest_reference(
+            db, run_dir / "export_wkld.derived.csv", run_dir / "export_iplists.csv", run_id,
+        )
+        details.update({
+            "ruleset_count": len(rulesets),
+            "label_count": len(labels),
+            "rule_count": len(inventory),
+            "reference_exports": [
+                name for name in (*POLICY_REFERENCE_EXPORTS, "export_wkld.l3sm.m.csv")
+                if (run_dir / name).is_file()
+            ],
+        })
+        details["artifacts"] = _record_artifacts(db, run_id, run_dir)
+        details.pop("current_stage", None)
+        details["status"] = "SUCCESS"
+        manifest = run_dir / "manifest.json"
+        manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
+
+        snapshot_backup = _publish_materialized_snapshot(run_dir, raw_root / "snapshot")
+        snapshot_published = True
+        db.complete_policy_snapshot(
+            run_id, run_id, inventory,
+            snapshot_path=str(raw_root / "snapshot"),
+            manifest_path=str(raw_root / "snapshot" / "manifest.json"),
+            run_details=details,
+        )
+        status = "SUCCESS"
+        if snapshot_backup and snapshot_backup.exists():
+            shutil.rmtree(snapshot_backup, ignore_errors=True)
+            snapshot_backup = None
+    except Exception as exc:
+        details["error"] = str(exc)
+        LOG.exception("Policy collection failed")
+        if snapshot_published:
+            _restore_materialized_snapshot(raw_root / "snapshot", snapshot_backup)
+            snapshot_published = False
+        raise
+    finally:
+        details["status"] = status
+        if status != "SUCCESS":
+            manifest = run_dir / "manifest.json"
+            manifest.write_text(json.dumps(details, indent=2, sort_keys=True), encoding="utf-8")
+            db.finish_run(run_id, status, details)
+        if snapshot_backup and snapshot_backup.exists():
+            shutil.rmtree(snapshot_backup, ignore_errors=True)
+        try:
+            _add_operational_summary(details, db, settings, started_monotonic)
+        except Exception as exc:
+            details["operational_summary_error"] = str(exc)
+            LOG.exception("Operational summary failed without suppressing notification")
+        try:
+            send_summary(settings, details)
+        except Exception:
+            LOG.exception("SMTP summary failed without changing policy collection status")
+        shutil.rmtree(run_dir, ignore_errors=True)
+    return details
+
+
+def collect(settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
+            import_references: bool = False, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
+    """Transitional combined policy/reference/traffic collection."""
+    return _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        import_references=import_references, pce_stub_dir=pce_stub_dir,
+        run_type="COLLECTION", publish_policy_inventory=True,
+    )
+
+
+def collect_traffic(settings: Settings, available_end: date, initial_start: Optional[date] = None,
+                    no_wait: bool = False) -> Dict[str, object]:
+    """Collect the next durable, non-overlapping seven-day traffic window."""
+    db = Database(Path(settings.state_db)); db.initialize()
+    cursor = db.traffic_cursor("weekly")
+    cursor_start: Optional[date] = None
+    if cursor:
+        raw_start = (
+            cursor.get("in_progress_start")
+            if cursor.get("last_status") == "FAILED"
+            else cursor.get("last_successful_end")
+        )
+        if raw_start:
+            cursor_start = date.fromisoformat(str(raw_start))
+    if cursor_start and initial_start and cursor_start != initial_start:
+        raise ValueError(
+            f"traffic cursor requires start {cursor_start.isoformat()}, got {initial_start.isoformat()}"
+        )
+    traffic_start = cursor_start or initial_start or (
+        available_end - timedelta(days=settings.traffic_window_days)
+    )
+    traffic_end = traffic_start + timedelta(days=settings.traffic_window_days)
+    if traffic_end > available_end:
+        raise ValueError(
+            f"complete traffic window [{traffic_start},{traffic_end}) is not available at {available_end}"
+        )
+    result = _collect_traffic_run(
+        settings, traffic_start, traffic_end, no_wait,
+        run_type=RUN_TYPE_TRAFFIC, publish_policy_inventory=False,
+        cursor_name="weekly",
+    )
+    if result["status"] not in SUCCESS_STATUSES:
+        raise RuntimeError(
+            f"Traffic window [{traffic_start},{traffic_end}) incomplete; cursor was not advanced"
+        )
+    return result
 
 def _collect_traffic_run(
     settings: Settings, traffic_start: date, traffic_end: date, no_wait: bool = False,
@@ -558,7 +690,7 @@ def _collect_traffic_run(
         ]
         details["runtime_oversized_ruleset_count"] = len(runtime_oversized)
         details.pop("current_batch", None)
-        details.pop("current_stage", None)
+        details["current_stage"] = "FINALIZED"
         summary = _summarize_batches(details["batches"])
         details.update(summary)
         details["invalid_query_body_count"] = sum(
@@ -670,10 +802,7 @@ def _collect_traffic_run(
         except Exception as exc:
             details["operational_summary_error"] = str(exc)
             LOG.exception("Operational summary failed without suppressing notification")
-        try:
-            send_summary(settings, details, traffic_audit_path)
-        except Exception:
-            LOG.exception("SMTP summary failed without changing collection status")
+        _send_and_record_summary(db, run_id, settings, details, traffic_audit_path)
         if run_type in {RUN_TYPE_TRAFFIC, RUN_TYPE_BACKFILL}:
             shutil.rmtree(run_dir, ignore_errors=True)
         if status in SUCCESS_STATUSES:
@@ -682,6 +811,25 @@ def _collect_traffic_run(
             except Exception:
                 LOG.exception("Archive purge failed without changing collection status")
     return details
+
+
+def _send_and_record_summary(
+    db: Database, run_id: str, settings: Settings, details: Dict[str, object],
+    attachment_path: Optional[Path] = None,
+) -> None:
+    """Send the optional summary and retain its outcome in the finalized run."""
+    try:
+        sent = send_summary(settings, details, attachment_path)
+        details["notification_status"] = "SENT" if sent else "DISABLED"
+        details.pop("notification_error", None)
+    except Exception as exc:
+        details["notification_status"] = "FAILED"
+        details["notification_error"] = str(exc)
+        LOG.exception("SMTP summary failed without changing collection status")
+    try:
+        db.replace_run_details(run_id, details)
+    except Exception:
+        LOG.exception("Failed to persist final notification state")
 
 
 def _add_operational_summary(

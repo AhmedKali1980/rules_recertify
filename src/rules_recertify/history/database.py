@@ -199,6 +199,16 @@ class Database:
                 (json.dumps(details, sort_keys=True), run_id),
             )
 
+    def replace_run_details(self, run_id: str, details: Mapping[str, object]) -> None:
+        """Persist post-finalization metadata without changing run status or timestamps."""
+        with self.connect() as db:
+            changed = db.execute(
+                "UPDATE runs SET details_json=? WHERE run_id=?",
+                (json.dumps(details, sort_keys=True), run_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError(f"unknown run: {run_id}")
+
     def certification_coverage(self) -> Mapping[str, int]:
         """Return unique calendar-day coverage from successful traffic windows."""
         with self.connect() as db:

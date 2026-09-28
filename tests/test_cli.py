@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from rules_recertify.cli import main, parser
 
@@ -97,3 +98,21 @@ class CliTest(unittest.TestCase):
             self.assertEqual(payload["state_db"], expected_db)
             self.assertEqual(payload["raw_dir"], str(root / "raw"))
             self.assertIn("traffic_batch_size", payload)
+
+    def test_email_command_uses_loaded_smtp_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.json"
+            env_file = root / ".env"
+            config.write_text(json.dumps({"pce": "p", "smtp_enabled": True}))
+            env_file.write_text("SMTP_HOST=mail.internal\nSMTP_TO=ops@example.test\n")
+            env_file.chmod(0o600)
+            output = io.StringIO()
+            with patch("rules_recertify.cli.send_summary", return_value=True) as sender:
+                with contextlib.redirect_stdout(output):
+                    result = main([
+                        "--config", str(config), "--env-file", str(env_file), "test-email",
+                    ])
+            self.assertEqual(result, 0)
+            self.assertEqual(json.loads(output.getvalue())["status"], "sent")
+            self.assertEqual(sender.call_args.args[1]["run_type"], "SMTP_TEST")

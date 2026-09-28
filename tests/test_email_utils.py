@@ -1,9 +1,13 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
+from rules_recertify.collection import _send_and_record_summary
+from rules_recertify.config import Settings
 from rules_recertify.email_utils import parse_recipients, send_email
+from rules_recertify.history.database import Database
 from rules_recertify.notifications import _summary_lines
 
 
@@ -65,6 +69,29 @@ class EmailUtilsTest(unittest.TestCase):
         self.assertEqual(smtp.host, "mail.internal")
         self.assertEqual(smtp.credentials, ("service", "secret"))
         self.assertIn("audit.xlsx", smtp.message.as_string())
+
+    def test_notification_failure_is_persisted_without_changing_run_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "state.sqlite")
+            database.initialize()
+            details = {"run_id": "run", "status": "WARNING"}
+            database.begin_run("run", "TRAFFIC_BACKFILL", details)
+            database.finish_run("run", "WARNING", details)
+            with patch(
+                "rules_recertify.collection.send_summary",
+                side_effect=RuntimeError("SMTP unavailable"),
+            ):
+                _send_and_record_summary(
+                    database, "run", Settings(pce="pce", smtp_enabled=True), details,
+                )
+            with database.connect() as connection:
+                row = connection.execute(
+                    "SELECT status,details_json FROM runs WHERE run_id='run'"
+                ).fetchone()
+            stored = json.loads(row[1])
+            self.assertEqual(row[0], "WARNING")
+            self.assertEqual(stored["notification_status"], "FAILED")
+            self.assertEqual(stored["notification_error"], "SMTP unavailable")
 
 
 if __name__ == "__main__":

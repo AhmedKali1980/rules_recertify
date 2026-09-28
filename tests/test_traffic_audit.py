@@ -22,7 +22,7 @@ class TrafficAuditTest(unittest.TestCase):
             exceptions, ["ASYNC_STATUS_UNKNOWN_OR_EMPTY", "INVALID_QUERY_BODY"],
         )
 
-    def test_pending_expired_oversized_and_missing_results_are_blocking(self):
+    def test_only_pending_and_expired_block_other_gaps_are_documented(self):
         status, blocking, exceptions = classify_traffic_outcome({
             "total": 10,
             "pending": 1,
@@ -32,8 +32,40 @@ class TrafficAuditTest(unittest.TestCase):
             "missing_result_count": 3,
         })
         self.assertEqual(status, "WARNING")
-        self.assertEqual(exceptions, [])
-        self.assertEqual(len(blocking), 5)
+        self.assertEqual(blocking, [
+            "ASYNC_QUERIES_PENDING", "ASYNC_QUERIES_EXPIRED",
+        ])
+        self.assertEqual(exceptions, [
+            "RULESETS_SKIPPED_OVERSIZED", "RULESETS_SKIPPED_RUNTIME_OVERSIZED",
+            "RULES_WITHOUT_RESULT",
+        ])
+
+    def test_missing_results_alone_advance_as_documented_exception(self):
+        status, blocking, exceptions = classify_traffic_outcome({
+            "total": 0,
+            "missing_result_count": 2,
+        })
+        self.assertEqual(status, "SUCCESS_WITH_EXCEPTIONS")
+        self.assertEqual(blocking, [])
+        self.assertEqual(exceptions, ["RULES_WITHOUT_RESULT"])
+
+    def test_oversized_ruleset_alone_advances_as_documented_exception(self):
+        status, blocking, exceptions = classify_traffic_outcome({
+            "total": 10,
+            "skipped_oversized_ruleset_count": 1,
+        })
+        self.assertEqual(status, "SUCCESS_WITH_EXCEPTIONS")
+        self.assertEqual(blocking, [])
+        self.assertEqual(exceptions, ["RULESETS_SKIPPED_OVERSIZED"])
+
+    def test_all_eligible_rulesets_oversized_is_still_non_blocking(self):
+        status, blocking, exceptions = classify_traffic_outcome({
+            "total": 0,
+            "skipped_oversized_ruleset_count": 2,
+        })
+        self.assertEqual(status, "SUCCESS_WITH_EXCEPTIONS")
+        self.assertEqual(blocking, [])
+        self.assertEqual(exceptions, ["RULESETS_SKIPPED_OVERSIZED"])
 
     def test_audit_separates_processed_filtered_exception_and_blocking_rules(self):
         inventory = [
@@ -51,7 +83,7 @@ class TrafficAuditTest(unittest.TestCase):
         )
         self.assertEqual(
             [row["outcome"] for row in rows],
-            ["PROCESSED", "NOT_IN_SCOPE", "DOCUMENTED_EXCEPTION", "BLOCKING_PROBLEM"],
+            ["PROCESSED", "NOT_IN_SCOPE", "DOCUMENTED_EXCEPTION", "DOCUMENTED_EXCEPTION"],
         )
         self.assertEqual(counts["missing_result_count"], 1)
 

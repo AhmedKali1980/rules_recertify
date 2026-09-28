@@ -162,6 +162,24 @@ Use `.env` primarily for optional SMTP secrets. Runtime paths and the normal PCE
 selection belong in `config/local.json` and `pce.yaml`. The parser never
 evaluates shell syntax. Do not run `source .env`; do not commit it.
 
+To enable completion notifications, set `"smtp_enabled": true` in
+`config/local.json`, configure `SMTP_HOST`, `SMTP_TO`, and any relay-specific
+TLS or authentication values in `.env`, then test delivery independently:
+
+```bash
+chmod 600 .env
+./scripts/rules-recertify \
+  --config config/local.json \
+  --env-file .env \
+  test-email
+```
+
+The test returns `{"status": "sent"}` only after the SMTP server accepts the
+message. Finalized collections persist `notification_status` as `SENT`,
+`DISABLED`, or `FAILED` in `runs.details_json`; a failure also records
+`notification_error` without changing the traffic outcome. This separates an
+SMTP delivery problem from a blocking traffic `WARNING`.
+
 Legacy `PCE`, `WORKLOADER_DIR`, and `STATE_DB` values in `.env` still override
 `config/local.json`; new installations should not define them. For an
 installation created from an earlier template, check these non-secret keys:
@@ -285,9 +303,11 @@ intentionally not Data Quality defects.
 
 The durable cursor uses three outcomes. `SUCCESS` means a complete clean run.
 `SUCCESS_WITH_EXCEPTIONS` means the run completed with documented, non-blocking
-exceptions (an empty/unknown async status or invalid returned row); the cursor
-still advances. `WARNING` is reserved for blocking incompleteness: pending or
-expired queries, oversized rulesets, or inventory rules with no result. A
+exceptions (an empty/unknown async status, invalid returned row, a ruleset
+deliberately excluded by the configured traffic-size threshold, or an inventory
+rule for which Workloader returned no row); the cursor still advances. The
+missing rule remains explicit as `NO_RESULT_RETURNED` in the audit workbook.
+`WARNING` is reserved for pending or expired asynchronous queries. A
 warning retains the original start and end so the next invocation replays that
 exact window.
 Successful windows therefore meet exactly at their exclusive boundaries, with

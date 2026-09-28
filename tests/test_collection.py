@@ -329,7 +329,7 @@ class CollectionTest(unittest.TestCase):
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'; binary.write_text(FAKE_OVERSIZED); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
    settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),traffic_batch_size=100,query_initial_delay_minutes=0)
    result=collect(settings,date(2026,8,20),date(2026,8,21),no_wait=True)
-   self.assertEqual(result['status'],'WARNING')
+   self.assertEqual(result['status'],'SUCCESS_WITH_EXCEPTIONS')
    self.assertEqual(result['skipped_oversized_ruleset_count'],1)
    self.assertEqual(result['skipped_oversized_rule_count'],101)
    self.assertEqual(result['batches'],[])
@@ -356,7 +356,7 @@ class CollectionTest(unittest.TestCase):
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'; binary.write_text(FAKE_RUNTIME_OVERSIZED); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
    settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),traffic_batch_size=100,query_initial_delay_minutes=0)
    result=collect(settings,date(2026,8,20),date(2026,8,21),no_wait=True)
-   self.assertEqual(result['status'],'WARNING')
+   self.assertEqual(result['status'],'SUCCESS_WITH_EXCEPTIONS')
    self.assertEqual(result['runtime_oversized_ruleset_count'],1)
    self.assertEqual(result['runtime_oversized_rulesets'],[{'ruleset_href':'/rs/big','inventory_rule_count':100,'reported_rule_count':101,'reason':'TRAFFIC_RULE_LIMIT_EXCEEDED'}])
    with sqlite3.connect(root/'db.sqlite') as connection:

@@ -17,6 +17,7 @@ from .collection import (
 from .config import ConfigurationError, load_settings
 from .history.database import Database
 from .logging_utils import configure_logging
+from .notifications import send_summary
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
 from .reporting.microcosmos import generate_microcosmos_reports
@@ -34,6 +35,7 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("validate-config")
     commands.add_parser("init-db")
+    commands.add_parser("test-email", help="Send a standalone SMTP configuration test")
     collect_p = commands.add_parser("collect")
     collect_p.add_argument("--traffic-start", type=_date)
     collect_p.add_argument("--traffic-end", type=_date)
@@ -140,6 +142,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             }, indent=2)); return 0
         if args.command == "init-db":
             db.initialize(); print(settings.state_db); return 0
+        if args.command == "test-email":
+            if not settings.smtp_enabled:
+                raise ConfigurationError("smtp_enabled must be true to send a test email")
+            test_id = "smtp-test-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            sent = send_summary(settings, {
+                "run_id": test_id, "run_type": "SMTP_TEST", "status": "SUCCESS",
+            })
+            if not sent:
+                raise RuntimeError("SMTP test message was not sent")
+            print(json.dumps({"status": "sent", "run_id": test_id}, indent=2))
+            return 0
         if args.command == "collect":
             end = args.traffic_end or date.today()
             start = args.traffic_start or end - timedelta(days=settings.traffic_window_days)

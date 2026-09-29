@@ -444,6 +444,12 @@ assuming that the previously displayed run is the active one:
 new run must appear first with `status: RUNNING`. If `active_run` is null, read
 the detached wrapper log: it exited before starting collection (for example,
 because of the shared lock, Sunday exclusion, missing snapshot, or CLI error).
+For every recent run, the status output includes `elapsed_seconds` and
+`elapsed_hours`; an active batch also reports `current_batch_elapsed_hours`.
+Each completed batch exposes its own `started_at`,
+`finished_at`, `duration_seconds`, and `duration_hours`; those timings include
+submission, polling, validation, and SQLite ingestion, but exclude the cooldown
+that follows the batch.
 
 ### 5.4 Transitional combined collection
 

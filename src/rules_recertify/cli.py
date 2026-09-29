@@ -197,6 +197,26 @@ def main(argv: Optional[List[str]] = None) -> int:
             recent = []
             for row in rows:
                 details = json.loads(str(row[4] or "{}"))
+                started = datetime.fromisoformat(str(row[2]))
+                finished = (
+                    datetime.fromisoformat(str(row[3]))
+                    if row[3] else datetime.now(timezone.utc)
+                )
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                if finished.tzinfo is None:
+                    finished = finished.replace(tzinfo=timezone.utc)
+                elapsed_seconds = max(0.0, (finished - started).total_seconds())
+                batches = details.get("batches", [])
+                current_batch_elapsed_seconds = None
+                current_batch_started_at = details.get("current_batch_started_at")
+                if current_batch_started_at and not row[3]:
+                    batch_started = datetime.fromisoformat(str(current_batch_started_at))
+                    if batch_started.tzinfo is None:
+                        batch_started = batch_started.replace(tzinfo=timezone.utc)
+                    current_batch_elapsed_seconds = max(
+                        0.0, (datetime.now(timezone.utc) - batch_started).total_seconds(),
+                    )
                 recent.append({
                     "run_id": row[0], "status": row[1],
                     "started_at": row[2], "finished_at": row[3],
@@ -205,6 +225,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "current_stage": details.get("current_stage"),
                     "current_batch": details.get("current_batch"),
                     "batch_count": details.get("batch_count"),
+                    "current_batch_elapsed_hours": (
+                        round(current_batch_elapsed_seconds / 3600, 3)
+                        if current_batch_elapsed_seconds is not None else None
+                    ),
+                    "elapsed_seconds": round(elapsed_seconds, 1),
+                    "elapsed_hours": round(elapsed_seconds / 3600, 3),
+                    "batch_durations": [
+                        {
+                            "batch": batch.get("batch"),
+                            "duration_seconds": batch.get("duration_seconds"),
+                            "duration_hours": batch.get("duration_hours"),
+                        }
+                        for batch in batches if isinstance(batch, dict)
+                    ],
                 })
             print(json.dumps({
                 "backfill": dict(state),

@@ -73,6 +73,7 @@ class CliTest(unittest.TestCase):
             payload = json.loads(output.getvalue())
             self.assertEqual(result, 0)
             self.assertEqual(payload["active_run"]["run_id"], "new")
+            self.assertGreaterEqual(payload["active_run"]["elapsed_hours"], 0)
             self.assertEqual(payload["recent_runs"][1]["status"], "WARNING")
 
     def test_archive_maintenance_commands_parse_paths_and_dates(self):

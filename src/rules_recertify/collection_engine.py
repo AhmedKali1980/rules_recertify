@@ -449,7 +449,10 @@ def _collect_traffic_run(
         while pending_batches:
             batch = pending_batches.pop(0)
             index += 1
+            batch_started_monotonic = time.monotonic()
+            batch_started_at = datetime.now(timezone.utc)
             details["current_batch"] = index
+            details["current_batch_started_at"] = batch_started_at.isoformat()
             details["current_stage"] = "SUBMITTING"
             details["batch_count"] = index + len(pending_batches)
             db.update_run_details(run_id, details)
@@ -566,6 +569,17 @@ def _collect_traffic_run(
                 details["current_stage"] = "INGESTING"
                 db.update_run_details(run_id, details)
                 db.upsert_usage(run_id, valid_usage_rows)
+            batch_finished_at = datetime.now(timezone.utc)
+            batch_duration_seconds = round(
+                max(0.0, time.monotonic() - batch_started_monotonic), 1,
+            )
+            batch_result.update({
+                "started_at": batch_started_at.isoformat(),
+                "finished_at": batch_finished_at.isoformat(),
+                "duration_seconds": batch_duration_seconds,
+                "duration_hours": round(batch_duration_seconds / 3600, 3),
+            })
+            details.pop("current_batch_started_at", None)
             db.update_run_details(run_id, details)
             if settings.batch_cooldown_seconds and pending_batches:
                 time.sleep(settings.batch_cooldown_seconds)
@@ -580,6 +594,7 @@ def _collect_traffic_run(
         ]
         details["runtime_oversized_ruleset_count"] = len(runtime_oversized)
         details.pop("current_batch", None)
+        details.pop("current_batch_started_at", None)
         details["current_stage"] = "FINALIZED"
         summary = _summarize_batches(details["batches"])
         details.update(summary)

@@ -450,6 +450,22 @@ Each completed batch exposes its own `started_at`,
 `finished_at`, `duration_seconds`, and `duration_hours`; those timings include
 submission, polling, validation, and SQLite ingestion, but exclude the cooldown
 that follows the batch.
+When a traffic run ends in `ERROR`, the transient raw directory is still
+removed, but its diagnostic evidence is copied first to
+`log_dir/failed-runs/<run_id>/`. The retained set contains the final run details,
+the complete Workloader output, the manifest, and files for the batch active at
+failure. `backfill-status` exposes both the error and this directory path.
+
+Transport failures during Workloader's read-only PCE-version preflight that
+indicate a temporarily unavailable PCE (`connection reset by peer`, connection
+refusal/timeout, TLS handshake timeout, temporary DNS failure, no route, or
+unexpected EOF) are retried independently of HTTP rate-limit handling. The
+defaults are three retries with a five-minute pause (`transport_max_retries: 3`,
+`transport_retry_delay_minutes: 5`). Invalid commands, authentication failures,
+and transport errors after the version preflight are not automatically retried,
+because replaying an ambiguously submitted asynchronous query could duplicate
+work on the PCE. Every safe retry reruns the exact same Workloader command and
+remains in the same batch, so the cursor is not advanced prematurely.
 
 ### 5.4 Transitional combined collection
 

@@ -68,6 +68,8 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
         settings.workloader, settings.pce, run_dir / "workloader.log", config_file,
         rate_limit_retry_delay_minutes=settings.rate_limit_retry_delay_minutes,
         rate_limit_max_retries=settings.rate_limit_max_retries,
+        transport_retry_delay_minutes=settings.transport_retry_delay_minutes,
+        transport_max_retries=settings.transport_max_retries,
     )
     status = "ERROR"
     snapshot_backup: Optional[Path] = None
@@ -299,6 +301,8 @@ def _collect_traffic_run(
         config_file,
         rate_limit_retry_delay_minutes=settings.rate_limit_retry_delay_minutes,
         rate_limit_max_retries=settings.rate_limit_max_retries,
+        transport_retry_delay_minutes=settings.transport_retry_delay_minutes,
+        transport_max_retries=settings.transport_max_retries,
     )
     status = "ERROR"
     cursor_started = False
@@ -707,6 +711,16 @@ def _collect_traffic_run(
         except Exception as exc:
             details["operational_summary_error"] = str(exc)
             LOG.exception("Operational summary failed without suppressing notification")
+        if status == "ERROR":
+            try:
+                details["failed_diagnostics_dir"] = str(
+                    _preserve_failed_run_diagnostics(
+                        run_dir, Path(settings.log_dir), run_id, details,
+                    )
+                )
+            except Exception as exc:
+                details["failed_diagnostics_error"] = str(exc)
+                LOG.exception("Failed to preserve run diagnostics")
         _send_and_record_summary(db, run_id, settings, details, traffic_audit_path)
         if run_type in {RUN_TYPE_TRAFFIC, RUN_TYPE_BACKFILL}:
             shutil.rmtree(run_dir, ignore_errors=True)
@@ -716,6 +730,31 @@ def _collect_traffic_run(
             except Exception:
                 LOG.exception("Archive purge failed without changing collection status")
     return details
+
+
+def _preserve_failed_run_diagnostics(
+    run_dir: Path, log_dir: Path, run_id: str, details: Mapping[str, object],
+) -> Path:
+    """Keep the minimal evidence needed after a failed transient run is removed."""
+    destination = log_dir / "failed-runs" / run_id
+    temporary = destination.with_name(destination.name + ".tmp")
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    temporary.mkdir(parents=True)
+    (temporary / "run-details.json").write_text(
+        json.dumps(dict(details), indent=2, sort_keys=True), encoding="utf-8",
+    )
+    candidates = [run_dir / "workloader-output.log", run_dir / "manifest.json"]
+    current_batch = int(details.get("current_batch", 0) or 0)
+    if current_batch:
+        candidates.extend(sorted(run_dir.glob(f"batch_{current_batch:04d}_*")))
+    for source in candidates:
+        if source.is_file():
+            shutil.copy2(source, temporary / source.name)
+    if destination.exists():
+        shutil.rmtree(destination)
+    temporary.replace(destination)
+    return destination
 
 
 def _send_and_record_summary(

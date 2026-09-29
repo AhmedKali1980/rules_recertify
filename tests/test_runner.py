@@ -2,7 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from rules_recertify.workloader.runner import WorkloaderError, WorkloaderRunner
 
@@ -160,6 +160,82 @@ class WorkloaderRunnerTest(unittest.TestCase):
                 return failed
 
             with patch("subprocess.run", side_effect=invalid_request) as run, patch(
+                "time.sleep"
+            ) as sleep, self.assertRaises(WorkloaderError):
+                runner.run(["rule-export"])
+
+        self.assertEqual(run.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_connection_reset_during_pce_version_check_retries_three_times(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkloaderRunner(
+                root / "workloader", "pce", root / "workloader.log",
+                transport_retry_delay_minutes=5,
+                transport_max_retries=3,
+            )
+            failed = subprocess.CompletedProcess([], 1, None, None)
+            succeeded = subprocess.CompletedProcess([], 0, None, None)
+
+            def run_once(*args, **kwargs):
+                if run.call_count <= 3:
+                    kwargs["stdout"].write(
+                        b"error getting pce version - get version: "
+                        b"read: connection reset by peer\n"
+                    )
+                    return failed
+                return succeeded
+
+            with patch("subprocess.run", side_effect=run_once) as run, patch(
+                "time.sleep"
+            ) as sleep:
+                result = runner.run(["rule-export"])
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(run.call_count, 4)
+        self.assertEqual(sleep.call_args_list, [call(300)] * 3)
+        self.assertTrue(all(
+            call.args[0] == run.call_args_list[0].args[0]
+            for call in run.call_args_list
+        ))
+
+    def test_transport_failure_stops_after_configured_retries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkloaderRunner(
+                root / "workloader", "pce", root / "workloader.log",
+                transport_retry_delay_minutes=5,
+                transport_max_retries=3,
+            )
+            failed = subprocess.CompletedProcess([], 1, None, None)
+
+            def reset(*args, **kwargs):
+                kwargs["stdout"].write(
+                    b"error getting pce version - get version: "
+                    b"read: connection reset by peer\n"
+                )
+                return failed
+
+            with patch("subprocess.run", side_effect=reset) as run, patch(
+                "time.sleep"
+            ) as sleep, self.assertRaises(WorkloaderError):
+                runner.run(["rule-export"])
+
+        self.assertEqual(run.call_count, 4)
+        self.assertEqual(sleep.call_count, 3)
+
+    def test_connection_reset_outside_version_preflight_is_not_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkloaderRunner(root / "workloader", "pce", root / "workloader.log")
+            failed = subprocess.CompletedProcess([], 1, None, None)
+
+            def reset(*args, **kwargs):
+                kwargs["stdout"].write(b"submit query: connection reset by peer\n")
+                return failed
+
+            with patch("subprocess.run", side_effect=reset) as run, patch(
                 "time.sleep"
             ) as sleep, self.assertRaises(WorkloaderError):
                 runner.run(["rule-export"])

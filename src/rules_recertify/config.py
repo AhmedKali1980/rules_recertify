@@ -59,6 +59,8 @@ class Settings:
     batch_cooldown_seconds: int = 60
     rate_limit_retry_delay_minutes: int = 10
     rate_limit_max_retries: int = 12
+    transport_retry_delay_minutes: int = 5
+    transport_max_retries: int = 3
     empty_scope_ruleset_name_patterns: Tuple[str, ...] = ()
     traffic_environments: Tuple[str, ...] = ()
     retention_days: int = 550
@@ -87,6 +89,10 @@ class Settings:
             raise ConfigurationError("rate_limit_retry_delay_minutes must be at least 10")
         if self.rate_limit_max_retries < 1:
             raise ConfigurationError("rate_limit_max_retries must be positive")
+        if self.transport_retry_delay_minutes < 1:
+            raise ConfigurationError("transport_retry_delay_minutes must be positive")
+        if self.transport_max_retries < 1:
+            raise ConfigurationError("transport_max_retries must be positive")
         if not isinstance(self.empty_scope_ruleset_name_patterns, (list, tuple)):
             raise ConfigurationError("empty_scope_ruleset_name_patterns must be a list")
         if any(

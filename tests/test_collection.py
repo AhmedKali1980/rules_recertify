@@ -4,7 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 from rules_recertify.archives import restore_archive
 from rules_recertify.collection_engine import (
-    _initial_traffic_run_details, _validated_usage_rows,
+    _initial_traffic_run_details, _preserve_failed_run_diagnostics,
+    _validated_usage_rows,
     backfill_traffic, collect, collect_policy, collect_traffic,
     initialize_backfill_traffic,
 )
@@ -100,6 +101,21 @@ def _policy_reference_stub(root):
 
 
 class CollectionTest(unittest.TestCase):
+ def test_failed_run_diagnostics_preserve_error_and_current_batch_files(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); run_dir=root/'raw'/'run'; run_dir.mkdir(parents=True)
+   (run_dir/'workloader-output.log').write_text('failure output')
+   (run_dir/'manifest.json').write_text('{}')
+   (run_dir/'batch_0058_hrefs.csv').write_text('href\n/rs/1\n')
+   (run_dir/'batch_0057_hrefs.csv').write_text('href\n/rs/old\n')
+   target=_preserve_failed_run_diagnostics(
+    run_dir,root/'logs','run',{'error':'boom','current_batch':58},
+   )
+   self.assertEqual((target/'workloader-output.log').read_text(),'failure output')
+   self.assertTrue((target/'batch_0058_hrefs.csv').is_file())
+   self.assertFalse((target/'batch_0057_hrefs.csv').exists())
+   self.assertEqual(json.loads((target/'run-details.json').read_text())['error'],'boom')
+
  def test_initial_traffic_details_have_explicit_export_stage(self):
   details = _initial_traffic_run_details(
    "run", date(2026,6,20), date(2026,6,27), "TRAFFIC_BACKFILL", ("PRD",),

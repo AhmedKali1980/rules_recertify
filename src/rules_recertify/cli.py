@@ -138,6 +138,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "batch_cooldown_seconds": settings.batch_cooldown_seconds,
                 "rate_limit_retry_delay_minutes": settings.rate_limit_retry_delay_minutes,
                 "rate_limit_max_retries": settings.rate_limit_max_retries,
+                "transport_retry_delay_minutes": settings.transport_retry_delay_minutes,
+                "transport_max_retries": settings.transport_max_retries,
                 "empty_scope_ruleset_name_patterns": settings.empty_scope_ruleset_name_patterns,
                 "traffic_environments": settings.traffic_environments,
                 "dangerous_port_lists": settings.dangerous_port_lists,
@@ -225,6 +227,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "current_stage": details.get("current_stage"),
                     "current_batch": details.get("current_batch"),
                     "batch_count": details.get("batch_count"),
+                    "error": details.get("error"),
+                    "blocking_reasons": details.get("blocking_reasons", []),
+                    "failed_diagnostics_dir": details.get("failed_diagnostics_dir"),
+                    "notification_status": details.get("notification_status"),
+                    "notification_error": details.get("notification_error"),
                     "current_batch_elapsed_hours": (
                         round(current_batch_elapsed_seconds / 3600, 3)
                         if current_batch_elapsed_seconds is not None else None

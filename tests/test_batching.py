@@ -122,3 +122,36 @@ class BatchingTest(unittest.TestCase):
             excluded,
             [ExcludedRuleset("/other", 1, "", "EMPTY_SCOPE")],
         )
+
+    def test_traffic_environment_filter_is_optional_and_supports_multiple_values(self):
+        rows = [
+            {"ruleset_href": "/prd", "ruleset_scope": "app:APP_A;env:PRD"},
+            {"ruleset_href": "/bck", "ruleset_scope": "env:BCK;app:APP_A"},
+            {"ruleset_href": "/uat", "ruleset_scope": "app:APP_A;env:UAT"},
+        ]
+        all_environments, excluded = select_application_scoped_rulesets(rows, ["APP_A"])
+        self.assertEqual(len(all_environments), 3)
+        self.assertEqual(excluded, [])
+
+        selected, excluded = select_application_scoped_rulesets(
+            rows, ["APP_A"], traffic_environments=["prd", "DRP", "BCK"],
+        )
+        self.assertEqual(selected, [RulesetCount("/bck", 1), RulesetCount("/prd", 1)])
+        self.assertEqual(
+            excluded,
+            [ExcludedRuleset("/uat", 1, "app:APP_A;env:UAT", "ENVIRONMENT_FILTER_MISMATCH")],
+        )
+
+    def test_environment_filter_rejects_empty_scope_exception_without_known_environment(self):
+        eligible, excluded = select_application_scoped_rulesets(
+            [{
+                "ruleset_href": "/outbound", "ruleset_name": "OUTBOUND2APA",
+                "ruleset_scope": "",
+            }],
+            [], ["OUTBOUND2APA"], ["PRD"],
+        )
+        self.assertEqual(eligible, [])
+        self.assertEqual(
+            excluded,
+            [ExcludedRuleset("/outbound", 1, "", "ENVIRONMENT_FILTER_MISMATCH")],
+        )

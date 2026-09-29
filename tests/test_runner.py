@@ -24,6 +24,7 @@ class WorkloaderRunnerTest(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[1:3], ["--config-file", str(root / "pce.yaml")])
         self.assertIn("pce-prd-l3.wr", command)
+        self.assertNotIn("--log-file", command)
         self.assertNotIn("capture_output", run.call_args.kwargs)
         self.assertIs(run.call_args.kwargs["stderr"], subprocess.STDOUT)
 

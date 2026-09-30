@@ -8,7 +8,7 @@ from rules_recertify.logging_utils import JsonFormatter
 class LoggingUtilsTest(unittest.TestCase):
     def test_ruleset_selection_fields_are_serialized(self):
         record = logging.LogRecord(
-            "rules_recertify.collection",
+            "rules_recertify.collection_engine",
             logging.INFO,
             __file__,
             1,

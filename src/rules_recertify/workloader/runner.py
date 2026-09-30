@@ -36,20 +36,30 @@ class WorkloaderRunner:
         config_file: Optional[Path] = None,
         rate_limit_retry_delay_minutes: int = 10,
         rate_limit_max_retries: int = 12,
+        transport_retry_delay_minutes: int = 5,
+        transport_max_retries: int = 3,
     ):
         self.binary, self.pce, self.log_file, self.config_file = binary, pce, log_file, config_file
         self.rate_limit_retry_delay_minutes = rate_limit_retry_delay_minutes
         self.rate_limit_max_retries = rate_limit_max_retries
+        self.transport_retry_delay_minutes = transport_retry_delay_minutes
+        self.transport_max_retries = transport_max_retries
 
     def run(self, args: Sequence[str], timeout: Optional[int] = None) -> CommandResult:
         command = [str(self.binary)]
         if self.config_file:
             command.extend(["--config-file", str(self.config_file)])
-        command.extend(["--pce", self.pce, "--log-file", str(self.log_file), *map(str, args)])
+        # Workloader persists global CLI options back into pce.yaml. Passing a
+        # per-run --log-file would therefore leave a stale path after the raw
+        # run directory is removed and prevent the next invocation from even
+        # starting. Its stable log_file belongs in pce.yaml; complete command
+        # output is still captured per run in workloader-output.log below.
+        command.extend(["--pce", self.pce, *map(str, args)])
         LOG.info("Executing Workloader command: %s", " ".join(command))
         process_output = self.log_file.with_name("workloader-output.log")
         process_output.parent.mkdir(parents=True, exist_ok=True)
         transient_retries = 0
+        transport_retries = 0
         while True:
             started = time.monotonic()
             try:
@@ -79,19 +89,34 @@ class WorkloaderRunner:
                 f"{output_text} (full output: {process_output})"
             )
             http_status = retryable_http_status(error)
-            if http_status is None or transient_retries >= self.rate_limit_max_retries:
+            transport_failure = is_retryable_transport_failure(output_text)
+            if http_status is None and not transport_failure:
                 raise error
-            transient_retries += 1
-            delay_seconds = self.rate_limit_retry_delay_minutes * 60
+            if http_status is not None:
+                if transient_retries >= self.rate_limit_max_retries:
+                    raise error
+                transient_retries += 1
+                attempt = transient_retries
+                maximum = self.rate_limit_max_retries
+                delay_minutes = self.rate_limit_retry_delay_minutes
+                reason_label = f"transient HTTP {http_status}"
+            else:
+                if transport_retries >= self.transport_max_retries:
+                    raise error
+                transport_retries += 1
+                attempt = transport_retries
+                maximum = self.transport_max_retries
+                delay_minutes = self.transport_retry_delay_minutes
+                reason_label = "transient PCE transport failure"
             LOG.warning(
-                "Workloader transient HTTP %s; retrying the same command in %s minutes "
+                "Workloader %s; retrying the same command in %s minutes "
                 "(%s/%s)",
-                http_status,
-                self.rate_limit_retry_delay_minutes,
-                transient_retries,
-                self.rate_limit_max_retries,
+                reason_label,
+                delay_minutes,
+                attempt,
+                maximum,
             )
-            time.sleep(delay_seconds)
+            time.sleep(delay_minutes * 60)
 
 
 def sha256_file(path: Path) -> str:
@@ -132,6 +157,23 @@ def is_rate_limit_error(exc: WorkloaderError) -> bool:
 def retryable_http_status(exc: WorkloaderError) -> Optional[int]:
     status = _http_status(str(exc))
     return status if status in {429, 500, 502, 503, 504} else None
+
+
+def is_retryable_transport_failure(output: str) -> bool:
+    """Recognize transient failures during Workloader's read-only PCE preflight."""
+    if not re.search(r"(?:getting pce version|get version)", output, re.IGNORECASE):
+        return False
+    patterns = (
+        r"connection reset by peer",
+        r"connection refused",
+        r"connection timed out",
+        r"i/o timeout",
+        r"tls handshake timeout",
+        r"temporary failure in name resolution",
+        r"no route to host",
+        r"unexpected eof",
+    )
+    return any(re.search(pattern, output, re.IGNORECASE) for pattern in patterns)
 
 
 def _http_status(output: str) -> Optional[int]:

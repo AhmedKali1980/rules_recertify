@@ -456,6 +456,13 @@ removed, but its diagnostic evidence is copied first to
 the complete Workloader output, the manifest, and files for the batch active at
 failure. `backfill-status` exposes both the error and this directory path.
 
+The traffic audit workbook lists every rejected Workloader result in
+`Problematic Rules`, including malformed rows that cannot be joined to the
+policy inventory (for example a repeated CSV header with `rule_href` as its
+literal value). Those rows retain their batch number, raw `query_body`, and
+`flows_by_port`, so the detail sheet reconciles with the exception counters in
+`Summary` even when no genuine rule identity is available.
+
 Transport failures during Workloader's read-only PCE-version preflight that
 indicate a temporarily unavailable PCE (`connection reset by peer`, connection
 refusal/timeout, TLS handshake timeout, temporary DNS failure, no route, or

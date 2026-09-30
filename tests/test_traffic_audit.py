@@ -87,6 +87,43 @@ class TrafficAuditTest(unittest.TestCase):
         )
         self.assertEqual(counts["missing_result_count"], 1)
 
+    def test_invalid_rows_without_inventory_identity_are_listed_as_problematic(self):
+        inventory = [
+            {"rule_href": "/r/ok", "ruleset_href": "/rs/ok", "ruleset_name": "OK"},
+        ]
+        usage = {
+            "/r/ok": {"async_query_status": "completed", "flows": "2", "_batch": 1},
+        }
+        malformed = [
+            {
+                "rule_href": "rule_href",
+                "ruleset_href": "ruleset_href",
+                "query_body": "query_body",
+                "async_query_status": "async_query_status",
+                "_batch": 48,
+            },
+            {
+                "rule_href": "",
+                "query_body": "not-json",
+                "async_query_status": "completed",
+                "_batch": 49,
+            },
+        ]
+
+        rows, counts = build_traffic_audit_rows(
+            inventory, usage, {}, {}, malformed, [],
+        )
+
+        problematic = [row for row in rows if row["outcome"] == "DOCUMENTED_EXCEPTION"]
+        self.assertEqual(len(problematic), 2)
+        self.assertEqual(
+            [row["reason"] for row in problematic],
+            ["INVALID_QUERY_BODY", "INVALID_QUERY_BODY"],
+        )
+        self.assertEqual([row["batch"] for row in problematic], [48, 49])
+        self.assertEqual(problematic[0]["query_body"], "query_body")
+        self.assertEqual(counts["documented_exception_rule_count"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

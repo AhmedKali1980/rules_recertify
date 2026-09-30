@@ -58,12 +58,20 @@ def build_traffic_audit_rows(
     usage_by_rule: Mapping[str, Mapping[str, object]],
     excluded_reasons: Mapping[str, str],
     oversized_rulesets: Mapping[str, str],
-    invalid_query_rules: Sequence[str],
-    invalid_port_rules: Sequence[str],
+    invalid_query_rules: Sequence[object],
+    invalid_port_rules: Sequence[object],
 ) -> Tuple[List[Dict[str, object]], Dict[str, int]]:
-    invalid_query = set(invalid_query_rules)
-    invalid_ports = set(invalid_port_rules)
+    def issue_record(item: object) -> Dict[str, object]:
+        if isinstance(item, Mapping):
+            return dict(item)
+        return {"rule_href": str(item)}
+
+    invalid_query_records = [issue_record(item) for item in invalid_query_rules]
+    invalid_port_records = [issue_record(item) for item in invalid_port_rules]
+    invalid_query = {str(item.get("rule_href", "")) for item in invalid_query_records}
+    invalid_ports = {str(item.get("rule_href", "")) for item in invalid_port_records}
     rows: List[Dict[str, object]] = []
+    inventory_hrefs = {str(rule.get("rule_href", "")) for rule in inventory}
 
     for rule in inventory:
         rule_href = str(rule.get("rule_href", ""))
@@ -121,7 +129,39 @@ def build_traffic_audit_rows(
             "async_query_status": async_status or ("NOT_APPLICABLE" if usage is None else "EMPTY"),
             "flows": flows,
             "batch": batch,
+            "query_body": str(usage.get("query_body", "")) if usage else "",
+            "flows_by_port": str(usage.get("flows_by_port", "")) if usage else "",
         })
+
+    # A malformed Workloader row may not identify a real inventory rule at all
+    # (for example a repeated CSV header whose rule_href value is literally
+    # "rule_href"). Keep such records visible instead of reporting only their
+    # aggregate count on the Summary sheet.
+    represented: set[Tuple[str, str]] = set()
+    for reason, records in (
+        ("INVALID_QUERY_BODY", invalid_query_records),
+        ("INVALID_PORT_DETAILS", invalid_port_records),
+    ):
+        for record in records:
+            rule_href = str(record.get("rule_href", ""))
+            identity = (reason, rule_href)
+            if rule_href in inventory_hrefs and identity not in represented:
+                represented.add(identity)
+                continue
+            rows.append({
+                "outcome": "DOCUMENTED_EXCEPTION",
+                "reason": reason,
+                "ruleset_name": str(record.get("ruleset_name", "")),
+                "ruleset_scope": str(record.get("ruleset_scope", "")),
+                "ruleset_href": str(record.get("ruleset_href", "")),
+                "rule_href": rule_href,
+                "rule_description": str(record.get("rule_description", "")),
+                "async_query_status": str(record.get("async_query_status", "")) or "EMPTY",
+                "flows": record.get("flows", ""),
+                "batch": record.get("_batch", ""),
+                "query_body": str(record.get("query_body", "")),
+                "flows_by_port": str(record.get("flows_by_port", "")),
+            })
 
     counts = Counter(str(row["outcome"]) for row in rows)
     return rows, {

@@ -308,8 +308,8 @@ def _collect_traffic_run(
     cursor_started = False
     backfill_started = False
     usage_by_rule: Dict[str, Dict[str, object]] = {}
-    invalid_query_rules: List[str] = []
-    invalid_port_rules: List[str] = []
+    invalid_query_rules: List[Mapping[str, object]] = []
+    invalid_port_rules: List[Mapping[str, object]] = []
     traffic_audit_path: Optional[Path] = None
     try:
         if cursor_name:
@@ -536,7 +536,7 @@ def _collect_traffic_run(
                 batch_result["invalid_flows_by_port"] = len(invalid_port_rows)
                 for row in invalid_usage_rows:
                     rule_href = row.get("rule_href", "")
-                    invalid_query_rules.append(rule_href)
+                    invalid_query_rules.append({**row, "_batch": index})
                     db.add_quality(
                         run_id,
                         "USAGE_SKIPPED_INVALID_QUERY_BODY",
@@ -554,7 +554,7 @@ def _collect_traffic_run(
                     )
                 for row in invalid_port_rows:
                     rule_href = row.get("rule_href", "")
-                    invalid_port_rules.append(rule_href)
+                    invalid_port_rules.append({**row, "_batch": index})
                     db.add_quality(
                         run_id,
                         "USAGE_SKIPPED_INVALID_FLOWS_BY_PORT",

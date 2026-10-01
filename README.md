@@ -161,6 +161,14 @@ initialisation avec le même identifiant est refusée et une exécution après
 `COMPLETED` s'arrête sans créer de run. Le curseur backfill est indépendant du
 curseur hebdomadaire.
 
+Lorsqu'un run backfill échoue pendant un appel Workloader, le run suivant
+reconstruit le plan de lots et, si son nombre est identique et que toutes les
+règles des lots terminés sont présentes dans SQLite, reprend au premier lot non
+terminé. Les résultats déjà ingérés restent associés à la
+fenêtre et servent à produire l'audit complet ; ils ne sont pas soumis à nouveau.
+Si le plan a changé entre les deux runs, la reprise est volontairement refusée et
+la fenêtre entière est rejouée afin de ne pas omettre de règles.
+
 ## Snapshot raw et archives
 
 Le stockage cible ne dépend plus de la présence durable des répertoires de run

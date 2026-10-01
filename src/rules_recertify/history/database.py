@@ -425,6 +425,38 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
+    def backfill_resume_run(self, backfill_id: str, window_start: str,
+                            window_end: str) -> Optional[Mapping[str, object]]:
+        """Return the last failed run when it belongs to the window being retried."""
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT r.run_id,r.details_json FROM backfill_states b
+                JOIN runs r ON r.run_id=b.last_run_id
+                WHERE b.backfill_id=? AND b.status='FAILED'
+                  AND r.run_type=? AND r.status='ERROR'""",
+                (backfill_id, RUN_TYPE_BACKFILL),
+            ).fetchone()
+        if row is None:
+            return None
+        details = json.loads(str(row[1] or "{}"))
+        if (
+            details.get("traffic_start") != window_start
+            or details.get("traffic_end") != window_end
+        ):
+            return None
+        return {"run_id": str(row[0]), "details": details}
+
+    def usage_for_window(self, window_start: str,
+                         window_end: str) -> List[Mapping[str, object]]:
+        """Load already committed usage so a resumed run can build a complete audit."""
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT raw_json FROM usage_windows
+                WHERE substr(window_start,1,10)=? AND substr(window_end,1,10)=?""",
+                (window_start, window_end),
+            ).fetchall()
+        return [json.loads(str(row[0])) for row in rows]
+
     def update_backfill_window(self, backfill_id: str, run_id: str,
                                window_end: str, success: bool,
                                run_details: Optional[Mapping[str, object]] = None,

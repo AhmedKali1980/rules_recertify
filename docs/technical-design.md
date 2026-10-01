@@ -297,6 +297,14 @@ only its window lifecycle provider differs. State and run completion are
 transactional, failed boundaries do not move, and reaching the target changes
 the terminal state to `COMPLETED`.
 
+On retry of a failed backfill window, the engine reads the completed batch list
+from the failed run and reconstructs the current batch plan. It skips the
+completed prefix only when batch numbering and count still match, every recorded
+batch was fully completed, and SQLite contains usage for every rule in that
+prefix. The retry then starts with the failed batch and reloads persisted usage
+to build a complete audit. Any failed validation falls back to replaying the
+whole window rather than risk silently omitting a rule.
+
 Successful policy publication atomically replaces `var/raw/snapshot` with the
 complete validated reference and policy inventory, then removes the policy run
 directory. Reports prefer this materialized snapshot, while timestamped raw

@@ -114,6 +114,11 @@ is allowed only when the reconstructed plan has the same batch count, the saved
 prefix is sequential and fully completed, and all rules in that prefix already
 have usage persisted for the exact window. Otherwise replay the full window.
 
+Progress counters must not mix async batches with failed submission attempts:
+final `batch_count` counts the actual batch results, while
+`batch_attempt_count` retains the number of Workloader submission attempts for
+diagnostics.
+
 Skip and audit individual usage rows whose `query_body` has no parseable
 `start_date`/`end_date`, while continuing the collection and retaining the raw
 CSV. Continue to reject parseable windows that differ from the requested period.

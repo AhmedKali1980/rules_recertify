@@ -169,6 +169,16 @@ fenêtre et servent à produire l'audit complet ; ils ne sont pas soumis à nouv
 Si le plan a changé entre les deux runs, la reprise est volontairement refusée et
 la fenêtre entière est rejouée afin de ne pas omettre de règles.
 
+Le compteur final représente les lots de requêtes réellement produits et
+terminés. Les tentatives de soumission ayant provoqué un découpage Workloader
+sont exposées séparément sous `batch_attempt_count` et ne créent plus un faux
+écart tel que `43/44`. Le dimanche reste réservé par défaut à la collecte
+hebdomadaire ; une relance opérateur exceptionnelle doit être explicite :
+
+```bash
+./scripts/backfill-traffic.sh --force --allow-sunday
+```
+
 ## Snapshot raw et archives
 
 Le stockage cible ne dépend plus de la présence durable des répertoires de run

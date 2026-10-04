@@ -406,6 +406,9 @@ class CollectionTest(unittest.TestCase):
    settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),query_initial_delay_minutes=0)
    result=collect(settings,date(2026,8,20),date(2026,8,21),no_wait=True)
    self.assertEqual(result['status'],'SUCCESS'); self.assertEqual(result['completed'],1)
+   self.assertEqual(result['current_batch'],1)
+   self.assertEqual(result['batch_count'],1)
+   self.assertEqual(result['batch_attempt_count'],1)
    self.assertGreaterEqual(result['batches'][0]['duration_seconds'],0)
    self.assertGreaterEqual(result['batches'][0]['duration_hours'],0)
    self.assertIn('started_at',result['batches'][0]); self.assertIn('finished_at',result['batches'][0])
@@ -447,6 +450,9 @@ class CollectionTest(unittest.TestCase):
    result=collect(settings,date(2026,8,20),date(2026,8,21),no_wait=True)
    self.assertEqual(result['status'],'SUCCESS_WITH_EXCEPTIONS')
    self.assertEqual(result['runtime_oversized_ruleset_count'],1)
+   self.assertEqual(result['current_batch'],0)
+   self.assertEqual(result['batch_count'],0)
+   self.assertEqual(result['batch_attempt_count'],1)
    self.assertEqual(result['runtime_oversized_rulesets'],[{'ruleset_href':'/rs/big','inventory_rule_count':100,'reported_rule_count':101,'reason':'TRAFFIC_RULE_LIMIT_EXCEEDED'}])
    with sqlite3.connect(root/'db.sqlite') as connection:
     category=connection.execute('SELECT category FROM data_quality').fetchone()[0]

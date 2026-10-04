@@ -670,7 +670,13 @@ def _collect_traffic_run(
             for item, reported_rule_count in runtime_oversized
         ]
         details["runtime_oversized_ruleset_count"] = len(runtime_oversized)
-        details.pop("current_batch", None)
+        # ``index`` also counts submission attempts that Workloader asks us to
+        # split (or rulesets rejected at runtime).  It must not be presented as
+        # the number of async batches: that made successful runs appear as
+        # 43/44 even though all 43 resulting query batches had completed.
+        details["batch_attempt_count"] = index
+        details["batch_count"] = len(details["batches"])
+        details["current_batch"] = details["batch_count"]
         details.pop("current_batch_started_at", None)
         details["current_stage"] = "FINALIZED"
         summary = _summarize_batches(details["batches"])

@@ -305,6 +305,15 @@ prefix. The retry then starts with the failed batch and reloads persisted usage
 to build a complete audit. Any failed validation falls back to replaying the
 whole window rather than risk silently omitting a rule.
 
+Final progress distinguishes actual async batches from submission attempts.
+`batch_count` and `current_batch` both equal the number of completed async
+batches after finalization, while `batch_attempt_count` also includes attempts
+that led to a runtime split or exclusion. This prevents a successful run from
+being displayed as incomplete (for example `43/44`). Sunday backfills remain
+disabled by default to avoid competing with weekly traffic collection; an
+operator may explicitly combine `--force --allow-sunday`, with the shared lock
+still preventing concurrent collectors.
+
 Successful policy publication atomically replaces `var/raw/snapshot` with the
 complete validated reference and policy inventory, then removes the policy run
 directory. Reports prefer this materialized snapshot, while timestamped raw

@@ -227,6 +227,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "current_stage": details.get("current_stage"),
                     "current_batch": details.get("current_batch"),
                     "batch_count": details.get("batch_count"),
+                    "batch_attempt_count": details.get("batch_attempt_count"),
                     "resumed_from_run_id": details.get("resumed_from_run_id"),
                     "resumed_completed_batches": details.get("resumed_completed_batches"),
                     "resume_batch": details.get("resume_batch"),

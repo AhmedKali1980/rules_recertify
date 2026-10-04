@@ -46,7 +46,7 @@ class EmailUtilsTest(unittest.TestCase):
             "sqlite_database_size_human": "12.50 MiB",
             "sqlite_database_size_bytes": 13107200,
         }))
-        self.assertEqual(rows["Run duration"], "123.4 seconds")
+        self.assertEqual(rows["Run duration"], "0.03 hours")
         self.assertEqual(rows["Certifiable traffic coverage"], "91 days")
         self.assertEqual(rows["Successful traffic windows"], 13)
         self.assertEqual(rows["SQLite database size"], "12.50 MiB")

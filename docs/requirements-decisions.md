@@ -103,10 +103,21 @@ submitted alone, record `TRAFFIC_RULE_LIMIT_EXCEEDED`, and continue the run.
 If Workloader exits after HTTP 429, 500, 502, 503, or 504, retry the identical
 command rather than aborting the collection. Enforce at least ten minutes
 between collector-level attempts and cap the retry count through configuration.
-Previously completed batches remain committed; rule-level resume is unavailable
-because Workloader's selection interface accepts ruleset hrefs, not rule hrefs.
+Previously completed batches remain committed; resumption is batch-level rather
+than rule-level because Workloader's selection interface accepts ruleset hrefs,
+not rule hrefs.
 Do not retry deterministic failures such as invalid input, authentication,
 authorization, or local configuration errors.
+
+A failed backfill run may resume at its first unfinished Workloader batch. This
+is allowed only when the reconstructed plan has the same batch count, the saved
+prefix is sequential and fully completed, and all rules in that prefix already
+have usage persisted for the exact window. Otherwise replay the full window.
+
+Progress counters must not mix async batches with failed submission attempts:
+final `batch_count` counts the actual batch results, while
+`batch_attempt_count` retains the number of Workloader submission attempts for
+diagnostics.
 
 Skip and audit individual usage rows whose `query_body` has no parseable
 `start_date`/`end_date`, while continuing the collection and retaining the raw

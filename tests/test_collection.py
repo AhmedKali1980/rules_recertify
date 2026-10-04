@@ -81,6 +81,32 @@ else:
  raise SystemExit('excluded ruleset must not be polled')
 '''
 
+FAKE_TWO_BATCHES = r'''#!/usr/bin/env python3
+import csv,os,sys
+args=sys.argv
+cmd=next(x for x in ('ruleset-export','label-export','rule-export','rule-usage') if x in args)
+if os.getenv('FAKE_COMMAND_LOG'):
+ with open(os.environ['FAKE_COMMAND_LOG'],'a') as log: log.write(' '.join(args[1:])+'\n')
+out=args[args.index('--output-file')+1]
+def write(headers, rows):
+ with open(out,'w',newline='') as f:
+  writer=csv.DictWriter(f,fieldnames=headers); writer.writeheader(); writer.writerows(rows)
+if cmd=='ruleset-export':
+ write(['ruleset_name','enabled','href'],[{'ruleset_name':'A','enabled':'true','href':'/rs/a'},{'ruleset_name':'B','enabled':'true','href':'/rs/b'}])
+elif cmd=='label-export': write(['key','value'],[{'key':'app','value':'A'},{'key':'app','value':'B'}])
+elif cmd=='rule-export' and '--traffic-count' not in args:
+ headers=['ruleset_name','ruleset_scope','ruleset_enabled','rule_type','rule_enabled','ruleset_href','rule_href','services']
+ write(headers,[{'ruleset_name':name,'ruleset_scope':'app:'+name+';env:PRD','ruleset_enabled':'true','rule_type':'allow','rule_enabled':'true','ruleset_href':'/rs/'+name.lower(),'rule_href':'/r/'+name.lower(),'services':'443 TCP'} for name in ('A','B')])
+elif cmd=='rule-export':
+ with open(args[args.index('--ruleset-hrefs')+1],newline='') as f: href=next(csv.DictReader(f))['href']
+ rule=href.rsplit('/',1)[-1]; query='{"start_date":"2026-06-20T00:00:00Z","end_date":"2026-06-27T00:00:00Z"}'
+ write(['ruleset_href','rule_href','async_query_status','flows','flows_by_port','query_body'],[{'ruleset_href':href,'rule_href':'/r/'+rule,'async_query_status':'','flows':'','flows_by_port':'','query_body':query}])
+else:
+ with open(args[args.index('rule-usage')+1],newline='') as f: row=next(csv.DictReader(f))
+ row.update(async_query_status='completed',flows='1',flows_by_port='443 TCP (1)')
+ write(['ruleset_href','rule_href','async_query_status','flows','flows_by_port','query_body'],[row])
+'''
+
 
 def _policy_reference_stub(root):
  stub=root/'policy-stub'; stub.mkdir()
@@ -101,6 +127,40 @@ def _policy_reference_stub(root):
 
 
 class CollectionTest(unittest.TestCase):
+ def test_failed_backfill_resumes_at_first_unfinished_batch(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'
+   binary.write_text(FAKE_TWO_BATCHES); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)
+   settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),
+                     raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),
+                     traffic_batch_size=1,query_initial_delay_minutes=0,batch_cooldown_seconds=0)
+   initialize_backfill_traffic(settings,date(2026,9,20),'history')
+   db=Database(root/'db.sqlite')
+   previous={'run_id':'failed-run','run_type':'TRAFFIC_BACKFILL','traffic_start':'2026-06-20',
+             'traffic_end':'2026-06-27','batch_count':2,'current_batch':2,
+             'batches':[{'batch':1,'output':'deleted.csv','total':1,'completed':1,
+                         'pending':0,'expired':0,'unknown':0}]}
+   db.begin_run('failed-run','TRAFFIC_BACKFILL',previous)
+   db.begin_backfill_window('history','failed-run')
+   db.upsert_usage('failed-run',[{'ruleset_href':'/rs/a','rule_href':'/r/a',
+      'async_query_status':'completed','flows':'1','flows_by_port':'443 TCP (1)',
+      'query_body':'{"start_date":"2026-06-20T00:00:00Z","end_date":"2026-06-27T00:00:00Z"}'}])
+   db.update_backfill_window('history','failed-run','2026-06-27',False,
+                             run_details=previous,run_status='ERROR',error='workloader failed')
+   command_log=root/'commands.log'
+   with patch.dict(os.environ,{'FAKE_COMMAND_LOG':str(command_log)}):
+    result=backfill_traffic(settings,'history',no_wait=True)
+   self.assertIn(result['status'],('SUCCESS','SUCCESS_WITH_EXCEPTIONS'))
+   self.assertEqual(result['resumed_from_run_id'],'failed-run')
+   self.assertEqual(result['resumed_completed_batches'],1)
+   self.assertTrue(result['batches'][0]['resumed'])
+   self.assertEqual(command_log.read_text().count('--traffic-count'),1)
+   with sqlite3.connect(root/'db.sqlite') as connection:
+    usage=connection.execute('SELECT COUNT(*) FROM usage_windows').fetchone()[0]
+    state=connection.execute('SELECT next_window_start,status FROM backfill_states').fetchone()
+   self.assertEqual(usage,2)
+   self.assertEqual(state,('2026-06-27','PENDING'))
+
  def test_failed_run_diagnostics_preserve_error_and_current_batch_files(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d); run_dir=root/'raw'/'run'; run_dir.mkdir(parents=True)
@@ -346,6 +406,9 @@ class CollectionTest(unittest.TestCase):
    settings=Settings(pce='p',workloader_dir=str(bindir),state_db=str(root/'db.sqlite'),raw_dir=str(root/'raw'),output_dir=str(root/'out'),log_dir=str(root/'logs'),query_initial_delay_minutes=0)
    result=collect(settings,date(2026,8,20),date(2026,8,21),no_wait=True)
    self.assertEqual(result['status'],'SUCCESS'); self.assertEqual(result['completed'],1)
+   self.assertEqual(result['current_batch'],1)
+   self.assertEqual(result['batch_count'],1)
+   self.assertEqual(result['batch_attempt_count'],1)
    self.assertGreaterEqual(result['batches'][0]['duration_seconds'],0)
    self.assertGreaterEqual(result['batches'][0]['duration_hours'],0)
    self.assertIn('started_at',result['batches'][0]); self.assertIn('finished_at',result['batches'][0])
@@ -387,6 +450,9 @@ class CollectionTest(unittest.TestCase):
    result=collect(settings,date(2026,8,20),date(2026,8,21),no_wait=True)
    self.assertEqual(result['status'],'SUCCESS_WITH_EXCEPTIONS')
    self.assertEqual(result['runtime_oversized_ruleset_count'],1)
+   self.assertEqual(result['current_batch'],0)
+   self.assertEqual(result['batch_count'],0)
+   self.assertEqual(result['batch_attempt_count'],1)
    self.assertEqual(result['runtime_oversized_rulesets'],[{'ruleset_href':'/rs/big','inventory_rule_count':100,'reported_rule_count':101,'reason':'TRAFFIC_RULE_LIMIT_EXCEEDED'}])
    with sqlite3.connect(root/'db.sqlite') as connection:
     category=connection.execute('SELECT category FROM data_quality').fetchone()[0]

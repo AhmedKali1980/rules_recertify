@@ -124,8 +124,13 @@ Skip and audit individual usage rows whose `query_body` has no parseable
 CSV. Continue to reject parseable windows that differ from the requested period.
 
 Accept named IP protocols in Workloader's portless `0 NAME (flows)` form, not
-only ICMP/IGMP. Skip and audit an individual row if its expanded port detail is
+only ICMP/IGMP. Also accept Workloader's bare `0 (flows)` bucket as an
+unspecified IP protocol (not TCP/UDP port zero). Skip and audit an individual row if its expanded port detail is
 still malformed rather than rolling back ingestion for the entire batch.
+
+Ignore repeated CSV header records when rendering problematic rules; they are
+transport artifacts rather than policy rules and must not create empty-looking
+rows in the audit workbook.
 
 Before bin-packing, export labels and admit only rulesets with one consistent
 scope containing exactly `app:<application_label>` and `env:<environment>` (in

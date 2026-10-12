@@ -400,6 +400,17 @@ class CollectionTest(unittest.TestCase):
   self.assertEqual(invalid_query,[])
   self.assertEqual(invalid_ports[0]['rule_href'],'/r/bad')
 
+ def test_all_services_bare_zero_port_bucket_is_valid_usage(self):
+  query='{"start_date":"2026-08-20T00:00:00Z","end_date":"2026-08-21T00:00:00Z"}'
+  valid, invalid_query, invalid_ports=_validated_usage_rows(
+   [{'rule_href':'/r/all-services','query_body':query,
+     'flows_by_port':'0 (1); 42557 TCP (1); 0 ICMP (61290); 22 TCP (198096)'}],
+   date(2026,8,20),date(2026,8,21)
+  )
+  self.assertEqual(len(valid),1)
+  self.assertEqual(invalid_query,[])
+  self.assertEqual(invalid_ports,[])
+
  def test_end_to_end_with_fake_workloader(self):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d); bindir=root/'bin'; bindir.mkdir(); binary=bindir/'workloader'; binary.write_text(FAKE); binary.chmod(binary.stat().st_mode|stat.S_IEXEC)

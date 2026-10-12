@@ -66,8 +66,21 @@ def build_traffic_audit_rows(
             return dict(item)
         return {"rule_href": str(item)}
 
-    invalid_query_records = [issue_record(item) for item in invalid_query_rules]
-    invalid_port_records = [issue_record(item) for item in invalid_port_rules]
+    def is_repeated_header(record: Mapping[str, object]) -> bool:
+        """Recognize Workloader CSV headers repeated inside the data stream."""
+        return (
+            str(record.get("rule_href", "")).strip().casefold() == "rule_href"
+            and str(record.get("ruleset_href", "")).strip().casefold() == "ruleset_href"
+        )
+
+    invalid_query_records = [
+        record for item in invalid_query_rules
+        if not is_repeated_header(record := issue_record(item))
+    ]
+    invalid_port_records = [
+        record for item in invalid_port_rules
+        if not is_repeated_header(record := issue_record(item))
+    ]
     invalid_query = {str(item.get("rule_href", "")) for item in invalid_query_records}
     invalid_ports = {str(item.get("rule_href", "")) for item in invalid_port_records}
     rows: List[Dict[str, object]] = []

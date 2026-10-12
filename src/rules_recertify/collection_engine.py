@@ -311,6 +311,7 @@ def _collect_traffic_run(
     invalid_query_rules: List[Mapping[str, object]] = []
     invalid_port_rules: List[Mapping[str, object]] = []
     traffic_audit_path: Optional[Path] = None
+    resume_run: Optional[Mapping[str, object]] = None
     try:
         if cursor_name:
             db.begin_traffic_window(
@@ -319,6 +320,9 @@ def _collect_traffic_run(
             )
             cursor_started = True
         if backfill_id:
+            resume_run = db.backfill_resume_run(
+                backfill_id, traffic_start.isoformat(), traffic_end.isoformat(),
+            )
             lease = db.begin_backfill_window(
                 backfill_id, run_id, settings.traffic_window_days,
             )
@@ -450,6 +454,75 @@ def _collect_traffic_run(
         pending_batches = list(batches)
         runtime_oversized = []
         index = 0
+        if resume_run:
+            previous = resume_run.get("details", {})
+            assert isinstance(previous, dict)
+            previous_batches = previous.get("batches", [])
+            completed_batches = (
+                previous_batches if isinstance(previous_batches, list) else []
+            )
+            sequential = all(
+                isinstance(item, dict) and item.get("batch") == number
+                for number, item in enumerate(completed_batches, 1)
+            )
+            same_plan_size = previous.get("batch_count") == len(batches)
+            stored_usage = db.usage_for_window(
+                traffic_start.isoformat(), traffic_end.isoformat(),
+            )
+            stored_rule_hrefs = {
+                str(row.get("rule_href", "")) for row in stored_usage
+            }
+            completed_rulesets = {
+                item.href
+                for batch in batches[:len(completed_batches)]
+                for item in batch
+            }
+            expected_rule_hrefs = {
+                str(row.get("rule_href", "")) for row in inventory
+                if str(row.get("ruleset_href", "")) in completed_rulesets
+            }
+            completed_results = all(
+                isinstance(item, dict)
+                and int(item.get("total", 0)) > 0
+                and int(item.get("completed", 0)) == int(item.get("total", 0))
+                for item in completed_batches
+            )
+            covered = expected_rule_hrefs <= stored_rule_hrefs
+            if (
+                completed_batches and sequential and same_plan_size
+                and len(completed_batches) <= len(batches)
+                and completed_results and covered
+            ):
+                index = len(completed_batches)
+                pending_batches = pending_batches[index:]
+                details["batches"] = [
+                    {**item, "output": "", "resumed": True}
+                    for item in completed_batches if isinstance(item, dict)
+                ]
+                details["resumed_from_run_id"] = resume_run["run_id"]
+                details["resumed_completed_batches"] = index
+                details["resume_batch"] = index + 1
+                for row in stored_usage:
+                    copied = dict(row)
+                    ruleset_href = str(copied.get("ruleset_href", ""))
+                    copied["_batch"] = next(
+                        (
+                            batch_number for batch_number, batch in enumerate(batches, 1)
+                            if any(item.href == ruleset_href for item in batch)
+                        ),
+                        "",
+                    )
+                    usage_by_rule[str(copied.get("rule_href", ""))] = copied
+                LOG.info(
+                    "Resuming failed backfill at batch %s; preserving %s completed batches from run %s",
+                    index + 1, index, resume_run["run_id"],
+                )
+            elif completed_batches:
+                details["resume_ignored_reason"] = "BATCH_PLAN_CHANGED"
+                LOG.warning(
+                    "Cannot safely resume backfill batches from run %s because the batch plan changed; restarting window",
+                    resume_run["run_id"],
+                )
         while pending_batches:
             batch = pending_batches.pop(0)
             index += 1
@@ -597,7 +670,13 @@ def _collect_traffic_run(
             for item, reported_rule_count in runtime_oversized
         ]
         details["runtime_oversized_ruleset_count"] = len(runtime_oversized)
-        details.pop("current_batch", None)
+        # ``index`` also counts submission attempts that Workloader asks us to
+        # split (or rulesets rejected at runtime).  It must not be presented as
+        # the number of async batches: that made successful runs appear as
+        # 43/44 even though all 43 resulting query batches had completed.
+        details["batch_attempt_count"] = index
+        details["batch_count"] = len(details["batches"])
+        details["current_batch"] = details["batch_count"]
         details.pop("current_batch_started_at", None)
         details["current_stage"] = "FINALIZED"
         summary = _summarize_batches(details["batches"])

@@ -26,6 +26,19 @@ class CsvIoTest(unittest.TestCase):
             path.write_text('a;b\n1;"x;y"\n', encoding="utf-8")
             self.assertEqual(list(read_rows(path, ("a", "b")))[0]["b"], "x;y")
 
+    def test_repeated_header_inside_data_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "usage.csv"
+            path.write_text(
+                "rule_href,ruleset_href,query_body\n"
+                "/r/1,/rs/1,valid\n"
+                "rule_href,ruleset_href,query_body\n"
+                "/r/2,/rs/2,valid\n",
+                encoding="utf-8",
+            )
+            rows = list(read_rows(path, ("rule_href", "ruleset_href", "query_body")))
+        self.assertEqual([row["rule_href"] for row in rows], ["/r/1", "/r/2"])
+
     def test_flows_by_port_and_more(self):
         rows, complete, omitted = parse_flows_by_port("5353 UDP (2); 0 ICMP (9); 0 IPv6-ICMP (7); + 13 more")
         self.assertEqual(rows, [
@@ -41,6 +54,22 @@ class CsvIoTest(unittest.TestCase):
             rows,
             [{"port": None, "protocol": "VRRP", "flows": 1}],
         )
+        self.assertTrue(complete)
+        self.assertEqual(omitted, 0)
+
+    def test_bare_zero_bucket_is_an_unspecified_protocol_not_port_zero(self):
+        rows, complete, omitted = parse_flows_by_port(
+            "0 (1); 42557 TCP (1); 0 ICMP (61290); 22 TCP (198096)"
+        )
+        self.assertEqual(rows[0], {
+            "port": None, "protocol": "UNSPECIFIED", "flows": 1,
+        })
+        self.assertEqual(rows[1], {
+            "port": 42557, "protocol": "TCP", "flows": 1,
+        })
+        self.assertEqual(rows[2], {
+            "port": None, "protocol": "ICMP", "flows": 61290,
+        })
         self.assertTrue(complete)
         self.assertEqual(omitted, 0)
 

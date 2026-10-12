@@ -18,6 +18,8 @@ ingestion, on-demand Excel reporting, structured logs, and SMTP summaries.
   reusable-project visibility from the current workspace.
 - [Integration and test guide](docs/integration-guide.md): offline installation,
   configuration, cron, collection, backfill, reporting, and acceptance tests.
+- [How-to & troubleshooting](docs/how-to-troubleshooting.md): commandes
+  d'exploitation, supervision, diagnostics rapides et incidents fréquents.
 
 ## Proposed implementation stack
 

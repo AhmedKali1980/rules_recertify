@@ -1,32 +1,33 @@
 # Rules Recertify — How-to & Troubleshooting
 
-Runbook court pour exploiter, superviser et diagnostiquer `rules_recertify`.
-Toutes les commandes partent de la racine de production :
+A concise runbook for operating, monitoring, and troubleshooting
+`rules_recertify`. Run all commands from the production root:
 
 ```bash
 cd /DATA/mco/illumio-mco/rules_recertify
 ```
 
-> **Règle d'or :** utiliser les wrappers `scripts/*.sh` pour les collectes de
-> production. Ils chargent la configuration, activent le virtualenv, vérifient
-> le snapshot et protègent les traitements avec un verrou commun.
+> **Golden rule:** use the `scripts/*.sh` wrappers for production collections.
+> They load the configuration and virtualenv, verify the policy snapshot, and
+> protect collection jobs with a shared lock.
 
-## 1. Aide-mémoire
+## 1. Quick reference
 
-| Besoin | Commande |
+| Task | Command |
 |---|---|
-| Vérifier la configuration | `./scripts/rules-recertify --config config/local.json --env-file .env validate-config` |
-| Initialiser SQLite | `./scripts/rules-recertify --config config/local.json --env-file .env init-db` |
-| Tester SMTP | `./scripts/rules-recertify --config config/local.json --env-file .env test-email` |
-| Rafraîchir le snapshot policy | `./scripts/daily-policy-collect.sh` |
-| Collecter le trafic hebdomadaire | `./scripts/weekly-traffic-collect.sh` |
-| Exécuter une fenêtre de backfill | `./scripts/backfill-traffic.sh` |
-| Forcer le backfill avant 47 h | `./scripts/backfill-traffic.sh --force` |
-| Forcer exceptionnellement un dimanche | `./scripts/backfill-traffic.sh --force --allow-sunday` |
-| Voir l'état global | `./scripts/check-collection.sh` |
-| Voir le détail du backfill | `./scripts/rules-recertify --config config/local.json --env-file .env backfill-status --backfill-id traffic-92-days` |
+| Validate configuration | `./scripts/rules-recertify --config config/local.json --env-file .env validate-config` |
+| Initialize SQLite | `./scripts/rules-recertify --config config/local.json --env-file .env init-db` |
+| Test SMTP | `./scripts/rules-recertify --config config/local.json --env-file .env test-email` |
+| Refresh the policy snapshot | `./scripts/daily-policy-collect.sh` |
+| Collect weekly traffic | `./scripts/weekly-traffic-collect.sh` |
+| Process one backfill window | `./scripts/backfill-traffic.sh` |
+| Bypass the 47-hour backfill gate | `./scripts/backfill-traffic.sh --force` |
+| Explicitly run a Sunday backfill | `./scripts/backfill-traffic.sh --force --allow-sunday` |
+| Check overall health | `./scripts/check-collection.sh` |
+| Inspect backfill details | `./scripts/rules-recertify --config config/local.json --env-file .env backfill-status --backfill-id traffic-92-days` |
+| Search current rules for supplied items | `./scripts/rules-recertify --config config/local.json --env-file .env search-rules --items /tmp/items.xlsx` |
 
-## 2. Première mise en service
+## 2. First-time setup
 
 ```bash
 cp config/example.json config/local.json
@@ -38,35 +39,36 @@ chmod 600 .env
 ./scripts/rules-recertify --config config/local.json --env-file .env test-email
 ```
 
-Avant le premier contact PCE, vérifier dans `config/local.json` :
+Before the first PCE connection, verify in `config/local.json`:
 
-- `pce`, `workloader_dir` et `workloader_config_file` ;
-- les chemins `state_db`, `raw_dir`, `output_dir`, `log_dir` ;
-- `traffic_environments` et `traffic_batch_size` ;
-- la configuration SMTP dans `.env`.
+- `pce`, `workloader_dir`, and `workloader_config_file`;
+- `state_db`, `raw_dir`, `output_dir`, and `log_dir`;
+- `traffic_environments` and `traffic_batch_size`;
+- SMTP variables in `.env`.
 
-## 3. Opérations courantes
+## 3. Routine operations
 
-### Rafraîchir le snapshot
+### Refresh the policy snapshot
 
-Exporte workloads L1/L3SM, IP Lists, services, labels, rulesets et règles, puis
-publie atomiquement `var/raw/snapshot` :
+Exports L1/L3SM workloads, IP Lists, services, labels, rulesets, and rules, then
+atomically publishes `var/raw/snapshot`:
 
 ```bash
 ./scripts/daily-policy-collect.sh
 ```
 
-### Collecter le trafic hebdomadaire
+### Collect weekly traffic
 
 ```bash
 ./scripts/weekly-traffic-collect.sh
 ```
 
-Le wrapper utilise le curseur SQLite et ne rejoue pas une fenêtre déjà réussie.
+The wrapper uses the persisted SQLite cursor and does not replay a successful
+window.
 
-### Initialiser puis poursuivre le backfill
+### Initialize and continue a backfill
 
-L'initialisation est **unique** et fige une plage de 92 jours :
+Initialization is a **one-time** operation that freezes a 92-day range:
 
 ```bash
 ./scripts/rules-recertify --config config/local.json --env-file .env \
@@ -76,13 +78,13 @@ L'initialisation est **unique** et fige une plage de 92 jours :
 ./scripts/backfill-traffic.sh
 ```
 
-Chaque lancement traite au maximum une fenêtre de sept jours. En cas d'échec,
-la relance reprend au premier batch non terminé lorsque les contrôles de reprise
-sont satisfaits ; sinon elle rejoue prudemment la fenêtre.
+Each invocation processes at most one seven-day window. After a failure, a retry
+starts at the first unfinished batch when all resume safety checks pass;
+otherwise, it safely replays the window.
 
-### Snapshot puis backfill en arrière-plan
+### Refresh the snapshot, then backfill in the background
 
-Les deux collectes partagent un verrou : les enchaîner, ne pas les paralléliser.
+Both jobs use the same lock. Run them sequentially, never in parallel:
 
 ```bash
 LOG="var/logs/snapshot-and-backfill-$(date +%Y%m%dT%H%M%S).log"
@@ -95,67 +97,143 @@ nohup bash -c '
   ./scripts/backfill-traffic.sh --force
 ' >"$LOG" 2>&1 </dev/null &
 
-echo "PID=$!"
+PID=$!
+echo "PID=$PID"
 echo "LOG=$LOG"
 ```
 
-### Générer un rapport
+### Generate an application report
 
 ```bash
 ./scripts/rules-recertify --config config/local.json --env-file .env report \
   --kear-id "12345678-abcd-4321-abcd-123456789012" \
-  --logical-application-name "Paiements" \
+  --logical-application-name "Payments" \
   --application-label APM_PAYMENT --environment PRD \
   --lookback-days 180
 ```
 
-Recherche ponctuelle de règles :
+## 4. Search supplied items across the current rule snapshot
+
+The former standalone CSV/Pandas search is still available as the integrated
+`search-rules` command. It reads the latest successfully published policy
+snapshot from SQLite and searches only rules currently marked as present.
+
+The old `--rules <rules.csv>` argument is intentionally gone: the current
+snapshot is now the authoritative rules source. The remaining options map as
+follows:
+
+| Former script | Integrated command |
+|---|---|
+| `--rules rules.csv` | Not required; reads the current SQLite snapshot |
+| `--items items.csv` | `--items items.csv` (CSV, TXT, or XLSX) |
+| `--out result.xlsx` | `--out result.xlsx` (optional) |
+| `--case-sensitive` | `--case-sensitive` (optional) |
+
+Compared with the former script, the integrated command also:
+
+- accepts CSV, TXT, or XLSX input;
+- searches scopes, descriptions, labels, label groups, exclusions, IP Lists,
+  workloads, and services;
+- expands named services from the snapshot service catalog;
+- understands ports and ranges such as `TCP/22`, `3389`, or `UDP/160-162`;
+- produces **Summary**, **Results**, and **Metadata** worksheets;
+- emits `NOT_USED_IN_ANY_RULE` when an item has no match.
+
+### Prepare the input
+
+Use one item per row. A header named `item`, `search item`, or `searched item` is
+optional. Blank rows and duplicates are ignored.
+
+```text
+item
+APM_PAYMENT
+PRODUCTION-WEB
+DATABASE-NET
+DATABASE-SVC
+TCP/22
+UDP/160-162
+```
+
+Save it as `/tmp/items.csv`, `/tmp/items.txt`, or `/tmp/items.xlsx`.
+
+### Run the search
 
 ```bash
 ./scripts/rules-recertify --config config/local.json --env-file .env \
-  search-rules --items /tmp/items.xlsx
+  search-rules --items /tmp/items.csv
 ```
 
-## 4. Supervision rapide
+By default, the workbook is written under `output_dir` as
+`rules_items_search_<UTC timestamp>.xlsx`. To choose the destination:
 
-### État synthétique
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  search-rules --items /tmp/items.xlsx \
+  --out var/output/my-rule-search.xlsx
+```
+
+Text search is case-insensitive by default. Enable strict case matching with:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  search-rules --items /tmp/items.csv --case-sensitive
+```
+
+### Read the output
+
+- **Summary**: one line per input item, status, and matching-rule count.
+- **Results**: one line per item/rule match, including `found as`, optional port
+  intersection details, snapshot timestamp, and all original rule columns.
+- **Metadata**: snapshot timestamp, input path, service-reference source,
+  case-sensitivity mode, and generation time.
+
+If the command reports `no rule snapshot is available in SQLite`, refresh the
+snapshot first:
+
+```bash
+./scripts/daily-policy-collect.sh
+```
+
+## 5. Quick monitoring
+
+### Overall health
 
 ```bash
 ./scripts/check-collection.sh; echo "rc=$?"
 ```
 
-| Code | Signification |
+| Exit code | Meaning |
 |---:|---|
 | `0` | OK |
-| `1` | WARNING : traitement actif ou backfill à reprendre |
-| `2` | CRITICAL : snapshot, curseur, archive ou run en défaut |
-| `3` | UNKNOWN : contrôle impossible |
+| `1` | WARNING: active job or backfill retry pending |
+| `2` | CRITICAL: snapshot, cursor, archive, or run failure |
+| `3` | UNKNOWN: health check could not run |
 
-### Suivre les journaux
+### Follow logs
 
 ```bash
 tail -f var/logs/rules-recertify-$(date +%F).jsonl
 ```
 
-Pour un job lancé avec `nohup` :
+For a `nohup` job:
 
 ```bash
 tail -f "$LOG"
 ps -fp "$PID"
 ```
 
-### Processus et verrou
+### Processes and lock
 
 ```bash
 pgrep -af 'rules-recertify|backfill-traffic|daily-policy-collect|workloader'
 fuser var/state/collect.lock 2>/dev/null || true
 ```
 
-Ne jamais supprimer le verrou tant qu'un processus de collecte existe.
+Never remove or bypass the lock while a collection process is running.
 
-## 5. Diagnostic en 5 minutes
+## 6. Five-minute diagnostic bundle
 
-Exécuter ce bloc et joindre sa sortie au ticket :
+Run this block and attach its output to the incident ticket:
 
 ```bash
 echo '=== HEALTH ==='
@@ -180,11 +258,11 @@ tail -n 200 "var/logs/rules-recertify-$(date +%F).jsonl" 2>/dev/null \
   | grep -Ei 'error|warning|failed|retry|exception' || true
 ```
 
-## 6. Lire SQLite sans dépendre du client `sqlite3`
+## 7. Inspect SQLite without the `sqlite3` client
 
-Les extraits suivants utilisent le chemin défini par la configuration.
+These snippets obtain the database path from the effective configuration.
 
-### Dix derniers runs
+### Last ten runs
 
 ```bash
 PYTHONPATH=src python3 - <<'PY'
@@ -203,7 +281,7 @@ with db.connect() as c:
 PY
 ```
 
-### État du backfill et curseur hebdomadaire
+### Backfill state and weekly cursor
 
 ```bash
 PYTHONPATH=src python3 - <<'PY'
@@ -223,7 +301,7 @@ with db.connect() as c:
 PY
 ```
 
-### Détails du dernier run en erreur
+### Most recent failed run details
 
 ```bash
 PYTHONPATH=src python3 - <<'PY'
@@ -243,102 +321,103 @@ if row:
     print("run_id:", row[0])
     print(json.dumps(json.loads(row[1]), indent=2, sort_keys=True))
 else:
-    print("Aucun run ERROR/WARNING")
+    print("No ERROR/WARNING run found")
 PY
 ```
 
-## 7. Incidents fréquents
+## 8. Common incidents
 
-### `Another Rules Recertify collection is running` / code 75
+### `Another Rules Recertify collection is running` / exit code 75
 
-- une autre collecte détient le verrou ;
-- vérifier les processus et attendre leur fin ;
-- si aucun processus n'existe mais qu'un run reste `RUNNING`, conserver les
-  éléments de diagnostic avant toute intervention SQLite.
+- another collection owns the shared lock;
+- inspect processes and wait for it to finish;
+- if no process exists but a run remains `RUNNING`, preserve diagnostics before
+  making any SQLite change.
 
-### Le backfill ne démarre pas
+### Backfill does not start
 
-Vérifier, dans cet ordre :
+Check in this order:
 
-1. dimanche : utiliser exceptionnellement `--force --allow-sunday` ;
-2. tentative datant de moins de 47 h : utiliser `--force` ;
-3. état `COMPLETED` : aucune fenêtre ne reste à traiter ;
-4. verrou détenu : une autre collecte tourne ;
-5. snapshot manquant : le wrapper lance d'abord `collect-policy`.
+1. Sunday: use `--force --allow-sunday` only for an approved exception;
+2. last attempt was less than 47 hours ago: use `--force`;
+3. state is `COMPLETED`: no window remains;
+4. lock is held: another collection is active;
+5. snapshot is missing: the wrapper runs `collect-policy` first.
 
-### Workloader sort avec le statut 1
+### Workloader exits with status 1
 
 ```bash
 find var/logs/failed-runs -maxdepth 2 -type f -printf '%T@ %p\n' \
   | sort -nr | head -20
 ```
 
-Consulter en priorité :
+Inspect first:
 
-- `run-details.json` ;
-- `workloader-output.log` ;
-- les fichiers `batch_NNNN_*` du batch courant.
+- `run-details.json`;
+- `workloader-output.log`;
+- the current batch files matching `batch_NNNN_*`.
 
-Les erreurs HTTP `429/500/502/503/504` et certaines erreurs de transport PCE
-sont retentées automatiquement. Une erreur d'authentification, de configuration
-ou de données reste bloquante.
+HTTP `429/500/502/503/504` and recognized PCE transport failures are retried
+automatically. Authentication, configuration, and deterministic data errors
+remain blocking.
 
 ### `INVALID_PORT_DETAILS`
 
-Ouvrir `flows_by_port` dans la feuille **Problematic Rules** :
+Inspect `flows_by_port` in **Problematic Rules**:
 
-- `443 TCP (10)` : port TCP ;
-- `0 ICMP (10)` ou `0 VRRP (1)` : protocole IP sans port ;
-- `0 (1)` : protocole non spécifié produit par Workloader pour certains flux
-  **All Services** ;
-- toute autre forme réellement inconnue est conservée dans l'audit pour analyse.
+- `443 TCP (10)`: TCP port;
+- `0 ICMP (10)` or `0 VRRP (1)`: portless IP protocol;
+- `0 (1)`: unspecified protocol emitted by Workloader for some **All Services**
+  traffic;
+- any genuinely unknown representation remains in the audit for investigation.
 
-### Lignes contenant seulement les entêtes dans `Problematic Rules`
+### Header-only rows in `Problematic Rules`
 
-Les versions récentes ignorent les entêtes CSV répétés par Workloader. Si elles
-réapparaissent, conserver le fichier `batch_NNNN_usage_NNN.csv` concerné et le
-`workloader-output.log` pour reproduire le format exact.
+Current versions ignore CSV headers repeated by Workloader. If they reappear,
+preserve the relevant `batch_NNNN_usage_NNN.csv` and `workloader-output.log` to
+capture the exact source format.
 
 ### `SUCCESS_WITH_EXCEPTIONS`
 
-Le run est exploitable mais contient une exception documentée. Vérifier dans le
-mail et le classeur : statuts async inconnus, résultat absent, query body ou port
-invalide, ruleset hors limite. `PENDING` et `EXPIRED` restent bloquants.
+The run is usable but contains a documented exception. Check the email and
+workbook for unknown async statuses, missing results, invalid query/port data, or
+oversized rulesets. `PENDING` and `EXPIRED` remain blocking.
 
-### Snapshot absent ou trop ancien
+### Snapshot is missing or stale
 
 ```bash
 ./scripts/daily-policy-collect.sh
 ./scripts/check-collection.sh
 ```
 
-Ne pas lancer le refresh snapshot en parallèle d'un trafic/backfill : le verrou
-commun est volontaire.
+Do not refresh the snapshot in parallel with traffic/backfill collection. The
+shared lock is intentional.
 
-### Disque plein
+### Disk is full
 
 ```bash
 du -xhd1 var | sort -h
 du -xhd1 var/raw var/output var/logs 2>/dev/null | sort -h
 ```
 
-Ne pas supprimer directement la base SQLite, le snapshot courant ou une archive
-référencée. Utiliser la commande de purge pour les archives expirées :
+Do not directly delete SQLite, the current snapshot, or a referenced archive.
+Use the archive retention command:
 
 ```bash
 ./scripts/rules-recertify --config config/local.json --env-file .env \
   purge-archives --as-of "$(date +%F)"
 ```
 
-## 8. Archives
+## 9. Archives
 
-Lister et vérifier visuellement :
+List archives:
 
 ```bash
-find var/raw/archives -maxdepth 1 -type f -name '*.tar.gz' -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' | sort
+find var/raw/archives -maxdepth 1 -type f -name '*.tar.gz' \
+  -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' | sort
 ```
 
-Restaurer une archive sans toucher au snapshot courant :
+Restore and verify an archive without changing the current snapshot:
 
 ```bash
 ./scripts/rules-recertify --config config/local.json --env-file .env \
@@ -346,27 +425,27 @@ Restaurer une archive sans toucher au snapshot courant :
   --target-dir /tmp/rules-recertify-restore
 ```
 
-## 9. Fichiers à joindre à un ticket
+## 10. Evidence to attach to an incident
 
-Ne jamais joindre `.env`, `pce.yaml`, clés ou secrets.
+Never attach `.env`, `pce.yaml`, private keys, credentials, or other secrets.
 
-Joindre si disponibles :
+Attach when available:
 
-1. sortie de `check-collection.sh` ;
-2. sortie de `backfill-status` ;
-3. `var/logs/failed-runs/<run_id>/run-details.json` ;
-4. `workloader-output.log` du run en erreur ;
-5. fichiers du batch fautif `batch_NNNN_*` ;
-6. lignes JSON du run dans `var/logs/rules-recertify-YYYY-MM-DD.jsonl` ;
-7. espace disque (`df -h`) et processus (`pgrep -af ...`).
+1. `check-collection.sh` output;
+2. `backfill-status` output;
+3. `var/logs/failed-runs/<run_id>/run-details.json`;
+4. the failed run's `workloader-output.log`;
+5. the failed `batch_NNNN_*` files;
+6. relevant entries from `var/logs/rules-recertify-YYYY-MM-DD.jsonl`;
+7. disk (`df -h`) and process (`pgrep -af ...`) output.
 
-## 10. Planification de référence
+## 11. Reference schedule
 
 ```text
-00:10 tous les jours       snapshot policy
-01:00 dimanche             trafic hebdomadaire
-02:00 dimanche             retry trafic hebdomadaire
-03:00 lundi à samedi       backfill si dernière tentative >= 47 h
+00:10 every day             policy snapshot
+01:00 Sunday                weekly traffic
+02:00 Sunday                weekly traffic retry
+03:00 Monday to Saturday    backfill when last attempt is at least 47 hours old
 ```
 
-La référence installable se trouve dans `config/rules-recertify.cron`.
+The installable reference is `config/rules-recertify.cron`.

@@ -82,6 +82,27 @@ Each invocation processes at most one seven-day window. After a failure, a retry
 starts at the first unfinished batch when all resume safety checks pass;
 otherwise, it safely replays the window.
 
+### Extend an existing backfill target
+
+Wait for the active window to finish, then move the exclusive target forward.
+Completed windows and the current cursor are preserved:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  extend-backfill-traffic --backfill-id traffic-92-days \
+  --target-end 2026-10-11
+```
+
+For a cursor at `2026-09-20`, this creates three subsequent windows:
+`[2026-09-20, 2026-09-27)`, `[2026-09-27, 2026-10-04)`, and
+`[2026-10-04, 2026-10-11)`. Process them normally with
+`./scripts/backfill-traffic.sh` (or `--force` for an approved immediate run).
+
+The backfill cursor and weekly cursor are independent. Once coverage reaches
+Sunday `2026-10-11`, the first weekly collection on Sunday `2026-10-18` can
+collect `[2026-10-11, 2026-10-18)`; when no weekly cursor exists, the wrapper
+automatically derives that seven-day start from its available end date.
+
 ### Refresh the snapshot, then backfill in the background
 
 Both jobs use the same lock. Run them sequentially, never in parallel:

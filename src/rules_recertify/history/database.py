@@ -425,6 +425,36 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
+    def extend_backfill(self, backfill_id: str, target_end: str) -> Mapping[str, object]:
+        """Extend an idle backfill target without changing its existing cursor."""
+        now = _now()
+        with self.connect() as db:
+            state = db.execute(
+                "SELECT backfill_target_end,next_window_start,status FROM backfill_states "
+                "WHERE backfill_id=?", (backfill_id,),
+            ).fetchone()
+            if state is None:
+                raise ValueError(f"unknown backfill: {backfill_id}")
+            if state[2] == "RUNNING":
+                raise ValueError(f"cannot extend a running backfill: {backfill_id}")
+            if target_end <= state[0]:
+                raise ValueError(
+                    f"new backfill target must be after {state[0]}, got {target_end}"
+                )
+            if target_end <= state[1]:
+                raise ValueError(
+                    f"new backfill target must be after cursor {state[1]}, got {target_end}"
+                )
+            db.execute(
+                "UPDATE backfill_states SET backfill_target_end=?,status='PENDING',updated_at=? "
+                "WHERE backfill_id=?",
+                (target_end, now, backfill_id),
+            )
+            updated = db.execute(
+                "SELECT * FROM backfill_states WHERE backfill_id=?", (backfill_id,),
+            ).fetchone()
+            return dict(updated)
+
     def backfill_resume_run(self, backfill_id: str, window_start: str,
                             window_end: str) -> Optional[Mapping[str, object]]:
         """Return the last failed run when it belongs to the window being retried."""

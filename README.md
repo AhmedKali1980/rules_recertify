@@ -155,6 +155,16 @@ début est automatiquement fixé à J-92 :
 ./scripts/rules-recertify --config config/local.json backfill-traffic
 ```
 
+La cible peut être prolongée explicitement après l'initialisation, sans déplacer
+le début ni rejouer les fenêtres réussies. L'extension est refusée pendant un
+run actif :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  extend-backfill-traffic --backfill-id traffic-92-days \
+  --target-end 2026-10-11
+```
+
 Les fenêtres sont traitées de la plus ancienne à la plus récente. La quatorzième
 fenêtre peut être partielle : 92 jours donnent treize fenêtres de sept jours et
 une dernière fenêtre d'un jour. Les états persistants sont `PENDING`, `RUNNING`,

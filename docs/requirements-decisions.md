@@ -447,6 +447,12 @@ with a seven-day maximum and a potentially partial final window. Persist
 cursor, completion stops subsequent executions, and duplicate initialization is
 rejected. Weekly and backfill cursors coexist but share the traffic engine.
 
+An operator may explicitly extend an idle backfill to a later exclusive target.
+The original start and `next_window_start` cursor remain unchanged, completed
+windows are not replayed, and a formerly `COMPLETED` backfill returns to
+`PENDING`. Extension is rejected while a window is `RUNNING` and never permits
+moving the target backward.
+
 ### DEC-023 — Materialized snapshot and verified raw archives
 
 Publish the latest complete policy inventory atomically at `var/raw/snapshot`

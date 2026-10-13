@@ -231,6 +231,15 @@ def initialize_backfill_traffic(settings: Settings, target_end: date,
     return dict(db.backfill_state(backfill_id) or {})
 
 
+def extend_backfill_traffic(settings: Settings, target_end: date,
+                            backfill_id: str = "traffic-92-days") -> Dict[str, object]:
+    """Move an existing idle backfill target forward, preserving completed windows."""
+    if not backfill_id.strip():
+        raise ValueError("backfill_id must not be empty")
+    db = Database(Path(settings.state_db)); db.initialize()
+    return dict(db.extend_backfill(backfill_id, target_end.isoformat()))
+
+
 def backfill_traffic(settings: Settings, backfill_id: str = "traffic-92-days",
                      no_wait: bool = False) -> Dict[str, object]:
     """Process at most one oldest-first backfill window."""

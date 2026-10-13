@@ -12,7 +12,7 @@ from typing import List, Optional
 from .archives import purge_expired_archives, restore_archive
 from .collection_engine import (
     backfill_traffic, collect, collect_policy, collect_traffic,
-    initialize_backfill_traffic,
+    extend_backfill_traffic, initialize_backfill_traffic,
 )
 from .config import ConfigurationError, load_settings
 from .history.database import Database
@@ -70,6 +70,13 @@ def parser() -> argparse.ArgumentParser:
         "--backfill-id", default="traffic-92-days",
         help="Persistent identifier; an existing identifier cannot be reinitialized",
     )
+    extend_backfill = commands.add_parser(
+        "extend-backfill-traffic",
+        help="Move an existing idle backfill target forward without replaying completed windows",
+    )
+    extend_backfill.add_argument("--target-end", type=_date, required=True,
+                                 help="New exclusive target; must be later than the current target")
+    extend_backfill.add_argument("--backfill-id", default="traffic-92-days")
     backfill = commands.add_parser(
         "backfill-traffic", help="Process at most one oldest-first backfill window",
     )
@@ -178,6 +185,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "init-backfill-traffic":
             print(json.dumps(
                 initialize_backfill_traffic(settings, args.target_end, args.backfill_id),
+                indent=2, sort_keys=True,
+            )); return 0
+        if args.command == "extend-backfill-traffic":
+            print(json.dumps(
+                extend_backfill_traffic(settings, args.target_end, args.backfill_id),
                 indent=2, sort_keys=True,
             )); return 0
         if args.command == "backfill-traffic":

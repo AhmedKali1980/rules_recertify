@@ -119,6 +119,12 @@ final `batch_count` counts the actual batch results, while
 `batch_attempt_count` retains the number of Workloader submission attempts for
 diagnostics.
 
+The Octoflow export derives `seq_number` and `rule_id` independently from the
+PCE href: `/rule_sets/<ruleset-id>/<rule-kind>/<rule-id>` becomes the ruleset ID
+and rule ID respectively. Octoflow sources and destinations are IPv4-only; the
+dual-stack PCE Any selector is rendered as `IP List: Any (0.0.0.0/0)`. Other
+report worksheets retain their existing expansion contract.
+
 Skip and audit individual usage rows whose `query_body` has no parseable
 `start_date`/`end_date`, while continuing the collection and retaining the raw
 CSV. Continue to reject parseable windows that differ from the requested period.

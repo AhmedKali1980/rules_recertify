@@ -112,6 +112,16 @@ echo "LOG=$LOG"
   --lookback-days 180
 ```
 
+In the generated **Octoflow** worksheet:
+
+- `seq_number` contains only the ruleset identifier extracted from the rule
+  href (for example `13173`);
+- `rule_id` contains only the final rule identifier (for example `10499`),
+  regardless of whether the href contains `sec_rules` or `deny_rules`;
+- `sources` and `destinations` contain IPv4 values only;
+- the PCE dual-stack Any selector is rendered as exactly
+  `IP List: Any (0.0.0.0/0)`.
+
 ## 4. Search supplied items across the current rule snapshot
 
 The former standalone CSV/Pandas search is still available as the integrated

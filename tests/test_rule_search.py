@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import tempfile
 import unittest
@@ -5,11 +6,41 @@ from pathlib import Path
 
 from rules_recertify.history.database import Database
 from rules_recertify.reporting.rule_search import (
-    latest_rules, load_search_items, search_latest_rules,
+    generate_rule_search_workbook, latest_rules, load_search_items,
+    search_latest_rules,
 )
 
 
 class RuleSearchTest(unittest.TestCase):
+    @unittest.skipIf(importlib.util.find_spec("openpyxl") is None, "openpyxl is optional")
+    def test_legacy_item_search_workflow_generates_integrated_excel_workbook(self):
+        from openpyxl import load_workbook
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Database(root / "state.sqlite"); db.initialize()
+            rule = {
+                "rule_href": "/rules/1", "ruleset_href": "/rulesets/1",
+                "ruleset_name": "APP RULES", "ruleset_scope": "app:APP_A;env:PRD",
+                "src_labels": "role:WEB", "dst_iplists": "DATABASE-NET",
+                "services": "443 TCP",
+            }
+            db.complete_policy_snapshot("snapshot", "run", [rule], "2026-10-12")
+            items = root / "items.csv"
+            items.write_text("item\nAPP_A\nDATABASE-NET\nMISSING\n", encoding="utf-8")
+            output = root / "rules_items_search.xlsx"
+
+            generated = generate_rule_search_workbook(db, items, output, root)
+            workbook = load_workbook(generated, read_only=True, data_only=True)
+            sheetnames = workbook.sheetnames
+            summary = list(workbook["Summary"].iter_rows(values_only=True))
+            results = list(workbook["Results"].iter_rows(values_only=True))
+            workbook.close()
+
+        self.assertEqual(sheetnames, ["Summary", "Results", "Metadata"])
+        self.assertIn(("MISSING", "NOT_USED_IN_ANY_RULE", 0), summary)
+        self.assertIn("found as", results[0])
+
     def test_items_file_supports_header_deduplication_and_blanks(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "items.csv"

@@ -96,18 +96,25 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         expanded["nb_ports"] = _count_ports(expanded_services)
         expanded["dangerous_ports"] = dangerous_ports(expanded_services, dangerous_port_lists)
         expanded_rows.append(expanded)
+        octoflow_sources, _ = _expand_side_details(
+            raw, "src", workloads, rule_pairs, ip_lists, ipv4_only=True,
+        )
+        octoflow_destinations, _ = _expand_side_details(
+            raw, "dst", workloads, rule_pairs, ip_lists, ipv4_only=True,
+        )
         source_count = _count_addresses(source_addresses)
         destination_count = _count_addresses(destination_addresses)
         last_hit = latest_hits.get(rule["rule_href"], "")
+        ruleset_id, rule_id = _octoflow_identifiers(str(expanded["Rule Href"]))
         octoflow_rows.append({
             "device": device,
             "policy_name": expanded["Ruleset"],
-            "seq_number": _octoflow_sequence(str(expanded["Rule Href"])),
-            "rule_id": _octoflow_sequence(str(expanded["Rule Href"])),
+            "seq_number": ruleset_id,
+            "rule_id": rule_id,
             "rule_name": "",
             "logged": "Enabled",
-            "sources": expanded_sources,
-            "destinations": expanded_destinations,
+            "sources": octoflow_sources,
+            "destinations": octoflow_destinations,
             "services": expanded["Service Name / Definition"],
             "action": str(expanded["Rule Type"]).upper(),
             "comment": expanded["Description"],
@@ -295,7 +302,8 @@ def _expand_side(raw: Mapping[str, object], side: str, workloads: Sequence[Mappi
 
 def _expand_side_details(raw: Mapping[str, object], side: str,
                          workloads: Sequence[Mapping[str, object]], environment: object,
-                         ip_lists: Sequence[Mapping[str, object]] = ()) -> Tuple[str, List[str]]:
+                         ip_lists: Sequence[Mapping[str, object]] = (),
+                         ipv4_only: bool = False) -> Tuple[str, List[str]]:
     scope_pairs = _coerce_expansion_pairs(raw, environment)
     values: List[str] = []
     addresses: List[str] = []
@@ -306,18 +314,20 @@ def _expand_side_details(raw: Mapping[str, object], side: str,
                 workloads,
                 lambda workload: _matches_scope(workload, scope, scope_pairs),
             )
-            _append_workloads(values, addresses, scoped)
+            _append_workloads(values, addresses, scoped, ipv4_only)
         else:
             values.append("All Workloads")
     ip_list_selectors = str(raw.get(f"{side}_iplists", ""))
     if ip_list_selectors:
-        ip_list_entries, ip_list_members = _ip_list_entries(ip_list_selectors, ip_lists)
+        ip_list_entries, ip_list_members = _ip_list_entries(
+            ip_list_selectors, ip_lists, ipv4_only,
+        )
         values.extend(ip_list_entries); addresses.extend(ip_list_members)
     explicit = str(raw.get(f"{side}_workloads", ""));
     if explicit:
         selectors = {item.strip().casefold() for item in explicit.split(";") if item.strip()}
         matched = _matching_workloads(workloads, lambda workload: bool(selectors & _workload_identities(workload)))
-        _append_workloads(values, addresses, matched)
+        _append_workloads(values, addresses, matched, ipv4_only)
     labels = str(raw.get(f"{side}_labels", ""))
     if labels:
         dimensions = _label_dimensions(labels)
@@ -329,8 +339,8 @@ def _expand_side_details(raw: Mapping[str, object], side: str,
                 and _workload_matches_dimensions(workload, dimensions)
             ),
         )
-        _append_workloads(values, addresses, matched)
-    if "Any (0.0.0.0/0 and ::/0)" in ip_list_selectors:
+        _append_workloads(values, addresses, matched, ipv4_only)
+    if not ipv4_only and "Any (0.0.0.0/0 and ::/0)" in ip_list_selectors:
         values.extend(["0.0.0.0/0", "::/0"]); addresses.extend(["0.0.0.0/0", "::/0"])
     return "\n".join(dict.fromkeys(values)), list(dict.fromkeys(addresses))
 
@@ -365,13 +375,18 @@ def _coerce_expansion_pairs(raw: Mapping[str, object], environment: object) -> L
 def _workload_entries(
     workloads: Sequence[Mapping[str, object]],
     predicate: Callable[[Mapping[str, object]], bool],
+    ipv4_only: bool = False,
 ) -> List[str]:
     entries: List[str] = []
     for workload in workloads:
         if not predicate(workload):
             continue
         display_name = str(workload.get("short_hostname") or workload.get("name") or "").strip()
-        addresses = [str(address) for address in json.loads(str(workload.get("addresses_json", "[]"))) if address]
+        addresses = [
+            str(address)
+            for address in json.loads(str(workload.get("addresses_json", "[]")))
+            if address and (not ipv4_only or _is_ipv4_expression(str(address)))
+        ]
         if display_name and addresses:
             entries.append(f"{display_name} ({';'.join(addresses)})")
     return entries
@@ -383,11 +398,13 @@ def _matching_workloads(workloads: Sequence[Mapping[str, object]],
 
 
 def _append_workloads(values: List[str], addresses: List[str],
-                      workloads: Sequence[Mapping[str, object]]) -> None:
-    values.extend(_workload_entries(workloads, lambda workload: True))
+                      workloads: Sequence[Mapping[str, object]],
+                      ipv4_only: bool = False) -> None:
+    values.extend(_workload_entries(workloads, lambda workload: True, ipv4_only))
     for workload in workloads:
         addresses.extend(
-            str(address) for address in json.loads(str(workload.get("addresses_json", "[]"))) if address
+            str(address) for address in json.loads(str(workload.get("addresses_json", "[]")))
+            if address and (not ipv4_only or _is_ipv4_expression(str(address)))
         )
 
 
@@ -432,7 +449,8 @@ def _workload_identities(workload: Mapping[str, object]) -> set[str]:
     }
 
 
-def _ip_list_entries(selectors: str, ip_lists: Sequence[Mapping[str, object]]) -> Tuple[List[str], List[str]]:
+def _ip_list_entries(selectors: str, ip_lists: Sequence[Mapping[str, object]],
+                     ipv4_only: bool = False) -> Tuple[List[str], List[str]]:
     members: Dict[str, Tuple[str, List[str]]] = {}
     for row in ip_lists:
         name = str(row.get("name", "")).strip()
@@ -445,13 +463,37 @@ def _ip_list_entries(selectors: str, ip_lists: Sequence[Mapping[str, object]]) -
     addresses: List[str] = []
     for selector in (item.strip() for item in re.split(r"[;\n]", selectors) if item.strip()):
         selector_name = _ip_list_selector_name(selector)
+        if selector_name == "Any (0.0.0.0/0 and ::/0)" and ipv4_only:
+            entries.append("IP List: Any (0.0.0.0/0)")
+            addresses.append("0.0.0.0/0")
+            continue
         match = members.get(selector_name.casefold())
         if match:
-            entries.append(f"IP List: {match[0]} ({';'.join(dict.fromkeys(match[1]))})")
-            addresses.extend(match[1])
+            selected_members = [
+                member for member in match[1]
+                if not ipv4_only or _is_ipv4_expression(member)
+            ]
+            if selected_members:
+                entries.append(f"IP List: {match[0]} ({';'.join(dict.fromkeys(selected_members))})")
+                addresses.extend(selected_members)
         elif selector_name != "Any (0.0.0.0/0 and ::/0)":
             entries.append(f"IP List: {selector_name} [unresolved]")
     return entries, addresses
+
+
+def _is_ipv4_expression(value: str) -> bool:
+    """Return whether an address, network, or range is entirely IPv4."""
+    cleaned = value.partition("#")[0].strip()
+    start_text, separator, end_text = cleaned.partition("-")
+    try:
+        if separator:
+            return (
+                ipaddress.ip_address(start_text.strip()).version == 4
+                and ipaddress.ip_address(end_text.strip()).version == 4
+            )
+        return ipaddress.ip_network(cleaned, strict=False).version == 4
+    except ValueError:
+        return False
 
 
 def _ip_list_selector_name(selector: str) -> str:
@@ -533,6 +575,15 @@ def _excel_safe_count(value: int) -> object:
 def _octoflow_sequence(rule_href: str) -> str:
     marker = "/rule_sets/"
     return rule_href.split(marker, 1)[1] if marker in rule_href else rule_href.strip("/")
+
+
+def _octoflow_identifiers(rule_href: str) -> Tuple[str, str]:
+    """Extract the ruleset and rule identifiers from a PCE rule href."""
+    match = re.search(r"/rule_sets/([^/]+)/[^/]+/([^/]+)(?:/|$)", rule_href)
+    if match:
+        return match.group(1), match.group(2)
+    fallback = _octoflow_sequence(rule_href)
+    return fallback, fallback
 
 
 def _zones_for_addresses(addresses: Iterable[str], prepared_nz3: Sequence[Tuple[object, ...]]) -> str:

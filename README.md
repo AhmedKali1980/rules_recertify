@@ -18,6 +18,8 @@ ingestion, on-demand Excel reporting, structured logs, and SMTP summaries.
   reusable-project visibility from the current workspace.
 - [Integration and test guide](docs/integration-guide.md): offline installation,
   configuration, cron, collection, backfill, reporting, and acceptance tests.
+- [How-to & troubleshooting](docs/how-to-troubleshooting.md): operations,
+  monitoring, quick diagnostics, and common incidents.
 
 ## Proposed implementation stack
 
@@ -160,6 +162,24 @@ une dernière fenêtre d'un jour. Les états persistants sont `PENDING`, `RUNNIN
 initialisation avec le même identifiant est refusée et une exécution après
 `COMPLETED` s'arrête sans créer de run. Le curseur backfill est indépendant du
 curseur hebdomadaire.
+
+Lorsqu'un run backfill échoue pendant un appel Workloader, le run suivant
+reconstruit le plan de lots et, si son nombre est identique et que toutes les
+règles des lots terminés sont présentes dans SQLite, reprend au premier lot non
+terminé. Les résultats déjà ingérés restent associés à la
+fenêtre et servent à produire l'audit complet ; ils ne sont pas soumis à nouveau.
+Si le plan a changé entre les deux runs, la reprise est volontairement refusée et
+la fenêtre entière est rejouée afin de ne pas omettre de règles.
+
+Le compteur final représente les lots de requêtes réellement produits et
+terminés. Les tentatives de soumission ayant provoqué un découpage Workloader
+sont exposées séparément sous `batch_attempt_count` et ne créent plus un faux
+écart tel que `43/44`. Le dimanche reste réservé par défaut à la collecte
+hebdomadaire ; une relance opérateur exceptionnelle doit être explicite :
+
+```bash
+./scripts/backfill-traffic.sh --force --allow-sunday
+```
 
 ## Snapshot raw et archives
 

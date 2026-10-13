@@ -3,12 +3,15 @@ set -Eeuo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/collection_common.sh"
 
 FORCE=false
+ALLOW_SUNDAY=false
 while (($#)); do
   case "$1" in
     --force) FORCE=true ;;
+    --allow-sunday) ALLOW_SUNDAY=true ;;
     -h|--help)
-      printf '%s\n' 'Usage: backfill-traffic.sh [--force]'
+      printf '%s\n' 'Usage: backfill-traffic.sh [--force] [--allow-sunday]'
       printf '%s\n' '  --force  Bypass only the 47-hour attempt gate.'
+      printf '%s\n' '  --allow-sunday  Permit an explicit Sunday run (the shared lock still applies).'
       exit 0
       ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
@@ -21,8 +24,8 @@ rr_lock
 rr_ensure_snapshot
 
 NOW="${RULES_RECERTIFY_NOW:-$(date --iso-8601=seconds)}"
-if [[ "${RULES_RECERTIFY_WEEKDAY:-$(date +%u)}" -eq 7 ]]; then
-  printf '%s\n' 'Backfill is not run on Sunday.'
+if [[ "${RULES_RECERTIFY_WEEKDAY:-$(date +%u)}" -eq 7 && "$ALLOW_SUNDAY" != true ]]; then
+  printf '%s\n' 'Backfill is not run on Sunday; use --allow-sunday for an explicit operator run.'
   exit 0
 fi
 

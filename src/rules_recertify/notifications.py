@@ -13,11 +13,12 @@ LOG = logging.getLogger(__name__)
 
 
 def _summary_lines(summary: Mapping[str, object]) -> list[tuple[str, object]]:
+    duration_hours = float(summary.get("execution_duration_seconds", 0) or 0) / 3600
     return [
         ("Run ID", summary.get("run_id", "")),
         ("Run type", summary.get("run_type", "")),
         ("Final status", summary.get("status", "UNKNOWN")),
-        ("Run duration", f"{summary.get('execution_duration_seconds', 0)} seconds"),
+        ("Run duration", f"{duration_hours:.2f} hours"),
         ("Certifiable traffic coverage", f"{summary.get('certifiable_days', 0)} days"),
         ("Successful traffic windows", summary.get("successful_window_count", 0)),
         ("SQLite database size", summary.get("sqlite_database_size_human", "0 B")),

@@ -35,6 +35,12 @@ class CliTest(unittest.TestCase):
         ])
         self.assertEqual(initialized.target_end.isoformat(), "2026-09-20")
         self.assertEqual(initialized.backfill_id, "history")
+        extended = parser().parse_args([
+            "extend-backfill-traffic", "--target-end", "2026-10-11",
+            "--backfill-id", "history",
+        ])
+        self.assertEqual(extended.target_end.isoformat(), "2026-10-11")
+        self.assertEqual(extended.backfill_id, "history")
         run = parser().parse_args([
             "backfill-traffic", "--backfill-id", "history", "--no-wait",
         ])

@@ -44,7 +44,7 @@ RULE_REQUIRED = ("ruleset_href", "rule_href")
 USAGE_REQUIRED = (*RULE_REQUIRED, "async_query_status", "flows", "flows_by_port", "query_body")
 LABEL_REQUIRED = ("key", "value")
 POLICY_REFERENCE_EXPORTS = (
-    "export_wkld.csv", "export_iplists.csv", "export_services.csv",
+    "export_wkld.csv", "export_iplists.csv", "export_services.csv", "export_labelgroups.csv",
     "export_wkld.derived.csv", "export_iplists.derived.csv",
 )
 
@@ -351,6 +351,7 @@ def _collect_traffic_run(
             )
             details["reference_exports"] = [
                 "export_wkld.csv", "export_iplists.csv", "export_services.csv",
+                "export_labelgroups.csv",
                 "export_wkld.derived.csv", "export_iplists.derived.csv",
             ]
             details["current_stage"] = "EXPORTING_RULESETS"
@@ -912,6 +913,10 @@ def _validate_policy_exports(run_dir: Path) -> None:
     )))
     list(read_rows(run_dir / "export_iplists.csv", ("name", "include")))
     list(read_rows(run_dir / "export_services.csv", ("name", "service_ports")))
+    list(read_rows(run_dir / "export_labelgroups.csv", (
+        "name", "key", "description", "member_labels", "member_label_groups",
+        "fully_expanded_members", "href",
+    )))
     list(read_rows(run_dir / "labels.csv", LABEL_REQUIRED))
     list(read_rows(run_dir / "rulesets.csv", ("href", "enabled")))
     list(read_rows(run_dir / "rules_inventory.csv", RULE_REQUIRED))

@@ -167,7 +167,9 @@ Compared with the former script, the integrated command also:
   workloads, and services;
 - expands named services from the snapshot service catalog;
 - understands ports and ranges such as `TCP/22`, `3389`, or `UDP/160-162`;
-- produces **Summary**, **Results**, and **Metadata** worksheets;
+- produces **Summary**, **Results**, **label-groups**, and **Metadata** worksheets;
+- searches the daily `labelgroup-export` snapshot and reports both direct and
+  nested label-group membership;
 - emits `NOT_USED_IN_ANY_RULE` when an item has no match.
 
 ### Prepare the input
@@ -215,8 +217,27 @@ Text search is case-insensitive by default. Enable strict case matching with:
 - **Summary**: one line per input item, status, and matching-rule count.
 - **Results**: one line per item/rule match, including `found as`, optional port
   intersection details, snapshot timestamp, and all original rule columns.
+- **label-groups**: one line per item/label-group match. The first column is the
+  searched item; `key` identifies the group type. Membership is found in
+  `member_labels` and `fully_expanded_members`, with `member_label_groups` used
+  to walk parent groups. Therefore, if an item belongs to `LGA1` and `LGA1`
+  belongs to `LGA2`, both groups are listed. Unmatched items are retained with
+  `NOT_USED_IN_ANY_LABEL_GROUP`.
 - **Metadata**: snapshot timestamp, input path, service-reference source,
-  case-sensitivity mode, and generation time.
+  label-group-reference source, case-sensitivity mode, and generation time.
+
+The daily policy refresh runs Workloader `labelgroup-export` with the same
+retry, logging, profile selection, and output-file checks as the other
+reference exports. The validated CSV is published as
+`var/raw/snapshot/export_labelgroups.csv`; its contract is:
+
+```text
+name,key,description,member_labels,member_label_groups,fully_expanded_members,href
+```
+
+After upgrading an existing installation, run `./scripts/daily-policy-collect.sh`
+once before relying on the **label-groups** worksheet so the materialized
+snapshot contains this new reference export.
 
 If the command reports `no rule snapshot is available in SQLite`, refresh the
 snapshot first:

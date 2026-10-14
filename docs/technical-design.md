@@ -22,13 +22,16 @@ input to another system. Its schema must therefore be versioned and deterministi
 ### 2.1 In scope
 
 - Orchestrate Workloader exports for rulesets, rules with traffic queries,
-  rule usage, IP lists, compressed named services, labels, and
+  rule usage, IP lists, compressed named services, labels, label groups, and
   managed/unmanaged workloads.
 - Ingest enriched `export_wkld.derived.csv` and the complete
   `export_iplists.csv`; retain `export_iplists.derived.csv` for `NZ3_*`
   workload/subnet correlation.
   Retain `export_services.csv` so reports can resolve reusable service names
   to their compressed `service_ports` definitions.
+  Retain `export_labelgroups.csv` in the atomic snapshot so `search-rules` can
+  report direct membership from `member_labels`/`fully_expanded_members` and
+  recursively discover parent groups from `member_label_groups`.
 - Select all rules relevant to the requested application/environment pairs.
 - Preserve Illumio rule identity using `rule_href`, not mutable names or row
   positions.

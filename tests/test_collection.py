@@ -123,6 +123,10 @@ def _policy_reference_stub(root):
  with (stub/'export_services.csv').open('w',newline='',encoding='utf-8') as handle:
   writer=csv.DictWriter(handle,fieldnames=['name','service_ports']); writer.writeheader()
   writer.writerow({'name':'WEB-SVC','service_ports':'443 TCP'})
+ with (stub/'export_labelgroups.csv').open('w',newline='',encoding='utf-8') as handle:
+  fields=['name','key','description','member_labels','member_label_groups','fully_expanded_members','href']
+  writer=csv.DictWriter(handle,fieldnames=fields); writer.writeheader()
+  writer.writerow({'name':'APP-GROUP','key':'app','member_labels':'APP','href':'/label_groups/1'})
  return stub
 
 
@@ -340,7 +344,7 @@ class CollectionTest(unittest.TestCase):
    self.assertTrue((root/'raw'/'snapshot'/'manifest.json').is_file())
    self.assertTrue((root/'raw'/'snapshot'/'export_wkld.derived.csv').is_file())
    self.assertTrue({
-    'export_wkld.csv','export_iplists.csv','export_services.csv',
+    'export_wkld.csv','export_iplists.csv','export_services.csv','export_labelgroups.csv',
     'export_wkld.derived.csv','export_iplists.derived.csv','labels.csv',
     'rulesets.csv','rules_inventory.csv','manifest.json',
    }.issubset({path.name for path in (root/'raw'/'snapshot').iterdir()}))

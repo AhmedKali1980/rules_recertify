@@ -7,7 +7,7 @@ from pathlib import Path
 from rules_recertify.history.database import Database
 from rules_recertify.reporting.rule_search import (
     generate_rule_search_workbook, latest_rules, load_search_items,
-    search_latest_rules,
+    search_label_groups, search_latest_rules,
 )
 
 
@@ -28,6 +28,10 @@ class RuleSearchTest(unittest.TestCase):
             db.complete_policy_snapshot("snapshot", "run", [rule], "2026-10-12")
             items = root / "items.csv"
             items.write_text("item\nAPP_A\nDATABASE-NET\nMISSING\n", encoding="utf-8")
+            snapshot = root / "snapshot"; snapshot.mkdir()
+            with (snapshot / "export_labelgroups.csv").open("w", encoding="utf-8", newline="") as handle:
+                handle.write("name,key,description,member_labels,member_label_groups,fully_expanded_members,href\n")
+                handle.write("APP-GROUP,app,,APP_A,,APP_A,/label_groups/1\n")
             output = root / "rules_items_search.xlsx"
 
             generated = generate_rule_search_workbook(db, items, output, root)
@@ -35,11 +39,30 @@ class RuleSearchTest(unittest.TestCase):
             sheetnames = workbook.sheetnames
             summary = list(workbook["Summary"].iter_rows(values_only=True))
             results = list(workbook["Results"].iter_rows(values_only=True))
+            label_groups = list(workbook["label-groups"].iter_rows(values_only=True))
             workbook.close()
 
-        self.assertEqual(sheetnames, ["Summary", "Results", "Metadata"])
+        self.assertEqual(sheetnames, ["Summary", "Results", "label-groups", "Metadata"])
         self.assertIn(("MISSING", "NOT_USED_IN_ANY_RULE", 0), summary)
         self.assertIn("found as", results[0])
+        self.assertEqual(label_groups[0][0], "searched item")
+        self.assertTrue(any(row[0] == "APP_A" and row[3] == "APP-GROUP" and row[4] == "app" for row in label_groups[1:]))
+
+    def test_label_group_search_finds_direct_and_nested_parents(self):
+        groups = [
+            {"name": "LGA1", "key": "app", "member_labels": "APP_LABEL_123",
+             "member_label_groups": "", "fully_expanded_members": "APP_LABEL_123", "href": "/label_groups/1"},
+            {"name": "LGA2", "key": "app", "member_labels": "",
+             "member_label_groups": "LGA1 (/label_groups/1)", "fully_expanded_members": "", "href": "/label_groups/2"},
+        ]
+        rows = search_label_groups(groups, ["APP_LABEL_123", "MISSING"])
+        found = [row for row in rows if row["status"] == "FOUND"]
+        self.assertEqual([(row["searched item"], row["name"], row["key"]) for row in found], [
+            ("APP_LABEL_123", "LGA1", "app"),
+            ("APP_LABEL_123", "LGA2", "app"),
+        ])
+        self.assertEqual(list(rows[0])[0], "searched item")
+        self.assertEqual(rows[-1]["status"], "NOT_USED_IN_ANY_LABEL_GROUP")
 
     def test_items_file_supports_header_deduplication_and_blanks(self):
         with tempfile.TemporaryDirectory() as directory:

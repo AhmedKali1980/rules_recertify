@@ -70,7 +70,7 @@ déterminé sans ambiguïté, l'export échoue avant tout appel PCE.
 L'ordre live est strict : (1) tous les workloads L1, (2) workloads managés
 L3SM, (3) fusion CSV, (4) IP Lists L1, (5) services L1 compressés, (6) dérivations. Le répertoire raw de
 l'exécution contient `export_wkld.csv`, `export_wkld.l3sm.m.csv`,
-`export_iplists.csv`, `export_services.csv`, `export_wkld.derived.csv` et
+`export_iplists.csv`, `export_services.csv`, `export_labelgroups.csv`, `export_wkld.derived.csv` et
 `export_iplists.derived.csv`. La fusion conserve toutes les lignes sans
 déduplication et exige des en-têtes strictement identiques.
 
@@ -79,7 +79,8 @@ déduplication et exige des en-têtes strictement identiques.
 ```
 
 Le mode stub ne contacte jamais Workloader. Son répertoire exige
-`export_wkld.csv`, `export_iplists.csv` et `export_services.csv`; un
+`export_wkld.csv`, `export_iplists.csv`, `export_services.csv` et
+`export_labelgroups.csv`; un
 `export_wkld.l3sm.m.csv` non vide est facultatif et est fusionné avec les mêmes
 contrôles que le mode live. On peut employer l'option ou la variable :
 

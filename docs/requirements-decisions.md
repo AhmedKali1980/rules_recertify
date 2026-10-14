@@ -6,6 +6,14 @@
 This record turns the product owner's clarifications into an implementation
 contract. It takes precedence over earlier proposals in the technical design.
 
+### Label-group reference export and rule search
+
+Every successful policy snapshot includes Workloader `labelgroup-export` as
+`export_labelgroups.csv`, validated against its seven-column CSV contract.
+`search-rules` adds a `label-groups` worksheet whose first column is the
+searched item. It reports group type (`key`) and both direct and transitive
+membership, including parent groups linked through `member_label_groups`.
+
 ## 1. Selection and module semantics
 
 ### DEC-001 — Application rule selection

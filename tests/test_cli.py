@@ -109,6 +109,17 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.microcosmos_xlsx, Path("microcosmos.xlsx"))
         self.assertEqual(args.as_of.isoformat(), "2026-09-10")
 
+    def test_report_commands_accept_octoflow_only_mode(self):
+        report = parser().parse_args([
+            "report", "--kear-id", "k", "--logical-application-name", "app",
+            "--application-label", "APP", "--environment", "PRD", "--octoflow",
+        ])
+        batch = parser().parse_args([
+            "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx", "--octoflow",
+        ])
+        self.assertTrue(report.octoflow)
+        self.assertTrue(batch.octoflow)
+
     def test_report_options_form_ordered_application_environment_pairs(self):
         args = parser().parse_args([
             "report", "--kear-id", "k", "--logical-application-name", "app",

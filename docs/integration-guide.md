@@ -189,6 +189,11 @@ message. Finalized collections persist `notification_status` as `SENT`,
 `notification_error` without changing the traffic outcome. This separates an
 SMTP delivery problem from a blocking traffic `WARNING`.
 
+Traffic and backfill notifications retain the traffic-window and audit metrics.
+`POLICY_COLLECTION` notifications instead use a **Policy Collection** subject
+and summarize the published snapshot, exported rulesets/labels/rules, imported
+workloads and IP List members, and the reference-export files.
+
 Legacy `PCE`, `WORKLOADER_DIR`, and `STATE_DB` values in `.env` still override
 `config/local.json`; new installations should not define them. For an
 installation created from an earlier template, check these non-secret keys:
@@ -647,6 +652,8 @@ becomes the logical report name. A Microcosmos module matches application labels
 whose suffix after the second underscore equals that module, case-insensitively
 (for example, `APM_RBS_FACTOBOT` maps to `FACTOBOT`). Unknown modules and
 inconsistent application names are skipped and recorded in the audit workbook.
+Add `--octoflow` to `report-batch` (or to the single-application `report`
+command) to make each generated report contain only the `Octoflow` worksheet.
 
 The batch root is `output_dir/<UTC timestamp>`. Reports are grouped below
 `PRD/<sanitized Entity>` and `NONPRD/<sanitized Entity>`. Rows for the same KEAR
@@ -732,6 +739,8 @@ the strict-greater-than threshold for `permissive_rule`. Rule imports populate
 content-changing observation is `last_modified`. Historical changes predating
 this schema cannot be reconstructed. `last_hit` uses the latest positive,
 completed usage window independently of the report lookback.
+Multiple values in its `sources` and `destinations` columns are separated by
+semicolons, not embedded line breaks.
 
 ## 7. Rule-item search
 
@@ -739,8 +748,11 @@ completed usage window independently of the report lookback.
 and searches only rules explicitly marked present by the latest successful
 complete policy snapshot. Searchable selectors include ruleset scopes, labels and exclusions,
 label groups and exclusions, IP Lists, explicit workloads, and services.
-Text matching is literal and case-insensitive unless `--case-sensitive` is
-used.
+Text matching is literal, whole-item, and case-insensitive unless
+`--case-sensitive` is used. Therefore `BI` does not match `BIRO`. The same
+whole-item rule applies to direct and transitive Label Group discovery. In the
+`Results` worksheet, match metadata precedes the rule fields, which follow the
+rule-export CSV contract order.
 
 Port inputs support slash or Workloader notation, single ports, and inclusive
 ranges. A semicolon-separated port list uses intersection semantics: a rule is

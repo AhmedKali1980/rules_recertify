@@ -119,6 +119,8 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
                 name for name in (*POLICY_REFERENCE_EXPORTS, "export_wkld.l3sm.m.csv")
                 if (run_dir / name).is_file()
             ],
+            "snapshot_path": str(raw_root / "snapshot"),
+            "manifest_path": str(raw_root / "snapshot" / "manifest.json"),
         })
         details["artifacts"] = _record_artifacts(db, run_id, run_dir)
         details["current_stage"] = "FINALIZED"

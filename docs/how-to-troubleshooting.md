@@ -57,6 +57,10 @@ atomically publishes `var/raw/snapshot`:
 ./scripts/daily-policy-collect.sh
 ```
 
+When SMTP is enabled, this run sends a policy-specific summary containing the
+snapshot path and export/import counts; it does not reuse the weekly traffic
+body.
+
 ### Collect weekly traffic
 
 ```bash
@@ -140,8 +144,22 @@ In the generated **Octoflow** worksheet:
 - `rule_id` contains only the final rule identifier (for example `10499`),
   regardless of whether the href contains `sec_rules` or `deny_rules`;
 - `sources` and `destinations` contain IPv4 values only;
+- multiple `sources` and `destinations` entries are separated with `;` rather
+  than line breaks;
 - the PCE dual-stack Any selector is rendered as exactly
   `IP List: Any (0.0.0.0/0)`.
+
+Add `--octoflow` to either `report` or `report-batch` when the consumer needs a
+minimal workbook containing only the **Octoflow** worksheet:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  report --kear-id KEAR_ID --logical-application-name "Application" \
+  --application-label APM_APPLICATION --environment PRD --octoflow
+
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  report-batch --microcosmos-xlsx /data/microcosmos.xlsx --octoflow
+```
 
 ## 4. Search supplied items across the current rule snapshot
 
@@ -170,6 +188,10 @@ Compared with the former script, the integrated command also:
 - produces **Summary**, **Results**, **label-groups**, and **Metadata** worksheets;
 - searches the daily `labelgroup-export` snapshot and reports both direct and
   nested label-group membership;
+- matches complete items only: for example, `BI` does not match `BIRO`, in
+  either rules or Label Groups;
+- orders **Results** with the four match columns and rule snapshot first,
+  followed by the rule-export CSV contract order;
 - emits `NOT_USED_IN_ANY_RULE` when an item has no match.
 
 ### Prepare the input

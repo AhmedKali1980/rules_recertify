@@ -34,6 +34,24 @@ LABEL_GROUP_FIELDS = (
     "name", "key", "description", "member_labels", "member_label_groups",
     "fully_expanded_members", "href",
 )
+RESULT_RULE_FIELDS = (
+    "ruleset_name", "ruleset_description", "ruleset_scope", "ruleset_enabled",
+    "rule_type", "rule_description", "rule_enabled", "unscoped_consumers",
+    "src_all_workloads", "src_labels", "src_labels_exclusions", "src_label_groups",
+    "src_label_groups_exclusions", "src_iplists", "src_user_groups", "src_workloads",
+    "src_virtual_services", "src_use_workload_subnets", "dst_all_workloads", "dst_labels",
+    "dst_labels_exclusions", "dst_label_groups", "dst_label_groups_exclusions", "dst_iplists",
+    "dst_user_groups", "dst_virtual_services", "dst_workloads", "dst_use_workload_subnets",
+    "services", "src_resolve_labels_as", "dst_resolve_labels_as", "machine_auth_enabled",
+    "secure_connect_enabled", "stateless_enabled", "network_type", "external_data_set",
+    "external_data_reference", "ruleset_href", "rule_href", "update_type",
+)
+
+
+def _contains_whole_item(value: object, item: str, case_sensitive: bool) -> bool:
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pattern = rf"(?<![A-Za-z0-9_]){re.escape(item)}(?![A-Za-z0-9_])"
+    return re.search(pattern, str(value or ""), flags) is not None
 
 
 def load_search_items(path: Path) -> List[str]:
@@ -123,12 +141,8 @@ def search_latest_rules(
 ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
     """Return result and summary rows, one result per searched item/rule."""
     prepared = []
-    raw_headers: List[str] = []
     for rule in rules:
         raw = json.loads(str(rule["raw_json"]))
-        for key in raw:
-            if key not in raw_headers:
-                raw_headers.append(key)
         prepared.append((rule, raw))
     results: List[Dict[str, object]] = []
     summary: List[Dict[str, object]] = []
@@ -145,11 +159,9 @@ def search_latest_rules(
                     found_fields.append("services")
                     details.extend(intersections)
             else:
-                needle = item if case_sensitive else item.casefold()
                 for field in SEARCH_FIELDS:
                     value = str(raw.get(field, rule.get(field, "")) or "")
-                    haystack = value if case_sensitive else value.casefold()
-                    if needle in haystack:
+                    if _contains_whole_item(value, item, case_sensitive):
                         found_fields.append(field)
             if found_fields:
                 matched_count += 1
@@ -159,13 +171,13 @@ def search_latest_rules(
                     "found as": ";".join(found_fields),
                     "match details": ";".join(details),
                     "rule snapshot": rule["snapshot_at"],
-                    **{header: raw.get(header, "") for header in raw_headers},
+                    **{header: raw.get(header, rule.get(header, "")) for header in RESULT_RULE_FIELDS},
                 })
         if not matched_count:
             results.append({
                 "searched item": item, "status": "NOT_USED_IN_ANY_RULE",
                 "found as": "", "match details": "", "rule snapshot": "",
-                **{header: "" for header in raw_headers},
+                **{header: "" for header in RESULT_RULE_FIELDS},
             })
         summary.append({
             "searched item": item,
@@ -196,8 +208,7 @@ def search_label_groups(
     output: List[Dict[str, str]] = []
 
     def contains(value: object, needle: str) -> bool:
-        haystack = str(value or "")
-        return needle in haystack if case_sensitive else needle.casefold() in haystack.casefold()
+        return _contains_whole_item(value, needle, case_sensitive)
 
     for item in items:
         matched: set[int] = set()

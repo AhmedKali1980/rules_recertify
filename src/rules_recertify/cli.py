@@ -107,11 +107,15 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--environment", action="append", required=True)
     report.add_argument("--lookback-days", type=int)
     report.add_argument("--as-of", type=_date, default=date.today())
+    report.add_argument("--octoflow", action="store_true",
+                        help="Generate a workbook containing only the Octoflow worksheet")
     batch_report = commands.add_parser("report-batch", help="Generate reports from a Microcosmos XLSX export")
     batch_report.add_argument("--microcosmos-xlsx", type=Path, required=True,
                               help="Microcosmos XLSX used to generate all non-empty Kear Id rows")
     batch_report.add_argument("--lookback-days", type=int)
     batch_report.add_argument("--as-of", type=_date, default=date.today())
+    batch_report.add_argument("--octoflow", action="store_true",
+                              help="Generate each report with only the Octoflow worksheet")
     search = commands.add_parser(
         "search-rules", help="Find items in the latest SQLite rule snapshot",
     )
@@ -300,7 +304,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                        raw_dir=Path(settings.raw_dir),
                                        dangerous_port_lists=settings.dangerous_port_lists,
                                        device=settings.pce,
-                                       permissive_rule_max_ips=settings.permissive_rule_max_ips)
+                                       permissive_rule_max_ips=settings.permissive_rule_max_ips,
+                                       octoflow_only=args.octoflow)
             print(target); return 0
         if args.command == "report-batch":
             db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
@@ -312,6 +317,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 dangerous_port_lists=settings.dangerous_port_lists,
                 device=settings.pce,
                 permissive_rule_max_ips=settings.permissive_rule_max_ips,
+                octoflow_only=args.octoflow,
             )
             print("\n".join(str(target) for target in targets)); return 0
         if args.command == "search-rules":

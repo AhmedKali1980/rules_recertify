@@ -29,7 +29,8 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
                       lookback_days: int, as_of: date, raw_dir: Optional[Path] = None,
                       filename_environment: Optional[str] = None,
                       dangerous_port_lists: Sequence[str] = (), device: str = "",
-                      permissive_rule_max_ips: int = 255) -> Path:
+                      permissive_rule_max_ips: int = 255,
+                      octoflow_only: bool = False) -> Path:
     scope_pairs = _scope_pairs(application_labels, environments)
     if not kear_id.strip():
         raise ValueError("kear_id must not be empty")
@@ -113,8 +114,8 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
             "rule_id": rule_id,
             "rule_name": "",
             "logged": "Enabled",
-            "sources": octoflow_sources,
-            "destinations": octoflow_destinations,
+            "sources": octoflow_sources.replace("\n", ";"),
+            "destinations": octoflow_destinations.replace("\n", ";"),
             "services": expanded["Service Name / Definition"],
             "action": str(expanded["Rule Type"]).upper(),
             "comment": expanded["Description"],
@@ -147,13 +148,15 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         ("Service Reference", service_reference),
         ("As Of", as_of.isoformat()), ("Lookback Days", lookback_days),
         ("Rules", len(selected)), ("Generated At UTC", datetime.now(timezone.utc).isoformat()))]
-    _sheet(workbook, "Presentation", presentation)
-    _sheet(workbook, "Raw Rules", raw_rows)
-    _sheet(workbook, "Expanded Rules", expanded_rows)
+    if not octoflow_only:
+        _sheet(workbook, "Presentation", presentation)
+        _sheet(workbook, "Raw Rules", raw_rows)
+        _sheet(workbook, "Expanded Rules", expanded_rows)
     _sheet(workbook, "Octoflow", octoflow_rows)
-    _sheet(workbook, "Rule Usage", usage_rows)
-    quality_rows = [{"KEAR ID": kear, **row} for row in quality]
-    _sheet(workbook, "Data Quality", quality_rows)
+    if not octoflow_only:
+        _sheet(workbook, "Rule Usage", usage_rows)
+        quality_rows = [{"KEAR ID": kear, **row} for row in quality]
+        _sheet(workbook, "Data Quality", quality_rows)
     output_dir.mkdir(parents=True, exist_ok=True)
     environment_tag = filename_environment or "-".join(dict.fromkeys(env for _, env in scope_pairs))
     safe_env = re.sub(r"[^A-Za-z0-9_.-]+", "_", environment_tag)

@@ -282,6 +282,10 @@ La commande `report-batch` accepte un export Excel Microcosmos :
   --lookback-days 180 --as-of 2026-09-10
 ```
 
+Les commandes `report` et `report-batch` acceptent `--octoflow` pour produire
+des rapports contenant uniquement la feuille `Octoflow`. Dans cette feuille,
+les valeurs multiples de `sources` et `destinations` sont séparées par `;`.
+
 La première feuille doit contenir les colonnes `Kear Id`, `Application Name`,
 `Module`, `Account`, `Account Leader`, `Microsegmentation Solution`,
 `Environment` et `Entity`. Seules les lignes dont `Kear Id` est renseigné sont

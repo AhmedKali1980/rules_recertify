@@ -8,7 +8,7 @@ from rules_recertify.collection_engine import _send_and_record_summary
 from rules_recertify.config import Settings
 from rules_recertify.email_utils import parse_recipients, send_email
 from rules_recertify.history.database import Database
-from rules_recertify.notifications import _summary_lines
+from rules_recertify.notifications import _policy_summary_lines, _summary_lines, send_summary
 
 
 class _SMTP:
@@ -50,6 +50,27 @@ class EmailUtilsTest(unittest.TestCase):
         self.assertEqual(rows["Certifiable traffic coverage"], "91 days")
         self.assertEqual(rows["Successful traffic windows"], 13)
         self.assertEqual(rows["SQLite database size"], "12.50 MiB")
+
+    def test_policy_summary_uses_export_metrics_and_specific_subject(self):
+        summary = {
+            "run_id": "policy-1", "run_type": "POLICY_COLLECTION", "status": "SUCCESS",
+            "execution_duration_seconds": 3600, "snapshot_path": "/raw/snapshot",
+            "ruleset_count": 2, "label_count": 3, "rule_count": 4,
+            "reference_ingest": {"workloads": 5, "ip_list_members": 6},
+            "reference_exports": ["export_wkld.csv", "export_labelgroups.csv"],
+        }
+        rows = dict(_policy_summary_lines(summary))
+        self.assertEqual(rows["Rules exported"], 4)
+        self.assertEqual(rows["Workloads imported"], 5)
+        with patch.dict("os.environ", {
+            "SMTP_HOST": "mail.internal", "SMTP_TO": "ops@example",
+        }, clear=True), patch("rules_recertify.notifications.send_email") as mocked:
+            self.assertTrue(send_summary(Settings(pce="pce", smtp_enabled=True), summary))
+        args = mocked.call_args.args
+        self.assertEqual(args[2], "[SUCCESS] Rules Recertify Policy Collection policy-1")
+        self.assertIn("Rules Recertify policy collection summary", args[3])
+        self.assertIn("Reference exports: export_wkld.csv; export_labelgroups.csv", args[3])
+        self.assertNotIn("Traffic window", args[3])
     def test_recipient_parser_accepts_commas_and_semicolons(self):
         self.assertEqual(parse_recipients("a@example; b@example,c@example"), [
             "a@example", "b@example", "c@example",

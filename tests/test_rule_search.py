@@ -139,6 +139,39 @@ class RuleSearchTest(unittest.TestCase):
         self.assertEqual(insensitive[0]["status"], "FOUND")
         self.assertEqual(sensitive[0]["status"], "NOT_USED_IN_ANY_RULE")
 
+    def test_text_search_matches_whole_items_in_rules_and_label_groups(self):
+        raw = {
+            "rule_href": "/r", "ruleset_href": "/rs",
+            "src_labels": "app:BIRO;role:BI",
+        }
+        rule = {**raw, "raw_json": json.dumps(raw), "snapshot_at": "now"}
+        results, _ = search_latest_rules([rule], ["BI", "BIR"], {}, False)
+        by_item = {row["searched item"]: row for row in results}
+        self.assertEqual(by_item["BI"]["status"], "FOUND")
+        self.assertEqual(by_item["BIR"]["status"], "NOT_USED_IN_ANY_RULE")
+
+        groups = [{
+            "name": "GROUP", "key": "app", "member_labels": "BIRO;BI",
+            "member_label_groups": "", "fully_expanded_members": "BIRO;BI", "href": "/g/1",
+        }]
+        group_rows = search_label_groups(groups, ["BI", "BIR"])
+        group_by_item = {row["searched item"]: row for row in group_rows}
+        self.assertEqual(group_by_item["BI"]["status"], "FOUND")
+        self.assertEqual(group_by_item["BIR"]["status"], "NOT_USED_IN_ANY_LABEL_GROUP")
+
+    def test_results_columns_follow_match_then_rule_export_order(self):
+        raw = {
+            "rule_href": "/r", "ruleset_href": "/rs", "ruleset_name": "RULESET",
+            "ruleset_description": "Description", "src_labels": "app:APP",
+            "update_type": "updated",
+        }
+        rule = {**raw, "raw_json": json.dumps(raw), "snapshot_at": "now"}
+        results, _ = search_latest_rules([rule], ["APP"], {}, False)
+        self.assertEqual(list(results[0])[:9], [
+            "searched item", "status", "found as", "match details", "rule snapshot",
+            "ruleset_name", "ruleset_description", "ruleset_scope", "ruleset_enabled",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

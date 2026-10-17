@@ -106,6 +106,27 @@ class OperationalScriptsTest(unittest.TestCase):
             self.assertIn("bypassing the 47-hour",result.stdout)
             self.assertIn("backfill-traffic --backfill-id traffic-92-days",log.read_text())
 
+    def test_sunday_backfill_requires_explicit_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); database,environment,log=self._setup(root); database.initialize()
+            snapshot=root/"raw"/"snapshot"; snapshot.mkdir(parents=True)
+            (snapshot/"manifest.json").write_text("{}")
+            database.initialize_backfill("traffic-92-days","2026-06-20","2026-09-20")
+            environment["RULES_RECERTIFY_WEEKDAY"]="7"
+            blocked=subprocess.run(
+                ["bash","scripts/backfill-traffic.sh","--force"],env=environment,
+                capture_output=True,text=True,check=False,
+            )
+            self.assertEqual(blocked.returncode,0,blocked.stderr)
+            self.assertIn("use --allow-sunday",blocked.stdout)
+            self.assertFalse(log.exists())
+            allowed=subprocess.run(
+                ["bash","scripts/backfill-traffic.sh","--force","--allow-sunday"],
+                env=environment,capture_output=True,text=True,check=False,
+            )
+            self.assertEqual(allowed.returncode,0,allowed.stderr)
+            self.assertIn("backfill-traffic --backfill-id traffic-92-days",log.read_text())
+
     def test_reference_cron_has_daily_weekly_retry_and_backfill_entries(self):
         cron=Path("config/rules-recertify.cron").read_text()
         self.assertIn("10 0 * * *",cron)

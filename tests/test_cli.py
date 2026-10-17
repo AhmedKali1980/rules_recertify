@@ -35,6 +35,12 @@ class CliTest(unittest.TestCase):
         ])
         self.assertEqual(initialized.target_end.isoformat(), "2026-09-20")
         self.assertEqual(initialized.backfill_id, "history")
+        extended = parser().parse_args([
+            "extend-backfill-traffic", "--target-end", "2026-10-11",
+            "--backfill-id", "history",
+        ])
+        self.assertEqual(extended.target_end.isoformat(), "2026-10-11")
+        self.assertEqual(extended.backfill_id, "history")
         run = parser().parse_args([
             "backfill-traffic", "--backfill-id", "history", "--no-wait",
         ])
@@ -102,6 +108,17 @@ class CliTest(unittest.TestCase):
         ])
         self.assertEqual(args.microcosmos_xlsx, Path("microcosmos.xlsx"))
         self.assertEqual(args.as_of.isoformat(), "2026-09-10")
+
+    def test_report_commands_accept_octoflow_only_mode(self):
+        report = parser().parse_args([
+            "report", "--kear-id", "k", "--logical-application-name", "app",
+            "--application-label", "APP", "--environment", "PRD", "--octoflow",
+        ])
+        batch = parser().parse_args([
+            "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx", "--octoflow",
+        ])
+        self.assertTrue(report.octoflow)
+        self.assertTrue(batch.octoflow)
 
     def test_report_options_form_ordered_application_environment_pairs(self):
         args = parser().parse_args([

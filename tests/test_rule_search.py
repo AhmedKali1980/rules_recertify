@@ -6,7 +6,7 @@ from pathlib import Path
 
 from rules_recertify.history.database import Database
 from rules_recertify.reporting.rule_search import (
-    generate_rule_search_workbook, latest_rules, load_search_items,
+    classify_search_items, generate_rule_search_workbook, latest_rules, load_search_items,
     search_label_groups, search_latest_rules,
 )
 
@@ -40,11 +40,16 @@ class RuleSearchTest(unittest.TestCase):
             summary = list(workbook["Summary"].iter_rows(values_only=True))
             results = list(workbook["Results"].iter_rows(values_only=True))
             label_groups = list(workbook["label-groups"].iter_rows(values_only=True))
+            header_cells = workbook["Results"][1]
+            summary_status = workbook["Summary"]["C2"]
             workbook.close()
 
         self.assertEqual(sheetnames, ["Summary", "Results", "label-groups", "Metadata"])
-        self.assertIn(("MISSING", "NOT_USED_IN_ANY_RULE", 0), summary)
+        self.assertIn(("MISSING", None, "NOT_USED_IN_ANY_RULE", 0), summary)
         self.assertIn("found as", results[0])
+        self.assertTrue(all(cell.font.bold for cell in header_cells))
+        self.assertTrue(all(cell.fill.fill_type == "solid" for cell in header_cells))
+        self.assertEqual(summary_status.fill.fgColor.rgb, "00C6E0B4")
         self.assertEqual(label_groups[0][0], "searched item")
         self.assertTrue(any(row[0] == "APP_A" and row[3] == "APP-GROUP" and row[4] == "app" for row in label_groups[1:]))
 
@@ -63,6 +68,35 @@ class RuleSearchTest(unittest.TestCase):
         ])
         self.assertEqual(list(rows[0])[0], "searched item")
         self.assertEqual(rows[-1]["status"], "NOT_USED_IN_ANY_LABEL_GROUP")
+
+    def test_summary_item_types_come_from_snapshot_exports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory)
+            snapshot = raw / "snapshot"
+            snapshot.mkdir()
+            (snapshot / "export_iplists.csv").write_text(
+                "name,include\nNETWORK-A,10.0.0.0/24\n", encoding="utf-8",
+            )
+            (snapshot / "labels.csv").write_text(
+                "key,value\napp,APP-A\nenv,PRD\nrole,WEB\nloc,PARIS\nos,LINUX\nmodule,PAYMENTS\n",
+                encoding="utf-8",
+            )
+            groups = [{"name": "APP-GROUP"}]
+            types = classify_search_items([
+                "NETWORK-A", "APP-GROUP", "APP-A", "PRD", "WEB", "PARIS",
+                "LINUX", "PAYMENTS", "UNKNOWN",
+            ], raw, groups)
+        self.assertEqual(types, {
+            "NETWORK-A": "iplist",
+            "APP-GROUP": "labelgroup",
+            "APP-A": "label:app",
+            "PRD": "label:env",
+            "WEB": "label:role",
+            "PARIS": "label:location",
+            "LINUX": "label:OS",
+            "PAYMENTS": "label:module",
+            "UNKNOWN": "",
+        })
 
     def test_items_file_supports_header_deduplication_and_blanks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -158,6 +192,29 @@ class RuleSearchTest(unittest.TestCase):
         group_by_item = {row["searched item"]: row for row in group_rows}
         self.assertEqual(group_by_item["BI"]["status"], "FOUND")
         self.assertEqual(group_by_item["BIR"]["status"], "NOT_USED_IN_ANY_LABEL_GROUP")
+
+    def test_rule_search_excludes_names_and_descriptions(self):
+        raw = {
+            "rule_href": "/r", "ruleset_href": "/rs",
+            "ruleset_name": "RULESET_ONLY_TOKEN",
+            "ruleset_description": "RULESET_DESCRIPTION_ONLY_TOKEN",
+            "rule_description": "RULE_DESCRIPTION_ONLY_TOKEN",
+            "ruleset_scope": "app:SEARCHABLE_TOKEN;env:PRD",
+        }
+        rule = {**raw, "raw_json": json.dumps(raw), "snapshot_at": "now"}
+        results, _ = search_latest_rules([rule], [
+            "RULESET_ONLY_TOKEN", "RULESET_DESCRIPTION_ONLY_TOKEN",
+            "RULE_DESCRIPTION_ONLY_TOKEN", "SEARCHABLE_TOKEN",
+        ], {}, False)
+        by_item = {row["searched item"]: row for row in results}
+        self.assertEqual(by_item["RULESET_ONLY_TOKEN"]["status"], "NOT_USED_IN_ANY_RULE")
+        self.assertEqual(
+            by_item["RULESET_DESCRIPTION_ONLY_TOKEN"]["status"], "NOT_USED_IN_ANY_RULE",
+        )
+        self.assertEqual(
+            by_item["RULE_DESCRIPTION_ONLY_TOKEN"]["status"], "NOT_USED_IN_ANY_RULE",
+        )
+        self.assertEqual(by_item["SEARCHABLE_TOKEN"]["status"], "FOUND")
 
     def test_results_columns_follow_match_then_rule_export_order(self):
         raw = {

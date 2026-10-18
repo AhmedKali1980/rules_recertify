@@ -101,6 +101,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.out, Path("result.xlsx"))
         self.assertTrue(args.case_sensitive)
 
+    def test_compliance_report_accepts_optional_input_and_output(self):
+        defaults = parser().parse_args(["compliance-report"])
+        supplied = parser().parse_args([
+            "compliance-report", "--input", "scopes.csv", "--out", "compliance.xlsx",
+        ])
+        self.assertIsNone(defaults.input)
+        self.assertIsNone(defaults.out)
+        self.assertEqual(supplied.input, Path("scopes.csv"))
+        self.assertEqual(supplied.out, Path("compliance.xlsx"))
+
     def test_batch_report_accepts_microcosmos_workbook(self):
         args = parser().parse_args([
             "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx",

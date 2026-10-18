@@ -742,17 +742,48 @@ completed usage window independently of the report lookback.
 Multiple values in its `sources` and `destinations` columns are separated by
 semicolons, not embedded line breaks.
 
+### 6.2 Rule-compliance workbook
+
+`compliance-report` evaluates the materialized `snapshot/rules_inventory.csv`.
+Without `--input`, every `app` entry in `snapshot/labels.csv` is evaluated.
+With `--input <csv-or-xlsx>`, `app` is required and `env` is optional; all input
+columns are reproduced in the output. An absent `env` matches the application
+in every environment. Matching is anchored to exact label values within
+`ruleset_scope`, `src_labels`, or `dst_labels`.
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report [--input /data/scopes.xlsx] \
+  --out var/output/compliance.xlsx
+```
+
+The workbook includes `KPI_PROGRAM_*` membership from
+`export_labelgroups.csv`; factorized Source/Destination values; user IP List
+flags for `U_` and `USR_`; one finding column for each configured
+`dangerous_port_lists` catalogue after expansion through `export_services.csv`;
+and ruleset-wide `Intra-zone` classification for `NZ3_` or `ZNOT_NZ3` IP Lists.
+
 ## 7. Rule-item search
 
 `search-rules` reads one item per row from a one-column CSV, text, or XLSX file
 and searches only rules explicitly marked present by the latest successful
 complete policy snapshot. Searchable selectors include ruleset scopes, labels and exclusions,
 label groups and exclusions, IP Lists, explicit workloads, and services.
+Ruleset names, ruleset descriptions, and rule descriptions remain output
+columns but are deliberately excluded from matching.
 Text matching is literal, whole-item, and case-insensitive unless
 `--case-sensitive` is used. Therefore `BI` does not match `BIRO`. The same
 whole-item rule applies to direct and transitive Label Group discovery. In the
 `Results` worksheet, match metadata precedes the rule fields, which follow the
 rule-export CSV contract order.
+All search workbook sheets use bold, color-coded headers. Status cells are
+highlighted in green for `FOUND` and red for `NOT_USED` outcomes.
+The `Summary.type` column classifies exact item names from the current
+`export_iplists.csv`, `export_labelgroups.csv`, and `labels.csv` snapshot files.
+Recognized values are `iplist`, `labelgroup`, `label:app`, `label:env`,
+`label:role`, `label:location`, `label:OS`, and `label:module`; unknown items are
+left blank. If an exact name exists in more than one category, types are joined
+with `;` rather than silently discarding information.
 
 Port inputs support slash or Workloader notation, single ports, and inclusive
 ranges. A semicolon-separated port list uses intersection semantics: a rule is

@@ -161,6 +161,32 @@ minimal workbook containing only the **Octoflow** worksheet:
   report-batch --microcosmos-xlsx /data/microcosmos.xlsx --octoflow
 ```
 
+### Generate a rule-compliance report
+
+Use every current Application label from `snapshot/labels.csv`:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --out var/output/compliance-all-apps.xlsx
+```
+
+Or restrict the report with a CSV/XLSX containing a required `app` column and
+an optional `env` column. Every input column is copied into every corresponding
+result row:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --input /data/compliance-scope.xlsx \
+  --out var/output/compliance-selected-apps.xlsx
+```
+
+The report matches `app`, or the exact `app`/`env` pair when `env` is supplied,
+in `ruleset_scope`, `src_labels`, or `dst_labels`. It identifies
+`KPI_PROGRAM_*` membership, factorizes Source and Destination, flags `U_` and
+`USR_` IP Lists, creates one finding column per configured dangerous-port
+catalogue after named-service expansion, and marks every rule in a ruleset as
+`Intra-zone` when that ruleset uses an `NZ3_` or `ZNOT_NZ3` IP List.
+
 ## 4. Search supplied items across the current rule snapshot
 
 The former standalone CSV/Pandas search is still available as the integrated
@@ -181,17 +207,23 @@ follows:
 Compared with the former script, the integrated command also:
 
 - accepts CSV, TXT, or XLSX input;
-- searches scopes, descriptions, labels, label groups, exclusions, IP Lists,
-  workloads, and services;
+- searches scopes, rule types, labels, label groups, exclusions, IP Lists,
+  workloads, and services; ruleset names, ruleset descriptions, and rule
+  descriptions remain visible in the result but are not searched;
 - expands named services from the snapshot service catalog;
 - understands ports and ranges such as `TCP/22`, `3389`, or `UDP/160-162`;
 - produces **Summary**, **Results**, **label-groups**, and **Metadata** worksheets;
+- adds a `type` column to **Summary**, classified from the current snapshot as
+  `iplist`, `labelgroup`, `label:app`, `label:env`, `label:role`,
+  `label:location`, `label:OS`, or `label:module`;
 - searches the daily `labelgroup-export` snapshot and reports both direct and
   nested label-group membership;
 - matches complete items only: for example, `BI` does not match `BIRO`, in
   either rules or Label Groups;
 - orders **Results** with the four match columns and rule snapshot first,
   followed by the rule-export CSV contract order;
+- formats every worksheet with a bold, color-coded header and highlights
+  `FOUND` and `NOT_USED` statuses for faster review;
 - emits `NOT_USED_IN_ANY_RULE` when an item has no match.
 
 ### Prepare the input

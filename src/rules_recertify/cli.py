@@ -20,6 +20,7 @@ from .logging_utils import configure_logging
 from .notifications import send_summary
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
+from .reporting.compliance import generate_compliance_workbook
 from .reporting.microcosmos import generate_microcosmos_reports
 from .reporting.rule_search import generate_rule_search_workbook
 from .workloader.csvio import read_rows
@@ -125,6 +126,13 @@ def parser() -> argparse.ArgumentParser:
                         help="Output XLSX path (default: output_dir/rules_items_search_<UTC timestamp>.xlsx)")
     search.add_argument("--case-sensitive", action="store_true",
                         help="Use case-sensitive text matching (ports are unaffected)")
+    compliance = commands.add_parser(
+        "compliance-report", help="Evaluate snapshot rules for application scopes",
+    )
+    compliance.add_argument("--input", type=Path,
+                            help="Optional CSV/XLSX containing app and optional env columns")
+    compliance.add_argument("--out", type=Path,
+                            help="Output XLSX path (default: output_dir/compliance_<timestamp>.xlsx)")
     return root
 
 
@@ -328,6 +336,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(generate_rule_search_workbook(
                 db, args.items, target, raw_dir=Path(settings.raw_dir),
                 case_sensitive=args.case_sensitive,
+            ))
+            return 0
+        if args.command == "compliance-report":
+            target = args.out or Path(settings.output_dir) / (
+                "compliance_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
+            )
+            print(generate_compliance_workbook(
+                Path(settings.raw_dir), target, settings.dangerous_port_lists, args.input,
             ))
             return 0
         raise AssertionError("unhandled command")

@@ -15,8 +15,7 @@ from .workbook import _expand_services, _load_report_services, _raw_reference_ca
 
 
 SEARCH_FIELDS = (
-    "ruleset_name", "ruleset_scope", "rule_type", "rule_description",
-    "src_all_workloads",
+    "ruleset_scope", "rule_type", "src_all_workloads",
     "src_labels", "src_labels_exclusions", "src_label_groups",
     "src_label_groups_exclusions", "src_iplists", "src_workloads",
     "dst_all_workloads", "dst_labels", "dst_labels_exclusions", "dst_label_groups",
@@ -34,6 +33,21 @@ LABEL_GROUP_FIELDS = (
     "name", "key", "description", "member_labels", "member_label_groups",
     "fully_expanded_members", "href",
 )
+LABEL_TYPE_NAMES = {
+    "app": "label:app",
+    "env": "label:env",
+    "role": "label:role",
+    "loc": "label:location",
+    "location": "label:location",
+    "os": "label:OS",
+    "module": "label:module",
+}
+SHEET_HEADER_COLORS = {
+    "Summary": "1F4E78",
+    "Results": "305496",
+    "label-groups": "548235",
+    "Metadata": "5B5B5B",
+}
 RESULT_RULE_FIELDS = (
     "ruleset_name", "ruleset_description", "ruleset_scope", "ruleset_enabled",
     "rule_type", "rule_description", "rule_enabled", "unscoped_consumers",
@@ -200,6 +214,47 @@ def _load_label_groups(raw_dir: Optional[Path]) -> Tuple[List[Dict[str, str]], s
     return list(read_rows(source, LABEL_GROUP_FIELDS)), str(source)
 
 
+def classify_search_items(
+    items: Sequence[str], raw_dir: Optional[Path],
+    label_groups: Sequence[Mapping[str, str]], case_sensitive: bool = False,
+) -> Dict[str, str]:
+    """Classify exact item names from the current snapshot reference exports."""
+    types: Dict[str, List[str]] = {item: [] for item in items}
+
+    def equals(left: object, right: str) -> bool:
+        value = str(left or "").strip()
+        return value == right if case_sensitive else value.casefold() == right.casefold()
+
+    def add(item: str, value: str) -> None:
+        if value and value not in types[item]:
+            types[item].append(value)
+
+    if raw_dir:
+        ip_list_candidates = _raw_reference_candidates(raw_dir, "export_iplists.csv")
+        if ip_list_candidates:
+            for row in read_rows(ip_list_candidates[0], ("name", "include")):
+                for item in items:
+                    if equals(row["name"], item):
+                        add(item, "iplist")
+
+        label_candidates = _raw_reference_candidates(raw_dir, "labels.csv")
+        if label_candidates:
+            for row in read_rows(label_candidates[0], ("key", "value")):
+                label_type = LABEL_TYPE_NAMES.get(row["key"].strip().casefold())
+                if not label_type:
+                    continue
+                for item in items:
+                    if equals(row["value"], item):
+                        add(item, label_type)
+
+    for group in label_groups:
+        for item in items:
+            if equals(group.get("name", ""), item):
+                add(item, "labelgroup")
+
+    return {item: ";".join(values) for item, values in types.items()}
+
+
 def search_label_groups(
     label_groups: Sequence[Mapping[str, str]], items: Sequence[str],
     case_sensitive: bool = False,
@@ -264,6 +319,8 @@ def search_label_groups(
 
 
 def _write_sheet(workbook: object, name: str, rows: Sequence[Mapping[str, object]]) -> None:
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
     sheet = workbook.create_sheet(name)
     headers = list(rows[0]) if rows else ["searched item", "status"]
     sheet.append(headers)
@@ -271,6 +328,27 @@ def _write_sheet(workbook: object, name: str, rows: Sequence[Mapping[str, object
         sheet.append([_excel_value(row.get(header, "")) for header in headers])
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
+    header_fill = PatternFill(
+        fill_type="solid", fgColor=SHEET_HEADER_COLORS.get(name, "305496"),
+    )
+    header_border = Border(bottom=Side(style="thin", color="FFFFFF"))
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = header_border
+    sheet.row_dimensions[1].height = 24
+
+    if "status" in headers:
+        status_column = headers.index("status") + 1
+        for row_number in range(2, sheet.max_row + 1):
+            cell = sheet.cell(row_number, status_column)
+            if cell.value == "FOUND":
+                cell.fill = PatternFill(fill_type="solid", fgColor="C6E0B4")
+            elif str(cell.value or "").startswith("NOT_USED"):
+                cell.fill = PatternFill(fill_type="solid", fgColor="F4CCCC")
+            cell.font = Font(bold=True)
+
     for index, header in enumerate(headers, 1):
         lengths = [len(str(header))] + [len(str(row.get(header, "") or "")) for row in rows]
         sheet.column_dimensions[sheet.cell(1, index).column_letter].width = min(max(lengths) + 2, 80)
@@ -296,6 +374,16 @@ def generate_rule_search_workbook(
     service_catalog, service_reference = _load_report_services(raw_dir)
     label_groups, label_group_reference = _load_label_groups(raw_dir)
     results, summary = search_latest_rules(rules, items, service_catalog, case_sensitive)
+    item_types = classify_search_items(items, raw_dir, label_groups, case_sensitive)
+    summary = [
+        {
+            "searched item": row["searched item"],
+            "type": item_types.get(str(row["searched item"]), ""),
+            "status": row["status"],
+            "matching rules": row["matching rules"],
+        }
+        for row in summary
+    ]
     label_group_results = search_label_groups(label_groups, items, case_sensitive)
     workbook = Workbook(); workbook.remove(workbook.active)
     _write_sheet(workbook, "Summary", summary)

@@ -388,6 +388,21 @@ mise en place de la table d'historique ; les imports antérieurs ne peuvent pas
 être reconstruits rétroactivement. `unused_since_18_months` vaut `YES` sans hit
 connu ou lorsque le dernier hit date d'au moins 18 mois calendaires.
 
+## Rapport de compliance des règles
+
+La commande suivante évalue toutes les applications du snapshot courant :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --out var/output/compliance.xlsx
+```
+
+`--input <csv-ou-xlsx>` permet de limiter le rapport à une colonne `app` et à
+une colonne `env` optionnelle, tout en recopiant toutes les colonnes d'entrée
+dans le résultat. Le rapport consolide Source/Destination, les programmes
+`KPI_PROGRAM_*`, les IP Lists utilisateur et intra-zone, et une colonne par
+catalogue configuré dans `dangerous_port_lists`.
+
 ## Recherche de règles par éléments
 
 La commande `search-rules` produit un classeur indépendant des données de flux

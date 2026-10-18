@@ -39,7 +39,13 @@ def read_rows(path: Path, required: Iterable[str] = ()) -> Iterator[Dict[str, st
         for number, row in enumerate(reader, 2):
             if None in row:
                 raise CsvContractError(f"{path}:{number}: excess unquoted fields")
-            yield {str(key): (value or "").strip() for key, value in row.items()}
+            normalized = {str(key): (value or "").strip() for key, value in row.items()}
+            nonempty = {key: value for key, value in normalized.items() if value}
+            if nonempty and all(value.casefold() == key.casefold() for key, value in nonempty.items()):
+                # Some Workloader outputs concatenate pages and repeat the CSV
+                # header between them.  It is framing, not a policy/usage row.
+                continue
+            yield normalized
 
 
 def write_rows(path: Path, headers: List[str], rows: Iterable[Mapping[str, object]], delimiter: str = ",") -> None:
@@ -65,6 +71,7 @@ def parse_bool(value: str) -> Optional[bool]:
 
 _PORT = re.compile(r"^\s*(\d+)\s+(TCP|UDP)\s+\((\d+)\)\s*$", re.I)
 _PROTOCOL = re.compile(r"^\s*0\s+([A-Z][A-Z0-9_-]*)\s+\((\d+)\)\s*$", re.I)
+_UNSPECIFIED_PROTOCOL = re.compile(r"^\s*0\s+\((\d+)\)\s*$", re.I)
 _MORE = re.compile(r"^\s*\+\s*(\d+)\s+more\s*$", re.I)
 
 
@@ -88,6 +95,14 @@ def parse_flows_by_port(value: str) -> Tuple[List[Dict[str, object]], bool, int]
         match = _PROTOCOL.match(item)
         if match:
             observations.append({"port": None, "protocol": match.group(1).upper(), "flows": int(match.group(2))})
+            continue
+        match = _UNSPECIFIED_PROTOCOL.match(item)
+        if match:
+            # Workloader emits a bare ``0 (N)`` bucket for some All Services
+            # traffic.  With no TCP/UDP token this is not transport port zero;
+            # retain it as an unspecified IP protocol instead of rejecting the
+            # otherwise valid usage row.
+            observations.append({"port": None, "protocol": "UNSPECIFIED", "flows": int(match.group(1))})
             continue
         raise CsvContractError(f"Unsupported flows_by_port item: {item!r}")
     return observations, complete, omitted

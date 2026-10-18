@@ -22,13 +22,16 @@ input to another system. Its schema must therefore be versioned and deterministi
 ### 2.1 In scope
 
 - Orchestrate Workloader exports for rulesets, rules with traffic queries,
-  rule usage, IP lists, compressed named services, labels, and
+  rule usage, IP lists, compressed named services, labels, label groups, and
   managed/unmanaged workloads.
 - Ingest enriched `export_wkld.derived.csv` and the complete
   `export_iplists.csv`; retain `export_iplists.derived.csv` for `NZ3_*`
   workload/subnet correlation.
   Retain `export_services.csv` so reports can resolve reusable service names
   to their compressed `service_ports` definitions.
+  Retain `export_labelgroups.csv` in the atomic snapshot so `search-rules` can
+  report direct membership from `member_labels`/`fully_expanded_members` and
+  recursively discover parent groups from `member_label_groups`.
 - Select all rules relevant to the requested application/environment pairs.
 - Preserve Illumio rule identity using `rule_href`, not mutable names or row
   positions.
@@ -296,6 +299,23 @@ target. It calls the same `_collect_traffic_run` engine as weekly collection;
 only its window lifecycle provider differs. State and run completion are
 transactional, failed boundaries do not move, and reaching the target changes
 the terminal state to `COMPLETED`.
+
+On retry of a failed backfill window, the engine reads the completed batch list
+from the failed run and reconstructs the current batch plan. It skips the
+completed prefix only when batch numbering and count still match, every recorded
+batch was fully completed, and SQLite contains usage for every rule in that
+prefix. The retry then starts with the failed batch and reloads persisted usage
+to build a complete audit. Any failed validation falls back to replaying the
+whole window rather than risk silently omitting a rule.
+
+Final progress distinguishes actual async batches from submission attempts.
+`batch_count` and `current_batch` both equal the number of completed async
+batches after finalization, while `batch_attempt_count` also includes attempts
+that led to a runtime split or exclusion. This prevents a successful run from
+being displayed as incomplete (for example `43/44`). Sunday backfills remain
+disabled by default to avoid competing with weekly traffic collection; an
+operator may explicitly combine `--force --allow-sunday`, with the shared lock
+still preventing concurrent collectors.
 
 Successful policy publication atomically replaces `var/raw/snapshot` with the
 complete validated reference and policy inventory, then removes the policy run

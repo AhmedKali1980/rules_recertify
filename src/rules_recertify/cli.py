@@ -12,7 +12,7 @@ from typing import List, Optional
 from .archives import purge_expired_archives, restore_archive
 from .collection_engine import (
     backfill_traffic, collect, collect_policy, collect_traffic,
-    initialize_backfill_traffic,
+    extend_backfill_traffic, initialize_backfill_traffic,
 )
 from .config import ConfigurationError, load_settings
 from .history.database import Database
@@ -20,6 +20,7 @@ from .logging_utils import configure_logging
 from .notifications import send_summary
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
+from .reporting.compliance import generate_compliance_workbook
 from .reporting.microcosmos import generate_microcosmos_reports
 from .reporting.rule_search import generate_rule_search_workbook
 from .workloader.csvio import read_rows
@@ -70,6 +71,13 @@ def parser() -> argparse.ArgumentParser:
         "--backfill-id", default="traffic-92-days",
         help="Persistent identifier; an existing identifier cannot be reinitialized",
     )
+    extend_backfill = commands.add_parser(
+        "extend-backfill-traffic",
+        help="Move an existing idle backfill target forward without replaying completed windows",
+    )
+    extend_backfill.add_argument("--target-end", type=_date, required=True,
+                                 help="New exclusive target; must be later than the current target")
+    extend_backfill.add_argument("--backfill-id", default="traffic-92-days")
     backfill = commands.add_parser(
         "backfill-traffic", help="Process at most one oldest-first backfill window",
     )
@@ -100,11 +108,15 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--environment", action="append", required=True)
     report.add_argument("--lookback-days", type=int)
     report.add_argument("--as-of", type=_date, default=date.today())
+    report.add_argument("--octoflow", action="store_true",
+                        help="Generate a workbook containing only the Octoflow worksheet")
     batch_report = commands.add_parser("report-batch", help="Generate reports from a Microcosmos XLSX export")
     batch_report.add_argument("--microcosmos-xlsx", type=Path, required=True,
                               help="Microcosmos XLSX used to generate all non-empty Kear Id rows")
     batch_report.add_argument("--lookback-days", type=int)
     batch_report.add_argument("--as-of", type=_date, default=date.today())
+    batch_report.add_argument("--octoflow", action="store_true",
+                              help="Generate each report with only the Octoflow worksheet")
     search = commands.add_parser(
         "search-rules", help="Find items in the latest SQLite rule snapshot",
     )
@@ -114,6 +126,13 @@ def parser() -> argparse.ArgumentParser:
                         help="Output XLSX path (default: output_dir/rules_items_search_<UTC timestamp>.xlsx)")
     search.add_argument("--case-sensitive", action="store_true",
                         help="Use case-sensitive text matching (ports are unaffected)")
+    compliance = commands.add_parser(
+        "compliance-report", help="Evaluate snapshot rules for application scopes",
+    )
+    compliance.add_argument("--input", type=Path,
+                            help="Optional CSV/XLSX containing app and optional env columns")
+    compliance.add_argument("--out", type=Path,
+                            help="Output XLSX path (default: output_dir/compliance_<timestamp>.xlsx)")
     return root
 
 
@@ -180,6 +199,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 initialize_backfill_traffic(settings, args.target_end, args.backfill_id),
                 indent=2, sort_keys=True,
             )); return 0
+        if args.command == "extend-backfill-traffic":
+            print(json.dumps(
+                extend_backfill_traffic(settings, args.target_end, args.backfill_id),
+                indent=2, sort_keys=True,
+            )); return 0
         if args.command == "backfill-traffic":
             print(json.dumps(
                 backfill_traffic(settings, args.backfill_id, args.no_wait),
@@ -227,6 +251,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "current_stage": details.get("current_stage"),
                     "current_batch": details.get("current_batch"),
                     "batch_count": details.get("batch_count"),
+                    "batch_attempt_count": details.get("batch_attempt_count"),
+                    "resumed_from_run_id": details.get("resumed_from_run_id"),
+                    "resumed_completed_batches": details.get("resumed_completed_batches"),
+                    "resume_batch": details.get("resume_batch"),
+                    "resume_ignored_reason": details.get("resume_ignored_reason"),
                     "error": details.get("error"),
                     "blocking_reasons": details.get("blocking_reasons", []),
                     "failed_diagnostics_dir": details.get("failed_diagnostics_dir"),
@@ -283,7 +312,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                        raw_dir=Path(settings.raw_dir),
                                        dangerous_port_lists=settings.dangerous_port_lists,
                                        device=settings.pce,
-                                       permissive_rule_max_ips=settings.permissive_rule_max_ips)
+                                       permissive_rule_max_ips=settings.permissive_rule_max_ips,
+                                       octoflow_only=args.octoflow)
             print(target); return 0
         if args.command == "report-batch":
             db.initialize(); lookback = args.lookback_days or settings.default_lookback_days
@@ -295,6 +325,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 dangerous_port_lists=settings.dangerous_port_lists,
                 device=settings.pce,
                 permissive_rule_max_ips=settings.permissive_rule_max_ips,
+                octoflow_only=args.octoflow,
             )
             print("\n".join(str(target) for target in targets)); return 0
         if args.command == "search-rules":
@@ -305,6 +336,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(generate_rule_search_workbook(
                 db, args.items, target, raw_dir=Path(settings.raw_dir),
                 case_sensitive=args.case_sensitive,
+            ))
+            return 0
+        if args.command == "compliance-report":
+            target = args.out or Path(settings.output_dir) / (
+                "compliance_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
+            )
+            print(generate_compliance_workbook(
+                Path(settings.raw_dir), target, settings.dangerous_port_lists, args.input,
             ))
             return 0
         raise AssertionError("unhandled command")

@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Set, Tuple
 
 from ..workloader.csvio import parse_bool, read_rows
 from .rule_search import _write_sheet
+from .workbook import _expand_services, _load_report_services
 
 
 RULE_FIELDS = (
@@ -38,6 +39,7 @@ def generate_bouquets_workbook(raw_dir: Path, output: Path) -> Path:
         "iplists": snapshot / "export_iplists.derived.csv",
         "iplists_full": snapshot / "export_iplists.csv",
         "workloads": snapshot / "export_wkld.csv",
+        "services": snapshot / "export_services.csv",
     }
     missing = [str(path) for path in paths.values() if not path.is_file() or not path.stat().st_size]
     if missing:
@@ -51,6 +53,7 @@ def generate_bouquets_workbook(raw_dir: Path, output: Path) -> Path:
     groups = list(read_rows(paths["groups"], LABEL_GROUP_FIELDS))
     label_types = _type_index(labels)
     group_types = _type_index(groups)
+    services, service_reference = _load_report_services(raw_dir)
 
     bouquet_rows: List[Dict[str, object]] = []
     used_iplists: Dict[str, Set[str]] = {}
@@ -78,7 +81,7 @@ def generate_bouquets_workbook(raw_dir: Path, output: Path) -> Path:
             "rule_enabled": rule["rule_enabled"],
             "Source": source,
             "Destination": destination,
-            "services": rule["services"],
+            "services": _expand_services(rule["services"], services),
         })
 
     from openpyxl import Workbook
@@ -92,9 +95,11 @@ def generate_bouquets_workbook(raw_dir: Path, output: Path) -> Path:
     _write_sheet(workbook, "labelgroups", _labelgroup_dictionary(groups, used_groups))
     _write_sheet(workbook, "Metadata", [{
         "rules inventory": str(paths["rules"]), "bouquet prefix": "BOUQUETS_",
-        "matching rules": len(rules), "generated at UTC": datetime.now(timezone.utc).isoformat(),
+        "matching rules": len(rules), "service reference": service_reference,
+        "generated at UTC": datetime.now(timezone.utc).isoformat(),
     }])
     from openpyxl.styles import Alignment
+    _bold_selector_types(workbook["Bouquets"])
     for sheet in workbook.worksheets:
         for row in sheet.iter_rows(min_row=2):
             for cell in row:
@@ -188,9 +193,13 @@ def _iplist_dictionary(
 
 def _workload_dictionary(path: Path, pairs: Set[Tuple[str, str]]) -> List[Dict[str, str]]:
     wanted = {(app.casefold(), env.casefold()) for app, env in pairs}
-    return [{field: row[field] for field in WORKLOAD_FIELDS}
+    rows = [{field: row[field] for field in WORKLOAD_FIELDS}
             for row in read_rows(path, WORKLOAD_FIELDS)
             if (row["app"].casefold(), row["env"].casefold()) in wanted]
+    return sorted(rows, key=lambda row: (
+        row["app"].casefold(), row["env"].casefold(),
+        row["hostname"].casefold(), row["interfaces"].casefold(),
+    ))
 
 
 def _labelgroup_dictionary(
@@ -208,4 +217,33 @@ def _labelgroup_dictionary(
                 "fully_expanded_members": str(group.get("fully_expanded_members", "")),
                 "used in": "\n".join(sorted(rulesets)),
             })
-    return rows
+    return sorted(rows, key=lambda row: (row["key"].casefold(), row["name"].casefold()))
+
+
+def _bold_selector_types(sheet: object) -> None:
+    """Use Excel rich text to bold the type prefix on selector lines."""
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+
+    headers = {str(cell.value): cell.column for cell in sheet[1]}
+    bold = InlineFont(b=True)
+    for header in ("Source", "Destination"):
+        column = headers.get(header)
+        if column is None:
+            continue
+        for row_number in range(2, sheet.max_row + 1):
+            cell = sheet.cell(row_number, column)
+            value = str(cell.value or "")
+            if not value:
+                continue
+            rich = CellRichText()
+            for index, line in enumerate(value.splitlines()):
+                if index:
+                    rich.append("\n")
+                selector_type, separator, selector_value = line.partition(":")
+                if separator:
+                    rich.append(TextBlock(bold, selector_type + separator))
+                    rich.append(selector_value)
+                else:
+                    rich.append(line)
+            cell.value = rich

@@ -413,8 +413,9 @@ La commande suivante sélectionne dans le snapshot les règles dont le
   bouquets-report --out var/output/bouquets-infra.xlsx
 ```
 
-Le classeur factorise les sélecteurs dans des cellules multilignes `Source` et
-`Destination`, préfixe chaque objet avec son type exact, puis ajoute les
+Le classeur développe les named services avec `export_services.csv`, factorise
+les sélecteurs dans des cellules multilignes `Source` et `Destination`, affiche
+le type exact de chaque objet en gras, puis ajoute les
 dictionnaires `iplists`, `workloads` et `labelgroups` issus des exports du
 snapshot.
 

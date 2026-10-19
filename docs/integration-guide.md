@@ -23,7 +23,8 @@ an operator or another system runs `report` only when a deliverable is needed.
 - Python 3.9.25 and `venv`.
 - Workloader 12.0.20, default `/DATA/WORKLOADER/ver12/workloader`.
 - SQLite 3.24 or newer. Production provides `3.26.0-20.el8_10`.
-- An approved offline `openpyxl` package for workbook generation.
+- An approved offline `openpyxl` 3.1 or newer package for workbook generation
+  (required for rich-text selector prefixes in bouquet reports).
 - Network/PCE credentials already accepted by Workloader.
 
 No online package lookup is required by collection, ingestion, SQLite, or tests.
@@ -774,9 +775,10 @@ and ruleset-wide `Intra-zone` classification for `NZ3_` or `ZNOT_NZ3` IP Lists.
 ```
 
 The `Bouquets` worksheet retains the ruleset/rule identity, enabled flags,
-descriptions, rule type and services. Source and destination selector columns
+descriptions, rule type and services. Named services are expanded from
+`export_services.csv` while their canonical names remain visible. Source and destination selector columns
 are factorized into `Source` and `Destination`. Each selector occupies a
-separate line in its cell and is prefixed with its exact snapshot type, such as
+separate line in its cell and is prefixed with its exact snapshot type in bold, such as
 `iplist:`, `label.app:`, `label.role:` or `labelgroup.loc:`. Matching is by
 whole reference name, not substring.
 
@@ -788,7 +790,8 @@ data; and `labelgroups` lists used groups, their direct/expanded membership and
 consuming rulesets. `Metadata` records the source inventory and generation
 time. The command requires a complete current policy snapshot, including
 `labels.csv`, `export_labelgroups.csv`, `export_iplists.derived.csv`,
-`export_iplists.csv`, and `export_wkld.csv`.
+`export_iplists.csv`, `export_wkld.csv`, and `export_services.csv`. Workloads
+are sorted by `app`, then `env`; Label Groups are sorted by `key`, then `name`.
 
 ## 7. Rule-item search
 

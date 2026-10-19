@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rules_recertify.reporting.bouquets import _factor_side, generate_bouquets_workbook
+from rules_recertify.reporting.bouquets import (
+    _factor_side, _labelgroup_dictionary, _workload_dictionary,
+    generate_bouquets_workbook,
+)
 
 
 def write_csv(path, fields, rows):
@@ -14,6 +17,25 @@ def write_csv(path, fields, rows):
 
 
 class BouquetsReportTest(unittest.TestCase):
+    def test_dictionaries_have_stable_requested_sort_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workloads = Path(directory) / "workloads.csv"
+            write_csv(workloads, ["app", "env", "hostname", "interfaces"], [
+                {"app": "B", "env": "DEV", "hostname": "z", "interfaces": "2"},
+                {"app": "A", "env": "PRD", "hostname": "b", "interfaces": "1"},
+                {"app": "A", "env": "DEV", "hostname": "a", "interfaces": "3"},
+            ])
+            rows = _workload_dictionary(workloads, {("A", "PRD"), ("A", "DEV"), ("B", "DEV")})
+        self.assertEqual([(row["app"], row["env"]) for row in rows],
+                         [("A", "DEV"), ("A", "PRD"), ("B", "DEV")])
+        groups = [
+            {"name": "Z", "key": "role"}, {"name": "B", "key": "app"},
+            {"name": "A", "key": "app"},
+        ]
+        group_rows = _labelgroup_dictionary(groups, {"z": {"R"}, "b": {"R"}, "a": {"R"}})
+        self.assertEqual([(row["key"], row["name"]) for row in group_rows],
+                         [("app", "A"), ("app", "B"), ("role", "Z")])
+
     def test_factorized_side_types_each_exact_selector_on_own_line(self):
         rule = {
             "src_all_workloads": "false", "src_labels": "app:APP_A;role:DB.OCP",
@@ -75,6 +97,9 @@ class BouquetsReportTest(unittest.TestCase):
                 {"app": "APP_A", "env": "PRD", "hostname": "host1",
                  "interfaces": "eth0:10.0.0.2"},
             ])
+            write_csv(snapshot / "export_services.csv", ["name", "service_ports"], [
+                {"name": "SSH", "service_ports": "22 TCP"},
+            ])
             target = root / "bouquets.xlsx"
             generate_bouquets_workbook(root / "raw", target)
             workbook = openpyxl.load_workbook(target, read_only=True, data_only=True)
@@ -83,6 +108,7 @@ class BouquetsReportTest(unittest.TestCase):
             rows = list(workbook["Bouquets"].iter_rows(values_only=True))
             self.assertEqual(len(rows), 2)
             self.assertIn("label.app:APP_A\nlabel.env:PRD\niplist:NZ3_APP", rows[1])
+            self.assertEqual(rows[1][-1], "SSH (22 TCP)")
             self.assertEqual(list(workbook["iplists"].iter_rows(values_only=True))[1],
                              ("NZ3_APP", "10.0.0.0/24", "BOUQUETS_INFRA"))
             self.assertEqual(list(workbook["workloads"].iter_rows(values_only=True))[1],

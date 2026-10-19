@@ -49,6 +49,8 @@ class BouquetsReportTest(unittest.TestCase):
             "label.app:APP_A", "label.role:DB.OCP", "label.env:DEV [excluded]",
             "labelgroup.loc:EUR-LGL", "iplist:Any (0.0.0.0/0)",
         ])
+        self.assertIsInstance(value, str)
+        self.assertEqual(value.count("\n"), 4)
         self.assertEqual(iplists, {"Any (0.0.0.0/0)"})
         self.assertEqual(groups, {"EUR-LGL"})
         self.assertEqual(pairs, set())

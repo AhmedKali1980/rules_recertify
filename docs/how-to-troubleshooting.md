@@ -197,8 +197,8 @@ Export every rule whose ruleset name begins with `BOUQUETS_`:
 ```
 
 The workbook expands named services from `export_services.csv` and factorizes
-selectors into multiline `Source` and `Destination` cells with bold object-type
-prefixes. Its `iplists`, `workloads`, and `labelgroups`
+selectors into multiline `Source` and `Destination` cells with explicit
+object-type prefixes. Its `iplists`, `workloads`, and `labelgroups`
 worksheets provide the dictionaries needed to interpret exact references and
 identify the bouquet rulesets using them. Refresh the policy snapshot first if
 any reference export is missing or stale.

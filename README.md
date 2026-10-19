@@ -415,7 +415,7 @@ La commande suivante sélectionne dans le snapshot les règles dont le
 
 Le classeur développe les named services avec `export_services.csv`, factorise
 les sélecteurs dans des cellules multilignes `Source` et `Destination`, affiche
-le type exact de chaque objet en gras, puis ajoute les
+le type exact de chaque objet, puis ajoute les
 dictionnaires `iplists`, `workloads` et `labelgroups` issus des exports du
 snapshot.
 

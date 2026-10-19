@@ -778,7 +778,7 @@ The `Bouquets` worksheet retains the ruleset/rule identity, enabled flags,
 descriptions, rule type and services. Named services are expanded from
 `export_services.csv` while their canonical names remain visible. Source and destination selector columns
 are factorized into `Source` and `Destination`. Each selector occupies a
-separate line in its cell and is prefixed with its exact snapshot type in bold, such as
+separate line in its cell and is prefixed with its exact snapshot type, such as
 `iplist:`, `label.app:`, `label.role:` or `labelgroup.loc:`. Matching is by
 whole reference name, not substring.
 

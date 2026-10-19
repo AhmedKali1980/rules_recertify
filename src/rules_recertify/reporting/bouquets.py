@@ -99,7 +99,9 @@ def generate_bouquets_workbook(raw_dir: Path, output: Path) -> Path:
         "generated at UTC": datetime.now(timezone.utc).isoformat(),
     }])
     from openpyxl.styles import Alignment
-    _bold_selector_types(workbook["Bouquets"])
+    # Keep Source and Destination as ordinary strings.  Excel repairs some
+    # openpyxl rich-text cells containing line feeds and removes those feeds;
+    # plain text plus wrap_text preserves one selector per visible line.
     for sheet in workbook.worksheets:
         for row in sheet.iter_rows(min_row=2):
             for cell in row:
@@ -218,32 +220,3 @@ def _labelgroup_dictionary(
                 "used in": "\n".join(sorted(rulesets)),
             })
     return sorted(rows, key=lambda row: (row["key"].casefold(), row["name"].casefold()))
-
-
-def _bold_selector_types(sheet: object) -> None:
-    """Use Excel rich text to bold the type prefix on selector lines."""
-    from openpyxl.cell.rich_text import CellRichText, TextBlock
-    from openpyxl.cell.text import InlineFont
-
-    headers = {str(cell.value): cell.column for cell in sheet[1]}
-    bold = InlineFont(b=True)
-    for header in ("Source", "Destination"):
-        column = headers.get(header)
-        if column is None:
-            continue
-        for row_number in range(2, sheet.max_row + 1):
-            cell = sheet.cell(row_number, column)
-            value = str(cell.value or "")
-            if not value:
-                continue
-            rich = CellRichText()
-            for index, line in enumerate(value.splitlines()):
-                if index:
-                    rich.append("\n")
-                selector_type, separator, selector_value = line.partition(":")
-                if separator:
-                    rich.append(TextBlock(bold, selector_type + separator))
-                    rich.append(selector_value)
-                else:
-                    rich.append(line)
-            cell.value = rich

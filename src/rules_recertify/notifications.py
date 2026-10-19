@@ -105,3 +105,40 @@ def send_summary(
         body_text, body_html, attachment_path,
     )
     return True
+
+
+def send_bouquets_report(settings: Settings, attachment_path: Path) -> bool:
+    """Send the generated daily bouquet workbook as a dedicated message."""
+    if not settings.smtp_enabled:
+        LOG.info("SMTP disabled; bouquet workbook retained locally: %s", attachment_path)
+        return False
+    missing = []
+    if not (os.getenv("SMTP_HOST") or os.getenv("SMTP_SERVER")):
+        missing.append("SMTP_HOST/SMTP_SERVER")
+    if not os.getenv("SMTP_TO"):
+        missing.append("SMTP_TO")
+    if missing:
+        raise RuntimeError("Missing SMTP variables: " + ", ".join(missing))
+    if not attachment_path.is_file():
+        raise RuntimeError(f"Bouquet workbook attachment does not exist: {attachment_path}")
+
+    filename = attachment_path.name
+    body_text = (
+        "Rules Recertify daily infrastructure bouquet report\n\n"
+        f"PCE: {settings.pce}\n"
+        f"Workbook: {filename}\n"
+        "The report was generated from the policy snapshot refreshed by the same daily job."
+    )
+    body_html = (
+        "<h2>Rules Recertify daily infrastructure bouquet report</h2>"
+        f"<p><strong>PCE:</strong> {html.escape(settings.pce)}</p>"
+        f"<p><strong>Workbook:</strong> {html.escape(filename)}</p>"
+        "<p>The report was generated from the policy snapshot refreshed by the same daily job.</p>"
+    )
+    conf = {name: value for name, value in os.environ.items() if name.startswith("SMTP_")}
+    send_email(
+        conf, parse_recipients(os.environ["SMTP_TO"]),
+        f"[SUCCESS] Rules Recertify Daily Bouquets {filename}",
+        body_text, body_html, attachment_path,
+    )
+    return True

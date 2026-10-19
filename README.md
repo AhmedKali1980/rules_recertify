@@ -238,6 +238,11 @@ hors dimanche si l'échéance backfill de deux jours est atteinte.
 curseur, le backfill, l'archive dominicale, le verrou et l'espace disque. Le
 runbook complet est dans `docs/integration-guide.md`.
 
+Le wrapper daily enchaîne le rafraîchissement du snapshot puis la génération du
+rapport BOUQUETS sous le même verrou. Chaque exécution réussie crée un nouveau
+fichier `bouquets_<timestamp UTC>.xlsx` dans le `output_dir` configuré et
+l'envoie en pièce jointe aux destinataires `SMTP_TO` lorsque SMTP est activé.
+
 L'ancienne commande `collect` reste temporairement disponible pour le workflow
 historique combinant policy et trafic. Elle est transitoire et sera remplacée par
 les commandes dédiées des étapes suivantes ; `--skip-pce-import` ne concerne que

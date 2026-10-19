@@ -605,6 +605,7 @@ The reviewed schedule is versioned in `config/rules-recertify.cron` and uses the
 server local timezone:
 
 ```cron
+# Refresh policy, then generate and email output_dir/bouquets_<UTC timestamp>.xlsx.
 10 0 * * * cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/daily-policy-collect.sh
 0 1 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
 0 2 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
@@ -616,6 +617,16 @@ wrapper reads the weekly cursor and exits successfully without collecting the
 following window. The backfill wrapper is invoked Monday through Saturday and
 uses SQLite run history as a persistent 47-hour gate, yielding at most one
 attempt every two days and excluding Sunday.
+
+The daily wrapper keeps the shared collection lock while it first publishes a
+complete policy snapshot and then runs `bouquets-report --email`. Because the wrapper
+does not pass `--out`, the CLI writes a new
+`<output_dir>/bouquets_<UTC timestamp>.xlsx` file on every successful daily
+execution. The bouquet report is therefore always generated from the snapshot
+that immediately precedes it. If either step fails, the wrapper returns a
+non-zero status and does not continue silently. When SMTP is enabled, the
+timestamped workbook is attached to a dedicated Daily Bouquets message sent to
+`SMTP_TO`; when SMTP is disabled, the file remains available locally.
 
 All wrappers source `collection_common.sh`, activate the configured virtual
 environment and acquire the same non-blocking lock. A collision exits with code

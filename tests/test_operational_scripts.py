@@ -35,12 +35,16 @@ class OperationalScriptsTest(unittest.TestCase):
         })
         return Database(root/"state.sqlite"),environment,log
 
-    def test_daily_policy_uses_dedicated_command(self):
+    def test_daily_policy_refreshes_snapshot_then_generates_timestamped_bouquets(self):
         with tempfile.TemporaryDirectory() as directory:
             _,environment,log=self._setup(Path(directory))
             result=subprocess.run(["bash","scripts/daily-policy-collect.sh"],env=environment,check=False)
             self.assertEqual(result.returncode,0)
-            self.assertIn("collect-policy",log.read_text())
+            calls=log.read_text().splitlines()
+            self.assertEqual(len(calls),2)
+            self.assertIn("collect-policy",calls[0])
+            self.assertIn("bouquets-report --email",calls[1])
+            self.assertNotIn("--out",calls[1])
 
     def test_shared_lock_prevents_collector_collision(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -133,3 +137,4 @@ class OperationalScriptsTest(unittest.TestCase):
         self.assertIn("0 1 * * 0",cron)
         self.assertIn("0 2 * * 0",cron)
         self.assertIn("0 3 * * 1-6",cron)
+        self.assertIn("bouquets_<UTC timestamp>.xlsx",cron)

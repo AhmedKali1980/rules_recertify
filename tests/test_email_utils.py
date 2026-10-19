@@ -8,7 +8,9 @@ from rules_recertify.collection_engine import _send_and_record_summary
 from rules_recertify.config import Settings
 from rules_recertify.email_utils import parse_recipients, send_email
 from rules_recertify.history.database import Database
-from rules_recertify.notifications import _policy_summary_lines, _summary_lines, send_summary
+from rules_recertify.notifications import (
+    _policy_summary_lines, _summary_lines, send_bouquets_report, send_summary,
+)
 
 
 class _SMTP:
@@ -90,6 +92,25 @@ class EmailUtilsTest(unittest.TestCase):
         self.assertEqual(smtp.host, "mail.internal")
         self.assertEqual(smtp.credentials, ("service", "secret"))
         self.assertIn("audit.xlsx", smtp.message.as_string())
+
+    def test_bouquets_email_has_dedicated_subject_body_and_attachment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            attachment = Path(directory) / "bouquets_20261020T001000Z.xlsx"
+            attachment.write_bytes(b"xlsx")
+            with patch.dict("os.environ", {
+                "SMTP_HOST": "mail.internal", "SMTP_TO": "ops@example",
+            }, clear=True), patch("rules_recertify.notifications.send_email") as mocked:
+                sent = send_bouquets_report(
+                    Settings(pce="pce-prod", smtp_enabled=True), attachment,
+                )
+        self.assertTrue(sent)
+        args = mocked.call_args.args
+        self.assertEqual(
+            args[2],
+            "[SUCCESS] Rules Recertify Daily Bouquets bouquets_20261020T001000Z.xlsx",
+        )
+        self.assertIn("daily infrastructure bouquet report", args[3])
+        self.assertEqual(args[5], attachment)
 
     def test_notification_failure_is_persisted_without_changing_run_status(self):
         with tempfile.TemporaryDirectory() as directory:

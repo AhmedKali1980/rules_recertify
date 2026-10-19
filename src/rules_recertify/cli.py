@@ -17,7 +17,7 @@ from .collection_engine import (
 from .config import ConfigurationError, load_settings
 from .history.database import Database
 from .logging_utils import configure_logging
-from .notifications import send_summary
+from .notifications import send_bouquets_report, send_summary
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
 from .reporting.compliance import generate_compliance_workbook
@@ -139,6 +139,8 @@ def parser() -> argparse.ArgumentParser:
     )
     bouquets.add_argument("--out", type=Path,
                           help="Output XLSX path (default: output_dir/bouquets_<timestamp>.xlsx)")
+    bouquets.add_argument("--email", action="store_true",
+                          help="Email the generated workbook using the configured SMTP settings")
     return root
 
 
@@ -356,7 +358,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             target = args.out or Path(settings.output_dir) / (
                 "bouquets_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
             )
-            print(generate_bouquets_workbook(Path(settings.raw_dir), target))
+            generated = generate_bouquets_workbook(Path(settings.raw_dir), target)
+            if args.email:
+                send_bouquets_report(settings, generated)
+            print(generated)
             return 0
         raise AssertionError("unhandled command")
     except (ConfigurationError, ValueError, RuntimeError) as exc:

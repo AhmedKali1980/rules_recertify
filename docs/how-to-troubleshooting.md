@@ -203,6 +203,13 @@ worksheets provide the dictionaries needed to interpret exact references and
 identify the bouquet rulesets using them. Refresh the policy snapshot first if
 any reference export is missing or stale.
 
+The production daily cron invokes `daily-policy-collect.sh`, which now runs the
+policy refresh and then `bouquets-report --email` under the same lock. With no explicit
+`--out`, every successful daily execution creates a new file named
+`bouquets_<UTC timestamp>.xlsx` in the configured `output_dir`.
+When SMTP is enabled, that workbook is attached to a dedicated email sent to
+the configured `SMTP_TO` recipients.
+
 ## 4. Search supplied items across the current rule snapshot
 
 The former standalone CSV/Pandas search is still available as the integrated

@@ -189,6 +189,11 @@ message. Finalized collections persist `notification_status` as `SENT`,
 `notification_error` without changing the traffic outcome. This separates an
 SMTP delivery problem from a blocking traffic `WARNING`.
 
+Traffic and backfill notifications retain the traffic-window and audit metrics.
+`POLICY_COLLECTION` notifications instead use a **Policy Collection** subject
+and summarize the published snapshot, exported rulesets/labels/rules, imported
+workloads and IP List members, and the reference-export files.
+
 Legacy `PCE`, `WORKLOADER_DIR`, and `STATE_DB` values in `.env` still override
 `config/local.json`; new installations should not define them. For an
 installation created from an earlier template, check these non-secret keys:
@@ -599,6 +604,7 @@ The reviewed schedule is versioned in `config/rules-recertify.cron` and uses the
 server local timezone:
 
 ```cron
+# Refresh policy, then generate and email output_dir/bouquets_<UTC timestamp>.xlsx.
 10 0 * * * cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/daily-policy-collect.sh
 0 1 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
 0 2 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
@@ -610,6 +616,16 @@ wrapper reads the weekly cursor and exits successfully without collecting the
 following window. The backfill wrapper is invoked Monday through Saturday and
 uses SQLite run history as a persistent 47-hour gate, yielding at most one
 attempt every two days and excluding Sunday.
+
+The daily wrapper keeps the shared collection lock while it first publishes a
+complete policy snapshot and then runs `bouquets-report --email`. Because the wrapper
+does not pass `--out`, the CLI writes a new
+`<output_dir>/bouquets_<UTC timestamp>.xlsx` file on every successful daily
+execution. The bouquet report is therefore always generated from the snapshot
+that immediately precedes it. If either step fails, the wrapper returns a
+non-zero status and does not continue silently. When SMTP is enabled, the
+timestamped workbook is attached to a dedicated Daily Bouquets message sent to
+`SMTP_TO`; when SMTP is disabled, the file remains available locally.
 
 All wrappers source `collection_common.sh`, activate the configured virtual
 environment and acquire the same non-blocking lock. A collision exits with code
@@ -647,6 +663,8 @@ becomes the logical report name. A Microcosmos module matches application labels
 whose suffix after the second underscore equals that module, case-insensitively
 (for example, `APM_RBS_FACTOBOT` maps to `FACTOBOT`). Unknown modules and
 inconsistent application names are skipped and recorded in the audit workbook.
+Add `--octoflow` to `report-batch` (or to the single-application `report`
+command) to make each generated report contain only the `Octoflow` worksheet.
 
 The batch root is `output_dir/<UTC timestamp>`. Reports are grouped below
 `PRD/<sanitized Entity>` and `NONPRD/<sanitized Entity>`. Rows for the same KEAR
@@ -732,6 +750,58 @@ the strict-greater-than threshold for `permissive_rule`. Rule imports populate
 content-changing observation is `last_modified`. Historical changes predating
 this schema cannot be reconstructed. `last_hit` uses the latest positive,
 completed usage window independently of the report lookback.
+Multiple values in its `sources` and `destinations` columns are separated by
+semicolons, not embedded line breaks.
+
+### 6.2 Rule-compliance workbook
+
+`compliance-report` evaluates the materialized `snapshot/rules_inventory.csv`.
+Without `--input`, every `app` entry in `snapshot/labels.csv` is evaluated.
+With `--input <csv-or-xlsx>`, `app` is required and `env` is optional; all input
+columns are reproduced in the output. An absent `env` matches the application
+in every environment. Matching is anchored to exact label values within
+`ruleset_scope`, `src_labels`, or `dst_labels`.
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report [--input /data/scopes.xlsx] \
+  --out var/output/compliance.xlsx
+```
+
+The workbook includes `KPI_PROGRAM_*` membership from
+`export_labelgroups.csv`; factorized Source/Destination values; user IP List
+flags for `U_` and `USR_`; one finding column for each configured
+`dangerous_port_lists` catalogue after expansion through `export_services.csv`;
+and ruleset-wide `Intra-zone` classification for `NZ3_` or `ZNOT_NZ3` IP Lists.
+
+### 6.3 Infrastructure bouquet workbook
+
+`bouquets-report` selects rules whose `ruleset_name` begins with the exact
+`BOUQUETS_` prefix from the materialized `snapshot/rules_inventory.csv`.
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  bouquets-report --out var/output/bouquets.xlsx
+```
+
+The `Bouquets` worksheet retains the ruleset/rule identity, enabled flags,
+descriptions, rule type and services. Named services are expanded from
+`export_services.csv` while their canonical names remain visible. Source and destination selector columns
+are factorized into `Source` and `Destination`. Each selector occupies a
+separate line in its cell and is prefixed with its exact snapshot type, such as
+`iplist:`, `label.app:`, `label.role:` or `labelgroup.loc:`. Matching is by
+whole reference name, not substring.
+
+The workbook also contains reference dictionaries: `iplists` lists used IP
+Lists with their normalized `include` value and consuming bouquet rulesets
+(the derived export is preferred and the complete export fills non-NZ3 gaps);
+`workloads` lists app/environment-matching workload hostname and interface
+data; and `labelgroups` lists used groups, their direct/expanded membership and
+consuming rulesets. `Metadata` records the source inventory and generation
+time. The command requires a complete current policy snapshot, including
+`labels.csv`, `export_labelgroups.csv`, `export_iplists.derived.csv`,
+`export_iplists.csv`, `export_wkld.csv`, and `export_services.csv`. Workloads
+are sorted by `app`, then `env`; Label Groups are sorted by `key`, then `name`.
 
 ## 7. Rule-item search
 
@@ -739,8 +809,21 @@ completed usage window independently of the report lookback.
 and searches only rules explicitly marked present by the latest successful
 complete policy snapshot. Searchable selectors include ruleset scopes, labels and exclusions,
 label groups and exclusions, IP Lists, explicit workloads, and services.
-Text matching is literal and case-insensitive unless `--case-sensitive` is
-used.
+Ruleset names, ruleset descriptions, and rule descriptions remain output
+columns but are deliberately excluded from matching.
+Text matching is literal, whole-item, and case-insensitive unless
+`--case-sensitive` is used. Therefore `BI` does not match `BIRO`. The same
+whole-item rule applies to direct and transitive Label Group discovery. In the
+`Results` worksheet, match metadata precedes the rule fields, which follow the
+rule-export CSV contract order.
+All search workbook sheets use bold, color-coded headers. Status cells are
+highlighted in green for `FOUND` and red for `NOT_USED` outcomes.
+The `Summary.type` column classifies exact item names from the current
+`export_iplists.csv`, `export_labelgroups.csv`, and `labels.csv` snapshot files.
+Recognized values are `iplist`, `labelgroup`, `label:app`, `label:env`,
+`label:role`, `label:location`, `label:OS`, and `label:module`; unknown items are
+left blank. If an exact name exists in more than one category, types are joined
+with `;` rather than silently discarding information.
 
 Port inputs support slash or Workloader notation, single ports, and inclusive
 ranges. A semicolon-separated port list uses intersection semantics: a rule is

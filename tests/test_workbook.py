@@ -12,7 +12,8 @@ from rules_recertify.reporting.workbook import (
     _expand_services, _expand_side_details, _load_report_ip_lists, _load_report_services,
     _load_report_workloads, _current_rules,
     _rule_matches, _scope_pairs,
-    _octoflow_sequence, _unused_since_18_months, _zones_for_addresses, generate_workbook,
+    _octoflow_identifiers, _octoflow_sequence, _unused_since_18_months,
+    _zones_for_addresses, generate_workbook,
 )
 from rules_recertify.resolution.workloads import prepare_nz3_members
 
@@ -125,6 +126,13 @@ class WorkbookExpansionTest(unittest.TestCase):
     def test_octoflow_sequence_dates_and_nz3_zones(self):
         href = "/orgs/1/sec_policy/draft/rule_sets/13173/sec_rules/104763"
         self.assertEqual(_octoflow_sequence(href), "13173/sec_rules/104763")
+        self.assertEqual(_octoflow_identifiers(href), ("13173", "104763"))
+        self.assertEqual(
+            _octoflow_identifiers(
+                "/orgs/1/sec_policy/draft/rule_sets/13173/deny_rules/10499"
+            ),
+            ("13173", "10499"),
+        )
         zones = prepare_nz3_members([
             {"name": "NZ3_PARIS", "member": "10.0.0.0/24"},
             {"name": "OTHER", "member": "192.0.2.0/24"},
@@ -134,6 +142,32 @@ class WorkbookExpansionTest(unittest.TestCase):
         self.assertEqual(_unused_since_18_months("2025-03-10T00:00:00Z", date(2026, 9, 10)), "YES")
         self.assertEqual(_unused_since_18_months("2025-03-11T00:00:00Z", date(2026, 9, 10)), "NO")
         self.assertEqual(_unused_since_18_months("", date(2026, 9, 10)), "YES")
+
+    def test_octoflow_side_keeps_only_ipv4_and_normalizes_any(self):
+        expanded, addresses = _expand_side_details(
+            {
+                "src_iplists": "Any (0.0.0.0/0 and ::/0);DUAL-STACK",
+                "src_workloads": "/workloads/dual",
+            },
+            "src",
+            [{
+                "href": "/workloads/dual", "short_hostname": "DUAL",
+                "addresses_json": json.dumps(["192.0.2.10", "2001:db8::10"]),
+            }],
+            [("APP", "PRD")],
+            [{"name": "DUAL-STACK", "member": "198.51.100.0/24"},
+             {"name": "DUAL-STACK", "member": "2001:db8:1::/64"}],
+            ipv4_only=True,
+        )
+        self.assertEqual(
+            expanded.splitlines(),
+            [
+                "IP List: Any (0.0.0.0/0)",
+                "IP List: DUAL-STACK (198.51.100.0/24)",
+                "DUAL (192.0.2.10)",
+            ],
+        )
+        self.assertEqual(addresses, ["0.0.0.0/0", "198.51.100.0/24", "192.0.2.10"])
     def setUp(self):
         self.workloads = [
             {
@@ -470,3 +504,14 @@ class WorkbookExpansionTest(unittest.TestCase):
             self.assertEqual(
                 headers.index("dangerous_ports"), headers.index("dangerous_rule") + 1,
             )
+
+            octoflow_target = generate_workbook(
+                db, root / "octoflow", "KEAR", "Application", ["APP"], ["PRD"], 1,
+                date(2026, 9, 12), octoflow_only=True,
+            )
+            octoflow_workbook = load_workbook(octoflow_target)
+            self.assertEqual(octoflow_workbook.sheetnames, ["Octoflow"])
+            values = {cell.value: octoflow_workbook["Octoflow"].cell(2, cell.column).value
+                      for cell in octoflow_workbook["Octoflow"][1]}
+            self.assertNotIn("\n", values["sources"])
+            self.assertNotIn("\n", values["destinations"])

@@ -18,6 +18,8 @@ ingestion, on-demand Excel reporting, structured logs, and SMTP summaries.
   reusable-project visibility from the current workspace.
 - [Integration and test guide](docs/integration-guide.md): offline installation,
   configuration, cron, collection, backfill, reporting, and acceptance tests.
+- [How-to & troubleshooting](docs/how-to-troubleshooting.md): operations,
+  monitoring, quick diagnostics, and common incidents.
 
 ## Proposed implementation stack
 
@@ -68,7 +70,7 @@ déterminé sans ambiguïté, l'export échoue avant tout appel PCE.
 L'ordre live est strict : (1) tous les workloads L1, (2) workloads managés
 L3SM, (3) fusion CSV, (4) IP Lists L1, (5) services L1 compressés, (6) dérivations. Le répertoire raw de
 l'exécution contient `export_wkld.csv`, `export_wkld.l3sm.m.csv`,
-`export_iplists.csv`, `export_services.csv`, `export_wkld.derived.csv` et
+`export_iplists.csv`, `export_services.csv`, `export_labelgroups.csv`, `export_wkld.derived.csv` et
 `export_iplists.derived.csv`. La fusion conserve toutes les lignes sans
 déduplication et exige des en-têtes strictement identiques.
 
@@ -77,7 +79,8 @@ déduplication et exige des en-têtes strictement identiques.
 ```
 
 Le mode stub ne contacte jamais Workloader. Son répertoire exige
-`export_wkld.csv`, `export_iplists.csv` et `export_services.csv`; un
+`export_wkld.csv`, `export_iplists.csv`, `export_services.csv` et
+`export_labelgroups.csv`; un
 `export_wkld.l3sm.m.csv` non vide est facultatif et est fusionné avec les mêmes
 contrôles que le mode live. On peut employer l'option ou la variable :
 
@@ -153,6 +156,16 @@ début est automatiquement fixé à J-92 :
 ./scripts/rules-recertify --config config/local.json backfill-traffic
 ```
 
+La cible peut être prolongée explicitement après l'initialisation, sans déplacer
+le début ni rejouer les fenêtres réussies. L'extension est refusée pendant un
+run actif :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  extend-backfill-traffic --backfill-id traffic-92-days \
+  --target-end 2026-10-11
+```
+
 Les fenêtres sont traitées de la plus ancienne à la plus récente. La quatorzième
 fenêtre peut être partielle : 92 jours donnent treize fenêtres de sept jours et
 une dernière fenêtre d'un jour. Les états persistants sont `PENDING`, `RUNNING`,
@@ -160,6 +173,24 @@ une dernière fenêtre d'un jour. Les états persistants sont `PENDING`, `RUNNIN
 initialisation avec le même identifiant est refusée et une exécution après
 `COMPLETED` s'arrête sans créer de run. Le curseur backfill est indépendant du
 curseur hebdomadaire.
+
+Lorsqu'un run backfill échoue pendant un appel Workloader, le run suivant
+reconstruit le plan de lots et, si son nombre est identique et que toutes les
+règles des lots terminés sont présentes dans SQLite, reprend au premier lot non
+terminé. Les résultats déjà ingérés restent associés à la
+fenêtre et servent à produire l'audit complet ; ils ne sont pas soumis à nouveau.
+Si le plan a changé entre les deux runs, la reprise est volontairement refusée et
+la fenêtre entière est rejouée afin de ne pas omettre de règles.
+
+Le compteur final représente les lots de requêtes réellement produits et
+terminés. Les tentatives de soumission ayant provoqué un découpage Workloader
+sont exposées séparément sous `batch_attempt_count` et ne créent plus un faux
+écart tel que `43/44`. Le dimanche reste réservé par défaut à la collecte
+hebdomadaire ; une relance opérateur exceptionnelle doit être explicite :
+
+```bash
+./scripts/backfill-traffic.sh --force --allow-sunday
+```
 
 ## Snapshot raw et archives
 
@@ -250,6 +281,10 @@ La commande `report-batch` accepte un export Excel Microcosmos :
   --microcosmos-xlsx /chemin/export_microcosmos.xlsx \
   --lookback-days 180 --as-of 2026-09-10
 ```
+
+Les commandes `report` et `report-batch` acceptent `--octoflow` pour produire
+des rapports contenant uniquement la feuille `Octoflow`. Dans cette feuille,
+les valeurs multiples de `sources` et `destinations` sont séparées par `;`.
 
 La première feuille doit contenir les colonnes `Kear Id`, `Application Name`,
 `Module`, `Account`, `Account Leader`, `Microsegmentation Solution`,
@@ -352,6 +387,37 @@ au premier import ayant détecté la version courante. Ce suivi commence après 
 mise en place de la table d'historique ; les imports antérieurs ne peuvent pas
 être reconstruits rétroactivement. `unused_since_18_months` vaut `YES` sans hit
 connu ou lorsque le dernier hit date d'au moins 18 mois calendaires.
+
+## Rapport de compliance des règles
+
+La commande suivante évalue toutes les applications du snapshot courant :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --out var/output/compliance.xlsx
+```
+
+`--input <csv-ou-xlsx>` permet de limiter le rapport à une colonne `app` et à
+une colonne `env` optionnelle, tout en recopiant toutes les colonnes d'entrée
+dans le résultat. Le rapport consolide Source/Destination, les programmes
+`KPI_PROGRAM_*`, les IP Lists utilisateur et intra-zone, et une colonne par
+catalogue configuré dans `dangerous_port_lists`.
+
+## Rapport des rulesets BOUQUETS INFRA
+
+La commande suivante sélectionne dans le snapshot les règles dont le
+`ruleset_name` commence par `BOUQUETS_` :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  bouquets-report --out var/output/bouquets-infra.xlsx
+```
+
+Le classeur développe les named services avec `export_services.csv`, factorise
+les sélecteurs dans des cellules multilignes `Source` et `Destination`, affiche
+le type exact de chaque objet en gras, puis ajoute les
+dictionnaires `iplists`, `workloads` et `labelgroups` issus des exports du
+snapshot.
 
 ## Recherche de règles par éléments
 

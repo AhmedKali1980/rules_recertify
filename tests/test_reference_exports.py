@@ -92,9 +92,13 @@ class ReferenceExportsTest(unittest.TestCase):
             write_csv(stub / "export_wkld.l3sm.m.csv", HEADER, [{**row, "href": "/2", "managed": "TRUE", "ip_with_default_gw": "10.0.0.2"}])
             write_csv(stub / "export_iplists.csv", ["name", "include"], [{"name": "NZ3_A", "include": "10.0.0.0/24"}])
             write_csv(stub / "export_services.csv", ["name", "service_ports"], [{"name": "WEB-SVC", "service_ports": "443 TCP"}])
+            write_csv(stub / "export_labelgroups.csv", [
+                "name", "key", "description", "member_labels", "member_label_groups",
+                "fully_expanded_members", "href",
+            ], [{"name": "APP-GROUP", "key": "app", "member_labels": "APP_A", "href": "/label_groups/1"}])
             import_pce_exports(raw, stub)
             self.assertTrue(all((raw / name).stat().st_size for name in (
-                "export_wkld.csv", "export_iplists.csv", "export_services.csv",
+                "export_wkld.csv", "export_iplists.csv", "export_services.csv", "export_labelgroups.csv",
                 "export_wkld.derived.csv", "export_iplists.derived.csv",
             )))
 
@@ -130,6 +134,13 @@ class WorkloaderShellTest(unittest.TestCase):
             self.assertIn("l1-profile", arguments)
             self.assertIn("svc-export", arguments)
             self.assertIn("--compressed", arguments)
+            calls.write_text("")
+            result = self._run("workloader-labelgroup-export.sh", env, root / "label groups.csv")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = calls.read_text().splitlines()
+            self.assertIn("l1-profile", arguments)
+            self.assertIn("labelgroup-export", arguments)
+            self.assertNotIn("--compressed", arguments)
             env.update({"NO_OUTPUT": "1"}); calls.write_text("")
             result = self._run("workloader-ipl-export.sh", env, root / "empty.csv")
             self.assertNotEqual(result.returncode, 0); self.assertEqual(calls.read_text().count("--config-file\n"), 2)

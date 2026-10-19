@@ -763,6 +763,33 @@ flags for `U_` and `USR_`; one finding column for each configured
 `dangerous_port_lists` catalogue after expansion through `export_services.csv`;
 and ruleset-wide `Intra-zone` classification for `NZ3_` or `ZNOT_NZ3` IP Lists.
 
+### 6.3 Infrastructure bouquet workbook
+
+`bouquets-report` selects rules whose `ruleset_name` begins with the exact
+`BOUQUETS_` prefix from the materialized `snapshot/rules_inventory.csv`.
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  bouquets-report --out var/output/bouquets.xlsx
+```
+
+The `Bouquets` worksheet retains the ruleset/rule identity, enabled flags,
+descriptions, rule type and services. Source and destination selector columns
+are factorized into `Source` and `Destination`. Each selector occupies a
+separate line in its cell and is prefixed with its exact snapshot type, such as
+`iplist:`, `label.app:`, `label.role:` or `labelgroup.loc:`. Matching is by
+whole reference name, not substring.
+
+The workbook also contains reference dictionaries: `iplists` lists used IP
+Lists with their normalized `include` value and consuming bouquet rulesets
+(the derived export is preferred and the complete export fills non-NZ3 gaps);
+`workloads` lists app/environment-matching workload hostname and interface
+data; and `labelgroups` lists used groups, their direct/expanded membership and
+consuming rulesets. `Metadata` records the source inventory and generation
+time. The command requires a complete current policy snapshot, including
+`labels.csv`, `export_labelgroups.csv`, `export_iplists.derived.csv`,
+`export_iplists.csv`, and `export_wkld.csv`.
+
 ## 7. Rule-item search
 
 `search-rules` reads one item per row from a one-column CSV, text, or XLSX file

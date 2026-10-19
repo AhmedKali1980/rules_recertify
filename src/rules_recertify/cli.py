@@ -21,6 +21,7 @@ from .notifications import send_summary
 from .reference import ingest_reference
 from .reporting.workbook import generate_workbook
 from .reporting.compliance import generate_compliance_workbook
+from .reporting.bouquets import generate_bouquets_workbook
 from .reporting.microcosmos import generate_microcosmos_reports
 from .reporting.rule_search import generate_rule_search_workbook
 from .workloader.csvio import read_rows
@@ -133,6 +134,11 @@ def parser() -> argparse.ArgumentParser:
                             help="Optional CSV/XLSX containing app and optional env columns")
     compliance.add_argument("--out", type=Path,
                             help="Output XLSX path (default: output_dir/compliance_<timestamp>.xlsx)")
+    bouquets = commands.add_parser(
+        "bouquets-report", help="Export BOUQUETS_* infrastructure rulesets and dictionaries",
+    )
+    bouquets.add_argument("--out", type=Path,
+                          help="Output XLSX path (default: output_dir/bouquets_<timestamp>.xlsx)")
     return root
 
 
@@ -345,6 +351,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(generate_compliance_workbook(
                 Path(settings.raw_dir), target, settings.dangerous_port_lists, args.input,
             ))
+            return 0
+        if args.command == "bouquets-report":
+            target = args.out or Path(settings.output_dir) / (
+                "bouquets_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
+            )
+            print(generate_bouquets_workbook(Path(settings.raw_dir), target))
             return 0
         raise AssertionError("unhandled command")
     except (ConfigurationError, ValueError, RuntimeError) as exc:

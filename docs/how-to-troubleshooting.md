@@ -187,6 +187,21 @@ in `ruleset_scope`, `src_labels`, or `dst_labels`. It identifies
 catalogue after named-service expansion, and marks every rule in a ruleset as
 `Intra-zone` when that ruleset uses an `NZ3_` or `ZNOT_NZ3` IP List.
 
+### Export infrastructure bouquet rulesets
+
+Export every rule whose ruleset name begins with `BOUQUETS_`:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  bouquets-report --out var/output/bouquets-infra.xlsx
+```
+
+The workbook factorizes selectors into multiline `Source` and `Destination`
+cells with explicit object types. Its `iplists`, `workloads`, and `labelgroups`
+worksheets provide the dictionaries needed to interpret exact references and
+identify the bouquet rulesets using them. Refresh the policy snapshot first if
+any reference export is missing or stale.
+
 ## 4. Search supplied items across the current rule snapshot
 
 The former standalone CSV/Pandas search is still available as the integrated

@@ -403,6 +403,21 @@ dans le résultat. Le rapport consolide Source/Destination, les programmes
 `KPI_PROGRAM_*`, les IP Lists utilisateur et intra-zone, et une colonne par
 catalogue configuré dans `dangerous_port_lists`.
 
+## Rapport des rulesets BOUQUETS INFRA
+
+La commande suivante sélectionne dans le snapshot les règles dont le
+`ruleset_name` commence par `BOUQUETS_` :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  bouquets-report --out var/output/bouquets-infra.xlsx
+```
+
+Le classeur factorise les sélecteurs dans des cellules multilignes `Source` et
+`Destination`, préfixe chaque objet avec son type exact, puis ajoute les
+dictionnaires `iplists`, `workloads` et `labelgroups` issus des exports du
+snapshot.
+
 ## Recherche de règles par éléments
 
 La commande `search-rules` produit un classeur indépendant des données de flux

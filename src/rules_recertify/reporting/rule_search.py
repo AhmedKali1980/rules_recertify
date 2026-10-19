@@ -47,6 +47,10 @@ SHEET_HEADER_COLORS = {
     "Results": "305496",
     "label-groups": "548235",
     "Metadata": "5B5B5B",
+    "Bouquets": "1F4E78",
+    "iplists": "C65911",
+    "workloads": "548235",
+    "labelgroups": "7030A0",
 }
 RESULT_RULE_FIELDS = (
     "ruleset_name", "ruleset_description", "ruleset_scope", "ruleset_enabled",

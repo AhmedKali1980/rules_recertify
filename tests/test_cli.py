@@ -111,6 +111,12 @@ class CliTest(unittest.TestCase):
         self.assertEqual(supplied.input, Path("scopes.csv"))
         self.assertEqual(supplied.out, Path("compliance.xlsx"))
 
+    def test_bouquets_report_accepts_optional_output(self):
+        defaults = parser().parse_args(["bouquets-report"])
+        supplied = parser().parse_args(["bouquets-report", "--out", "bouquets.xlsx"])
+        self.assertIsNone(defaults.out)
+        self.assertEqual(supplied.out, Path("bouquets.xlsx"))
+
     def test_batch_report_accepts_microcosmos_workbook(self):
         args = parser().parse_args([
             "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx",

@@ -35,6 +35,12 @@ class CliTest(unittest.TestCase):
         ])
         self.assertEqual(initialized.target_end.isoformat(), "2026-09-20")
         self.assertEqual(initialized.backfill_id, "history")
+        extended = parser().parse_args([
+            "extend-backfill-traffic", "--target-end", "2026-10-11",
+            "--backfill-id", "history",
+        ])
+        self.assertEqual(extended.target_end.isoformat(), "2026-10-11")
+        self.assertEqual(extended.backfill_id, "history")
         run = parser().parse_args([
             "backfill-traffic", "--backfill-id", "history", "--no-wait",
         ])
@@ -95,6 +101,26 @@ class CliTest(unittest.TestCase):
         self.assertEqual(args.out, Path("result.xlsx"))
         self.assertTrue(args.case_sensitive)
 
+    def test_compliance_report_accepts_optional_input_and_output(self):
+        defaults = parser().parse_args(["compliance-report"])
+        supplied = parser().parse_args([
+            "compliance-report", "--input", "scopes.csv", "--out", "compliance.xlsx",
+        ])
+        self.assertIsNone(defaults.input)
+        self.assertIsNone(defaults.out)
+        self.assertEqual(supplied.input, Path("scopes.csv"))
+        self.assertEqual(supplied.out, Path("compliance.xlsx"))
+
+    def test_bouquets_report_accepts_optional_output(self):
+        defaults = parser().parse_args(["bouquets-report"])
+        supplied = parser().parse_args([
+            "bouquets-report", "--out", "bouquets.xlsx", "--email",
+        ])
+        self.assertIsNone(defaults.out)
+        self.assertFalse(defaults.email)
+        self.assertEqual(supplied.out, Path("bouquets.xlsx"))
+        self.assertTrue(supplied.email)
+
     def test_batch_report_accepts_microcosmos_workbook(self):
         args = parser().parse_args([
             "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx",
@@ -102,6 +128,17 @@ class CliTest(unittest.TestCase):
         ])
         self.assertEqual(args.microcosmos_xlsx, Path("microcosmos.xlsx"))
         self.assertEqual(args.as_of.isoformat(), "2026-09-10")
+
+    def test_report_commands_accept_octoflow_only_mode(self):
+        report = parser().parse_args([
+            "report", "--kear-id", "k", "--logical-application-name", "app",
+            "--application-label", "APP", "--environment", "PRD", "--octoflow",
+        ])
+        batch = parser().parse_args([
+            "report-batch", "--microcosmos-xlsx", "microcosmos.xlsx", "--octoflow",
+        ])
+        self.assertTrue(report.octoflow)
+        self.assertTrue(batch.octoflow)
 
     def test_report_options_form_ordered_application_environment_pairs(self):
         args = parser().parse_args([

@@ -4,3 +4,4 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/collection_common.sh"
 rr_prepare
 rr_lock
 rr_cli collect-policy
+rr_cli bouquets-report --email

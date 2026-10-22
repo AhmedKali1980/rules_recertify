@@ -770,6 +770,9 @@ Microcosmos environment is matched to `env`; one source row is expanded when a
 module resolves to more than one full app label. The output begins with the
 canonical Microcosmos columns, renames its program to `Program (MIO)`, then
 adds `app`, `Program (KPI)`, match status, and the existing compliance fields.
+The Microcosmos reader expects its native two-row header: it identifies the
+required fields on the first row, skips the second sub-header row, and ignores
+unrelated grouped columns (including merged cells with empty first-row names).
 Matching is anchored to exact label values within
 `ruleset_scope`, `src_labels`, or `dst_labels`.
 

@@ -153,11 +153,15 @@ def _load_scope_input(input_path: Optional[Path], labels_path: Path) -> Tuple[Li
         workbook = load_workbook(input_path, read_only=True, data_only=True)
         iterator = workbook.active.iter_rows(values_only=True)
         headers = [str(value or "").strip() for value in next(iterator, ())]
-        values = list(iterator)
+        second_row = next(iterator, ())
+        microcosmos_input = _is_microcosmos_headers(headers)
+        # Microcosmos exports use two header rows.  The second row contains
+        # sub-headings for unrelated grouped columns and is never application data.
+        values = list(iterator) if microcosmos_input else [second_row, *iterator]
         workbook.close()
         rows = [
             {header: str(row[index] or "").strip() if index < len(row) else ""
-             for index, header in enumerate(headers)}
+             for index, header in enumerate(headers) if header}
             for row in values if any(str(value or "").strip() for value in row)
         ]
     elif input_path.suffix.casefold() == ".csv":
@@ -174,15 +178,13 @@ def _load_scope_input(input_path: Optional[Path], labels_path: Path) -> Tuple[Li
             ]
     else:
         raise ValueError("compliance input must be a CSV or XLSX file")
+    if input_path.suffix.casefold() == ".xlsx" and _is_microcosmos_headers(headers):
+        return _prepare_microcosmos_input(rows, headers, labels_path)
     if any(not header for header in headers):
         raise ValueError("compliance input contains an empty column header")
     if len({header.casefold() for header in headers}) != len(headers):
         raise ValueError("compliance input contains duplicate column headers")
     header_names = {header.casefold(): header for header in headers}
-    if input_path.suffix.casefold() == ".xlsx" and {
-        name.casefold() for name in MICROCOSMOS_REQUIRED_COLUMNS
-    }.issubset(header_names):
-        return _prepare_microcosmos_input(rows, headers, labels_path)
     if "app" not in header_names:
         raise ValueError(
             "compliance input must contain an app column, or be a Microcosmos XLSX "
@@ -215,13 +217,8 @@ def _prepare_microcosmos_input(
         elif key == "env":
             environments.setdefault(value.casefold(), value)
 
-    canonical_by_name = {column.casefold(): column for column in MICROCOSMOS_COLUMNS}
     source_by_name = {header.casefold(): header for header in headers}
-    extras = [
-        header for header in headers
-        if header.casefold() not in canonical_by_name and header.casefold() != "program"
-    ]
-    output_columns = [*MICROCOSMOS_COLUMNS, "app", *extras]
+    output_columns = [*MICROCOSMOS_COLUMNS, "app"]
     prepared: List[Dict[str, str]] = []
     for source in rows:
         module = _get_case_insensitive(source, "Module").strip()
@@ -234,14 +231,18 @@ def _prepare_microcosmos_input(
                 if column == "Program (MIO)" and source_name is None:
                     source_name = source_by_name.get("program")
                 output[column] = str(source.get(source_name, "") or "") if source_name else ""
-            for column in extras:
-                output[column] = str(source.get(column, "") or "")
             output["app"] = app
             output["__compliance_env"] = environments.get(environment.casefold(), environment)
             prepared.append(output)
     if not prepared:
         raise ValueError("compliance input contains no non-empty Microcosmos row")
     return prepared, output_columns
+
+
+def _is_microcosmos_headers(headers: Sequence[str]) -> bool:
+    """Recognize the first of the two header rows in a Microcosmos workbook."""
+    available = {header.casefold() for header in headers if header}
+    return {name.casefold() for name in MICROCOSMOS_REQUIRED_COLUMNS}.issubset(available)
 
 
 def _module_from_app(app: str) -> str:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from rules_recertify.reporting.compliance import (
     _contains_user_iplist, _extrascope_warning, _factor_side, _global_consumer_in_use,
-    _has_intra_zone_iplist,
+    _has_intra_zone_iplist, _is_microcosmos_headers,
     _load_scope_input, _module_from_app, _prepare_microcosmos_input,
     _programs_for_app, _rule_matches_scope, _ruleset_scope_context,
 )
@@ -119,8 +119,9 @@ class ComplianceTest(unittest.TestCase):
             sheet = workbook.active
             sheet.append([
                 "Kear Id", "Application Name", "Module", "Account", "Account Leader",
-                "Microsegmentation Solution", "Environment", "Entity", "Program", "Owner",
+                "Microsegmentation Solution", "Environment", "Entity", "Program", "",
             ])
+            sheet.append(["", "", "", "", "", "", "", "", "", "Sub-header"])
             sheet.append([
                 "K123", "Payments", "X232223", "GBTO", "Alice", "Illumio", "prd",
                 "Server", "MIO_ONE", "Bob",
@@ -133,18 +134,17 @@ class ComplianceTest(unittest.TestCase):
             "Kear Id", "Application Name", "Module", "Account", "Account Leader",
             "Microsegmentation Solution", "Environment", "Entity", "Program (MIO)",
         ])
-        self.assertEqual(columns[9:], ["app", "Owner"])
+        self.assertEqual(columns[9:], ["app"])
         self.assertEqual(rows[0]["app"], "APM_L3.GBTO.EUR_X232223")
         self.assertEqual(rows[0]["__compliance_env"], "PRD")
         self.assertEqual(rows[0]["Program (MIO)"], "MIO_ONE")
-        self.assertEqual(rows[0]["Owner"], "Bob")
 
     def test_microcosmos_module_is_the_suffix_after_second_underscore(self):
         self.assertEqual(_module_from_app("APM_L3.GBTO.EUR_X232223"), "X232223")
         self.assertEqual(_module_from_app("APP_WITH_MORE_UNDERSCORES"), "MORE_UNDERSCORES")
         self.assertEqual(_module_from_app("APP_ONLY"), "")
 
-    def test_microcosmos_preparation_preserves_extras_and_resolves_scope(self):
+    def test_microcosmos_preparation_ignores_unwanted_columns_and_resolves_scope(self):
         with tempfile.TemporaryDirectory() as directory:
             labels = Path(directory) / "labels.csv"
             labels.write_text(
@@ -164,10 +164,17 @@ class ComplianceTest(unittest.TestCase):
             "Kear Id", "Application Name", "Module", "Account", "Account Leader",
             "Microsegmentation Solution", "Environment", "Entity", "Program (MIO)", "app",
         ])
-        self.assertEqual(columns[-1], "Owner")
+        self.assertEqual(columns[-1], "app")
         self.assertEqual(rows[0]["app"], "APM_L3.GBTO.EUR_X232223")
         self.assertEqual(rows[0]["__compliance_env"], "PRD")
         self.assertEqual(rows[0]["Program (MIO)"], "")
+
+    def test_microcosmos_header_detection_tolerates_empty_merged_headers(self):
+        self.assertTrue(_is_microcosmos_headers([
+            "Kear Id", "Application Name", "Module", "Account", "Account Leader",
+            "Microsegmentation Solution", "Environment", "Entity", "", "",
+        ]))
+        self.assertFalse(_is_microcosmos_headers(["app", "env", "Owner"]))
 
 
 if __name__ == "__main__":

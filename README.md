@@ -409,7 +409,10 @@ dans le résultat. Un XLSX Microcosmos peut alternativement fournir ses colonnes
 `Microsegmentation Solution`, `Environment`, `Entity` et `Program` (optionnelle).
 Le `Module` est résolu par correspondance exacte avec la partie du label `app`
 située après son deuxième underscore. Le résultat distingue `Program (MIO)` de
-`Program (KPI)`. Le rapport consolide Source/Destination, les programmes
+`Program (KPI)`. Le lecteur reconnaît les deux lignes d'entête natives du XLSX
+Microcosmos, ignore la seconde ligne de sous-entêtes et les colonnes groupées
+non utilisées, y compris leurs cellules d'entête fusionnées ou vides. Le rapport
+consolide Source/Destination, les programmes
 `KPI_PROGRAM_*`, les IP Lists utilisateur et intra-zone, et une colonne par
 catalogue configuré dans `dangerous_port_lists`.
 Un sélecteur `All workloads` est enrichi avec le contexte du `ruleset_scope`,

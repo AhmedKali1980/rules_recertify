@@ -11,6 +11,6 @@ setup(
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     install_requires=[],
-    extras_require={"reporting": ["openpyxl>=3.0"]},
+    extras_require={"reporting": ["openpyxl>=3.1"]},
     entry_points={"console_scripts": ["rules-recertify=rules_recertify.cli:main"]},
 )

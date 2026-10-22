@@ -404,9 +404,20 @@ La commande suivante évalue toutes les applications du snapshot courant :
 
 `--input <csv-ou-xlsx>` permet de limiter le rapport à une colonne `app` et à
 une colonne `env` optionnelle, tout en recopiant toutes les colonnes d'entrée
-dans le résultat. Le rapport consolide Source/Destination, les programmes
+dans le résultat. Un XLSX Microcosmos peut alternativement fournir ses colonnes
+`Kear Id`, `Application Name`, `Module`, `Account`, `Account Leader`,
+`Microsegmentation Solution`, `Environment`, `Entity` et `Program` (optionnelle).
+Le `Module` est résolu par correspondance exacte avec la partie du label `app`
+située après son deuxième underscore. Le résultat distingue `Program (MIO)` de
+`Program (KPI)`. Le rapport consolide Source/Destination, les programmes
 `KPI_PROGRAM_*`, les IP Lists utilisateur et intra-zone, et une colonne par
 catalogue configuré dans `dangerous_port_lists`.
+Un sélecteur `All workloads` est enrichi avec le contexte du `ruleset_scope`,
+par exemple `All workloads (app:PAYMENTS; env:PRD)`. La colonne dédiée
+`Global Consumer in use` reste normalement à `FALSE`. Elle devient `TRUE`, avec
+un message explicite dans la colonne `Warning`, uniquement lorsqu'une règle
+Extrascope combine `unscoped_consumers=TRUE` et `src_all_workloads=TRUE`, car
+elle consomme alors l'ensemble des workloads managés du PCE.
 
 ## Rapport des rulesets BOUQUETS INFRA
 

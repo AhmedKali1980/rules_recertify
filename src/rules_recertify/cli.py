@@ -131,7 +131,8 @@ def parser() -> argparse.ArgumentParser:
         "compliance-report", help="Evaluate snapshot rules for application scopes",
     )
     compliance.add_argument("--input", type=Path,
-                            help="Optional CSV/XLSX containing app and optional env columns")
+                            help=("Optional CSV/XLSX containing app and optional env columns, "
+                                  "or a Microcosmos XLSX containing Module and Environment"))
     compliance.add_argument("--out", type=Path,
                             help="Output XLSX path (default: output_dir/compliance_<timestamp>.xlsx)")
     bouquets = commands.add_parser(

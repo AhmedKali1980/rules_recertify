@@ -758,9 +758,19 @@ semicolons, not embedded line breaks.
 
 `compliance-report` evaluates the materialized `snapshot/rules_inventory.csv`.
 Without `--input`, every `app` entry in `snapshot/labels.csv` is evaluated.
-With `--input <csv-or-xlsx>`, `app` is required and `env` is optional; all input
-columns are reproduced in the output. An absent `env` matches the application
-in every environment. Matching is anchored to exact label values within
+With `--input <csv-or-xlsx>`, the standard format requires `app` and accepts an
+optional `env`; all input columns are reproduced in the output. An absent `env`
+matches the application in every environment. A Microcosmos XLSX can instead
+provide `Kear Id`, `Application Name`, `Module`, `Account`, `Account Leader`,
+`Microsegmentation Solution`, `Environment`, `Entity`, and the optional future
+`Program` column. `Module` is resolved to the full application label by exact
+comparison with the portion of each `labels.csv` app value after its second
+underscore (for example `X232223` resolves to `APM_L3.GBTO.EUR_X232223`). The
+Microcosmos environment is matched to `env`; one source row is expanded when a
+module resolves to more than one full app label. The output begins with the
+canonical Microcosmos columns, renames its program to `Program (MIO)`, then
+adds `app`, `Program (KPI)`, match status, and the existing compliance fields.
+Matching is anchored to exact label values within
 `ruleset_scope`, `src_labels`, or `dst_labels`.
 
 ```bash
@@ -774,6 +784,13 @@ The workbook includes `KPI_PROGRAM_*` membership from
 flags for `U_` and `USR_`; one finding column for each configured
 `dangerous_port_lists` catalogue after expansion through `export_services.csv`;
 and ruleset-wide `Intra-zone` classification for `NZ3_` or `ZNOT_NZ3` IP Lists.
+An `All workloads` selector includes the application and environment context
+from `ruleset_scope`, for example `All workloads (app:PAYMENTS; env:PRD)`.
+The dedicated `Global Consumer in use` column is normally `FALSE`. It becomes
+`TRUE` only when both `unscoped_consumers` and `src_all_workloads` are true,
+meaning that an Extrascope rule consumes every managed workload in the PCE.
+In that critical case the `Warning` column reports `WARNING: Global Consumer
+applies the rule to all managed workloads in the PCE`.
 
 ### 6.3 Infrastructure bouquet workbook
 

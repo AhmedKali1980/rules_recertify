@@ -379,6 +379,10 @@ zones sont les IP Lists `NZ3_*` contenant intégralement les adresses ou subnets
 du côté concerné (`Any` en absence de correspondance). `Disabled`,
 `dangerous_rule`, puis `dangerous_ports` avec exactement la valeur calculée
 dans `Expanded Rules`, les compteurs et le dernier hit sont également exposés.
+La colonne `shadow` est renommée `shadowed`. Une colonne vide
+`permissiveness_attention_point` termine systématiquement la feuille, aussi
+bien dans les rapports standards que dans les exports `--octoflow` produits
+par `report` ou `report-batch`.
 
 Le seuil de permissivité se configure dans `config/local.json` :
 

@@ -122,7 +122,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
             "from_zone": _zones_for_addresses(source_addresses, prepared_nz3),
             "to_zone": _zones_for_addresses(destination_addresses, prepared_nz3),
             "Disabled": "FALSE" if rule["ruleset_enabled"] and rule["rule_enabled"] else "TRUE",
-            "shadow": "N/A",
+            "shadowed": "N/A",
             "creation_time": lifecycle[rule["rule_href"]]["creation_time"],
             "last_modified": lifecycle[rule["rule_href"]]["last_modified"],
             "last_hit": last_hit,
@@ -133,6 +133,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
             "nb_src_ips": expanded["nb_src_ips"],
             "nb_dst_ips": expanded["nb_dst_ips"],
             "nb_ports": expanded["nb_ports"],
+            "permissiveness_attention_point": "",
         })
         for usage in usage_by_rule[rule["rule_href"]]:
             usage_rows.append({"KEAR ID": kear, "Rule Href": rule["rule_href"], "Window Start": usage["window_start"],

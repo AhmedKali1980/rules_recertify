@@ -452,6 +452,8 @@ interpretation of selectors and services. Its `dangerous_ports` column follows
 IPv4 range containment. Rule lifecycle timestamps come from append-only
 `rule_history` observations; positive completed usage windows provide
 `last_hit`. The permissive-address threshold is configuration controlled.
+The consumer contract names the shadow indicator `shadowed` and ends with an
+intentionally empty `permissiveness_attention_point` extension column.
 IP counts are union cardinalities, not displayed-row counts; Any is the exact
 sum of the complete IPv4 and IPv6 spaces. Values beyond Excel numeric precision
 are stored as decimal text. Port counts cover distinct explicit TCP/UDP ports,

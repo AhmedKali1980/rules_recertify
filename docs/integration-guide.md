@@ -741,7 +741,7 @@ as `TCP/22` and `TCP/5900-5906`. The unexplained `/3` and `/14` suffixes from a
 legacy spreadsheet are not protocol or port syntax and are not emitted without
 an authoritative severity mapping.
 
-The `Octoflow` sheet exposes the 25-column consumer contract. The
+The `Octoflow` sheet exposes the 26-column consumer contract. The
 `dangerous_ports` column immediately follows `dangerous_rule` and contains the
 exact value computed for `Expanded Rules.dangerous_ports`. Its NZ3 zones are
 computed by full containment of expanded IPv4 addresses, ranges, or subnets;
@@ -753,6 +753,10 @@ this schema cannot be reconstructed. `last_hit` uses the latest positive,
 completed usage window independently of the report lookback.
 Multiple values in its `sources` and `destinations` columns are separated by
 semicolons, not embedded line breaks.
+The former `shadow` field is named `shadowed`, and the final
+`permissiveness_attention_point` column is intentionally empty for downstream
+consumer enrichment. These columns are identical in standard and `--octoflow`
+workbooks, for both `report` and `report-batch`.
 
 ### 6.2 Rule-compliance workbook
 

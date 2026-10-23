@@ -500,10 +500,14 @@ class WorkbookExpansionTest(unittest.TestCase):
             self.assertEqual(octoflow_values["nb_dst_ips"], 256)
             self.assertEqual(octoflow_values["dangerous_rule"], "TRUE")
             self.assertEqual(octoflow_values["dangerous_ports"], values["dangerous_ports"])
+            self.assertEqual(octoflow_values["shadowed"], "N/A")
+            self.assertNotIn("shadow", octoflow_values)
+            self.assertIsNone(octoflow_values["permissiveness_attention_point"])
             headers = [cell.value for cell in octoflow[1]]
             self.assertEqual(
                 headers.index("dangerous_ports"), headers.index("dangerous_rule") + 1,
             )
+            self.assertEqual(headers[-1], "permissiveness_attention_point")
 
             octoflow_target = generate_workbook(
                 db, root / "octoflow", "KEAR", "Application", ["APP"], ["PRD"], 1,
@@ -515,3 +519,7 @@ class WorkbookExpansionTest(unittest.TestCase):
                       for cell in octoflow_workbook["Octoflow"][1]}
             self.assertNotIn("\n", values["sources"])
             self.assertNotIn("\n", values["destinations"])
+            self.assertIn("dangerous_ports", values)
+            self.assertIn("shadowed", values)
+            self.assertNotIn("shadow", values)
+            self.assertIn("permissiveness_attention_point", values)

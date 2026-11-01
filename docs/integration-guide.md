@@ -863,6 +863,29 @@ interval. Named services are expanded from the newest timestamped
   --items /data/search_items.csv --out /data/rules_items_search.xlsx
 ```
 
+## 7.1 Network-aware IP List search
+
+`search-iplists` searches the current `snapshot/export_iplists.csv` and
+`snapshot/export_iplists.derived.csv` references for IP Lists containing each
+user-supplied address or subnet. The CSV or XLSX input must contain an `ip`,
+`subnet`, or `ip/subnet` column (case-insensitive); every input column is
+preserved in the output.
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  search-iplists --input /data/ip-subnets.xlsx \
+  --out var/output/iplist-search.xlsx
+```
+
+Matching uses parsed IPv4/IPv6 address spans rather than text comparison. An
+input address matches a containing address, CIDR, or range. An input subnet
+matches only when the IP List member contains the complete subnet. Universal
+members (`0.0.0.0/0` and `::/0`) are excluded so generic `Any` lists do not
+flood the result. `IP List Matches` retains unmatched and invalid input rows
+with explicit `NO_MATCH` and `INVALID_INPUT` statuses; matching rows identify
+the IP List, the exact containing members, and their source snapshot exports.
+When several IP Lists match, the original row is repeated once per list.
+
 ## 8. Test procedure
 
 ### 8.1 Offline automated suite

@@ -473,6 +473,28 @@ ligne par couple élément/règle, avec `found as` et `match details`) et
 `Metadata` (snapshot des règles et référence services). Les éléments sans
 correspondance sont conservés avec le statut `NOT_USED_IN_ANY_RULE`.
 
+## Recherche d'IP Lists par adresse ou sous-réseau
+
+`search-iplists` accepte un CSV ou XLSX contenant une colonne `ip`, `subnet` ou
+`ip/subnet`. Toutes les colonnes d'entrée sont conservées dans le classeur de
+résultat. La recherche utilise les deux références du snapshot lorsqu'elles
+existent (`export_iplists.csv` et `export_iplists.derived.csv`) et compare les
+réseaux, pas de simples chaînes de caractères : une adresse ou un sous-réseau
+d'entrée correspond lorsque l'élément d'une IP List le contient entièrement.
+Les adresses, CIDR et plages IP sont pris en charge. Les entrées universelles
+`0.0.0.0/0` et `::/0` sont volontairement ignorées.
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  search-iplists --input /data/ip-subnets.xlsx \
+  --out var/output/iplist-search.xlsx
+```
+
+La feuille `IP List Matches` ajoute le statut (`MATCHED`, `NO_MATCH` ou
+`INVALID_INPUT`), la valeur normalisée, le nom de l'IP List, ses éléments ayant
+effectivement contenu l'entrée et le ou les exports de référence. Une ligne
+d'entrée est répétée si elle correspond à plusieurs IP Lists.
+
 The standard production installation root is:
 
 ```text

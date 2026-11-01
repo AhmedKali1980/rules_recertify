@@ -111,6 +111,13 @@ class CliTest(unittest.TestCase):
         self.assertEqual(supplied.input, Path("scopes.csv"))
         self.assertEqual(supplied.out, Path("compliance.xlsx"))
 
+    def test_iplist_search_accepts_input_and_output(self):
+        args = parser().parse_args([
+            "search-iplists", "--input", "addresses.xlsx", "--out", "matches.xlsx",
+        ])
+        self.assertEqual(args.input, Path("addresses.xlsx"))
+        self.assertEqual(args.out, Path("matches.xlsx"))
+
     def test_bouquets_report_accepts_optional_output(self):
         defaults = parser().parse_args(["bouquets-report"])
         supplied = parser().parse_args([

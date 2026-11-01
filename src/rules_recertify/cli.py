@@ -23,6 +23,7 @@ from .reporting.workbook import generate_workbook
 from .reporting.compliance import generate_compliance_workbook
 from .reporting.bouquets import generate_bouquets_workbook
 from .reporting.microcosmos import generate_microcosmos_reports
+from .reporting.iplist_search import generate_iplist_search_workbook
 from .reporting.rule_search import generate_rule_search_workbook
 from .workloader.csvio import read_rows
 
@@ -127,6 +128,15 @@ def parser() -> argparse.ArgumentParser:
                         help="Output XLSX path (default: output_dir/rules_items_search_<UTC timestamp>.xlsx)")
     search.add_argument("--case-sensitive", action="store_true",
                         help="Use case-sensitive text matching (ports are unaffected)")
+    iplist_search = commands.add_parser(
+        "search-iplists", help="Find snapshot IP Lists containing input IPs or subnets",
+    )
+    iplist_search.add_argument("--input", type=Path, required=True,
+                               help="CSV/XLSX containing an ip, subnet, or ip/subnet column")
+    iplist_search.add_argument(
+        "--out", type=Path,
+        help="Output XLSX path (default: output_dir/iplist_search_<UTC timestamp>.xlsx)",
+    )
     compliance = commands.add_parser(
         "compliance-report", help="Evaluate snapshot rules for application scopes",
     )
@@ -345,6 +355,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(generate_rule_search_workbook(
                 db, args.items, target, raw_dir=Path(settings.raw_dir),
                 case_sensitive=args.case_sensitive,
+            ))
+            return 0
+        if args.command == "search-iplists":
+            target = args.out or Path(settings.output_dir) / (
+                "iplist_search_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
+            )
+            print(generate_iplist_search_workbook(
+                Path(settings.raw_dir), args.input, target,
             ))
             return 0
         if args.command == "compliance-report":

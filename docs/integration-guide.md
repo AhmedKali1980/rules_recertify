@@ -828,6 +828,13 @@ time. The command requires a complete current policy snapshot, including
 `export_iplists.csv`, `export_wkld.csv`, and `export_services.csv`. Workloads
 are sorted by `app`, then `env`; Label Groups are sorted by `key`, then `name`.
 
+Every successful policy publication normalizes the complete materialized
+snapshot before its atomic rename. Snapshot directories use mode `2750` and
+all files use mode `0640`, so every member of the owning operations group can
+read all standard and derived references while group write and world access
+remain disabled. This prevents restrictive source modes such as `0600` from
+leaking into `var/raw/snapshot`.
+
 ## 7. Rule-item search
 
 `search-rules` reads one item per row from a one-column CSV, text, or XLSX file
@@ -885,6 +892,9 @@ flood the result. `IP List Matches` retains unmatched and invalid input rows
 with explicit `NO_MATCH` and `INVALID_INPUT` statuses; matching rows identify
 the IP List, the exact containing members, and their source snapshot exports.
 When several IP Lists match, the original row is repeated once per list.
+If one snapshot export exists but is unreadable by the service account, the
+other export remains usable and the skipped path and operating-system error are
+recorded in `Metadata`. The command fails only when neither export is readable.
 
 ## 8. Test procedure
 

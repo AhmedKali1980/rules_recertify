@@ -442,6 +442,12 @@ le type exact de chaque objet, puis ajoute les
 dictionnaires `iplists`, `workloads` et `labelgroups` issus des exports du
 snapshot.
 
+Lors de chaque `collect-policy` — donc lors du daily policy job — la publication
+atomique normalise les droits de `var/raw/snapshot` : répertoires en `2750` et
+fichiers en `0640`. Tous les membres du groupe propriétaire peuvent ainsi lire
+les références, y compris les fichiers `.derived.csv`, sans les rendre lisibles
+par les autres utilisateurs du serveur ni modifiables par le groupe.
+
 ## Recherche de règles par éléments
 
 La commande `search-rules` produit un classeur indépendant des données de flux
@@ -483,6 +489,10 @@ réseaux, pas de simples chaînes de caractères : une adresse ou un sous-résea
 d'entrée correspond lorsque l'élément d'une IP List le contient entièrement.
 Les adresses, CIDR et plages IP sont pris en charge. Les entrées universelles
 `0.0.0.0/0` et `::/0` sont volontairement ignorées.
+Si l'un des deux exports existe mais n'est pas lisible par le compte de service,
+la commande utilise automatiquement l'autre export et consigne le fichier
+ignoré dans `Metadata`. Elle échoue avec un message explicite uniquement si
+aucune des deux références n'est lisible.
 
 ```bash
 ./scripts/rules-recertify --config config/local.json --env-file .env \

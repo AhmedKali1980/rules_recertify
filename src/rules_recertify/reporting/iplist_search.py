@@ -29,14 +29,26 @@ def generate_iplist_search_workbook(raw_dir: Path, input_path: Path, output: Pat
             snapshot / "export_iplists.csv",
             snapshot / "export_iplists.derived.csv",
         )
-        if path.is_file() and path.stat().st_size
+        if path.is_file()
     ]
     if not references:
         raise ValueError(
-            "IP List snapshot export is missing or empty: expected export_iplists.csv "
+            "IP List snapshot export is missing: expected export_iplists.csv "
             "or export_iplists.derived.csv"
         )
-    ip_lists = _load_ip_lists(references)
+    loaded_references: List[Path] = []
+    skipped_references: List[Tuple[Path, str]] = []
+    ip_lists = _load_ip_lists(
+        references, loaded_paths=loaded_references, skipped_paths=skipped_references,
+    )
+    if not loaded_references:
+        details = "; ".join(
+            f"{path}: {reason}" for path, reason in skipped_references
+        )
+        raise ValueError(
+            "No readable IP List snapshot export is available"
+            + (f" ({details})" if details else "")
+        )
 
     result_rows: List[Dict[str, object]] = []
     for input_row in input_rows:
@@ -77,7 +89,10 @@ def generate_iplist_search_workbook(raw_dir: Path, input_path: Path, output: Pat
     _write_sheet(workbook, "Metadata", [{
         "input": str(input_path),
         "input columns": ";".join(input_columns),
-        "IP List references": ";".join(str(path) for path in references),
+        "IP List references": ";".join(str(path) for path in loaded_references),
+        "unreadable references skipped": ";".join(
+            f"{path} ({reason})" for path, reason in skipped_references
+        ),
         "Any members ignored": "0.0.0.0/0;::/0",
         "generated at UTC": datetime.now(timezone.utc).isoformat(),
     }])
@@ -200,10 +215,27 @@ def _is_any_span(span: AddressSpan) -> bool:
     return start == 0 and end == (2 ** (32 if version == 4 else 128)) - 1
 
 
-def _load_ip_lists(paths: Sequence[Path]) -> List[Dict[str, object]]:
+def _load_ip_lists(
+    paths: Sequence[Path], loaded_paths: Optional[List[Path]] = None,
+    skipped_paths: Optional[List[Tuple[Path, str]]] = None,
+) -> List[Dict[str, object]]:
+    """Load every readable reference, tolerating an inaccessible alternative.
+
+    The complete and derived exports are alternative sources for this report.
+    Production snapshots can contain one file with stricter ownership, so a
+    permission problem on one export must not hide usable data from the other.
+    """
     combined: Dict[str, Dict[str, object]] = {}
     for path in paths:
-        for row in read_rows(path, IPLIST_FIELDS):
+        try:
+            rows = list(read_rows(path, IPLIST_FIELDS))
+        except OSError as exc:
+            if skipped_paths is not None:
+                skipped_paths.append((path, str(exc)))
+            continue
+        if loaded_paths is not None:
+            loaded_paths.append(path)
+        for row in rows:
             name = row["name"].strip()
             if not name:
                 continue

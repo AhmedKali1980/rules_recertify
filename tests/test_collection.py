@@ -348,6 +348,12 @@ class CollectionTest(unittest.TestCase):
     'export_wkld.derived.csv','export_iplists.derived.csv','labels.csv',
     'rulesets.csv','rules_inventory.csv','manifest.json',
    }.issubset({path.name for path in (root/'raw'/'snapshot').iterdir()}))
+   snapshot_dir=root/'raw'/'snapshot'
+   self.assertEqual(stat.S_IMODE(snapshot_dir.stat().st_mode),0o2750)
+   self.assertTrue(all(
+    stat.S_IMODE(path.stat().st_mode)==0o640
+    for path in snapshot_dir.rglob('*') if path.is_file()
+   ))
    self.assertEqual(
     [path.name for path in (root/'raw').iterdir() if path.is_dir()],
     ['snapshot'],

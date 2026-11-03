@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from rules_recertify.reporting.iplist_search import (
     _input_value, _is_any_span, _load_ip_lists, _load_search_input,
@@ -61,6 +62,29 @@ class IpListSearchTest(unittest.TestCase):
     def test_invalid_query_is_rejected(self):
         with self.assertRaises(ValueError):
             _parse_query("not-an-address")
+
+    def test_unreadable_alternative_export_is_skipped(self):
+        complete = Path("export_iplists.csv")
+        derived = Path("export_iplists.derived.csv")
+
+        def fake_read_rows(path, _fields):
+            if path == derived:
+                raise PermissionError(13, "Permission denied", str(path))
+            return iter([{"name": "APP_NET", "include": "10.20.0.0/16"}])
+
+        loaded = []
+        skipped = []
+        with patch(
+            "rules_recertify.reporting.iplist_search.read_rows",
+            side_effect=fake_read_rows,
+        ):
+            rows = _load_ip_lists(
+                [complete, derived], loaded_paths=loaded, skipped_paths=skipped,
+            )
+        self.assertEqual(loaded, [complete])
+        self.assertEqual(skipped[0][0], derived)
+        self.assertIn("Permission denied", skipped[0][1])
+        self.assertEqual(rows[0]["name"], "APP_NET")
 
     def test_workbook_preserves_input_and_reports_match_statuses(self):
         try:

@@ -47,6 +47,8 @@ POLICY_REFERENCE_EXPORTS = (
     "export_wkld.csv", "export_iplists.csv", "export_services.csv", "export_labelgroups.csv",
     "export_wkld.derived.csv", "export_iplists.derived.csv",
 )
+SNAPSHOT_DIRECTORY_MODE = 0o2750
+SNAPSHOT_FILE_MODE = 0o640
 
 
 def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
@@ -948,6 +950,11 @@ def _publish_materialized_snapshot(run_dir: Path, snapshot_dir: Path) -> Optiona
             if not target.is_file() or sha256_file(source) != sha256_file(target):
                 shutil.rmtree(temporary, ignore_errors=True)
                 raise RuntimeError(f"Snapshot verification failed for {source.name}")
+    try:
+        _normalize_snapshot_permissions(temporary)
+    except OSError as exc:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise RuntimeError(f"Unable to apply snapshot permissions: {exc}") from exc
     previous: Optional[Path] = None
     if snapshot_dir.exists():
         snapshot_dir.replace(backup)
@@ -959,6 +966,20 @@ def _publish_materialized_snapshot(run_dir: Path, snapshot_dir: Path) -> Optiona
             previous.replace(snapshot_dir)
         raise
     return previous
+
+
+def _normalize_snapshot_permissions(snapshot_dir: Path) -> None:
+    """Make a published policy snapshot readable by the owning team group.
+
+    Snapshot files must not inherit restrictive modes such as ``0600`` from
+    individual Workloader/import processes. Keep them non-public and
+    non-writable by the group while granting consistent group read access.
+    """
+    snapshot_dir.chmod(SNAPSHOT_DIRECTORY_MODE)
+    for path in snapshot_dir.rglob("*"):
+        if path.is_symlink():
+            continue
+        path.chmod(SNAPSHOT_DIRECTORY_MODE if path.is_dir() else SNAPSHOT_FILE_MODE)
 
 
 def _restore_materialized_snapshot(snapshot_dir: Path, backup: Optional[Path]) -> None:

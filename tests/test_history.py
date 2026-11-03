@@ -136,6 +136,43 @@ class HistoryTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already complete"):
                 db.begin_backfill_window("initial", "run-4")
 
+    def test_completed_backfill_can_be_extended_without_replaying_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db=Database(Path(directory)/"db.sqlite"); db.initialize()
+            db.initialize_backfill("history", "2026-06-20", "2026-09-20")
+            with db.connect() as connection:
+                connection.execute(
+                    "UPDATE backfill_states SET next_window_start='2026-09-20',"
+                    "last_successful_window_end='2026-09-20',status='COMPLETED' "
+                    "WHERE backfill_id='history'"
+                )
+            state=db.extend_backfill("history", "2026-10-11")
+            self.assertEqual(state["backfill_start"], "2026-06-20")
+            self.assertEqual(state["next_window_start"], "2026-09-20")
+            self.assertEqual(state["backfill_target_end"], "2026-10-11")
+            self.assertEqual(state["status"], "PENDING")
+            windows=[]
+            for index in range(3):
+                lease=db.begin_backfill_window("history", f"extended-{index}")
+                windows.append((lease["window_start"], lease["window_end"]))
+                db.update_backfill_window(
+                    "history", f"extended-{index}", lease["window_end"], True,
+                )
+            self.assertEqual(windows, [
+                ("2026-09-20", "2026-09-27"),
+                ("2026-09-27", "2026-10-04"),
+                ("2026-10-04", "2026-10-11"),
+            ])
+            self.assertEqual(db.backfill_state("history")["status"], "COMPLETED")
+
+    def test_running_backfill_cannot_be_extended(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db=Database(Path(directory)/"db.sqlite"); db.initialize()
+            db.initialize_backfill("history", "2026-06-20", "2026-09-20")
+            db.begin_backfill_window("history", "active")
+            with self.assertRaisesRegex(ValueError, "cannot extend a running backfill"):
+                db.extend_backfill("history", "2026-10-11")
+
     def test_92_day_backfill_has_thirteen_full_windows_and_one_partial(self):
         with tempfile.TemporaryDirectory() as directory:
             db=Database(Path(directory)/"db.sqlite"); db.initialize()

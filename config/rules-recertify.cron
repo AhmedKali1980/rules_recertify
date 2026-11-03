@@ -1,5 +1,6 @@
 # Rules Recertify production schedule (server local time).
 # Install for the service account only after the supervised manual acceptance.
+# Refresh policy, then generate and email output_dir/bouquets_<UTC timestamp>.xlsx.
 10 0 * * * cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/daily-policy-collect.sh
 0 1 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh
 0 2 * * 0 cd /DATA/mco/illumio-mco/rules_recertify && ./scripts/weekly-traffic-collect.sh

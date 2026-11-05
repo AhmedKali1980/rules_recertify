@@ -87,7 +87,7 @@ class TrafficAuditTest(unittest.TestCase):
         )
         self.assertEqual(counts["missing_result_count"], 1)
 
-    def test_invalid_rows_without_inventory_identity_are_listed_as_problematic(self):
+    def test_repeated_headers_are_hidden_but_real_malformed_rows_remain_problematic(self):
         inventory = [
             {"rule_href": "/r/ok", "ruleset_href": "/rs/ok", "ruleset_name": "OK"},
         ]
@@ -115,14 +115,11 @@ class TrafficAuditTest(unittest.TestCase):
         )
 
         problematic = [row for row in rows if row["outcome"] == "DOCUMENTED_EXCEPTION"]
-        self.assertEqual(len(problematic), 2)
-        self.assertEqual(
-            [row["reason"] for row in problematic],
-            ["INVALID_QUERY_BODY", "INVALID_QUERY_BODY"],
-        )
-        self.assertEqual([row["batch"] for row in problematic], [48, 49])
-        self.assertEqual(problematic[0]["query_body"], "query_body")
-        self.assertEqual(counts["documented_exception_rule_count"], 2)
+        self.assertEqual(len(problematic), 1)
+        self.assertEqual(problematic[0]["reason"], "INVALID_QUERY_BODY")
+        self.assertEqual(problematic[0]["batch"], 49)
+        self.assertEqual(problematic[0]["query_body"], "not-json")
+        self.assertEqual(counts["documented_exception_rule_count"], 1)
 
 
 if __name__ == "__main__":

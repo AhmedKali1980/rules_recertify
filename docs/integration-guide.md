@@ -799,6 +799,20 @@ meaning that an Extrascope rule consumes every managed workload in the PCE.
 In that critical case the `Warning` column reports `WARNING: Global Consumer
 applies the rule to all managed workloads in the PCE`.
 
+Every compliance export also includes `Kear Remote`, `Direction`, and
+`Rule Category`, and exposes the rule's `rule_description` directly from
+`rules_inventory.csv`. In Microcosmos mode, the ruleset-scope application is local;
+roles without an explicit application and `All workloads` inherit that local
+scope. An explicit different application is resolved to a remote Kear by its
+module and environment. An exact environment is preferred, while a module
+shared by environments is accepted only when all candidates have the same
+Kear. IP Lists are extrascope but do not imply a Kear. `Direction` is
+`incoming`, `outgoing`, or `intra-app`; unresolvable topologies are explicitly
+`undetermined`. Equal local and remote Kears are classified as `intra-app`.
+Rulesets beginning with `BOUQUETS_` or `GLOBAL_` are `infra_rule`; otherwise a
+deny rule or a rule using a `ZNOT_` IP List is `strategic_rule`, and remaining
+rules are `business_rule`.
+
 ### 6.3 Infrastructure bouquet workbook
 
 `bouquets-report` selects rules whose `ruleset_name` begins with the exact
@@ -845,7 +859,11 @@ Ruleset names, ruleset descriptions, and rule descriptions remain output
 columns but are deliberately excluded from matching.
 Text matching is literal, whole-item, and case-insensitive unless
 `--case-sensitive` is used. Therefore `BI` does not match `BIRO`. The same
-whole-item rule applies to direct and transitive Label Group discovery. In the
+whole-item rule applies to direct and transitive Label Group discovery.
+Punctuation is part of the object name: `APA_GCR_A7094` does not match
+`APA_GCR_A7094-FLX` or `APA_GCR_A7094.EXTRA`. Matching compares complete
+semicolon-delimited selectors (or the complete value after a label dimension
+such as `app:`), rather than looking for a substring. In the
 `Results` worksheet, match metadata precedes the rule fields, which follow the
 rule-export CSV contract order.
 All search workbook sheets use bold, color-coded headers. Status cells are

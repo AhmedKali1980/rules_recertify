@@ -4,14 +4,20 @@ import unittest
 from pathlib import Path
 
 from rules_recertify.reporting.compliance import (
+    RULE_FIELDS,
     _contains_user_iplist, _extrascope_warning, _factor_side, _global_consumer_in_use,
     _has_intra_zone_iplist, _is_microcosmos_headers,
     _load_scope_input, _module_from_app, _prepare_microcosmos_input,
-    _programs_for_app, _rule_matches_scope, _ruleset_scope_context,
+    _microcosmos_kear_lookup, _programs_for_app, _resolve_remote_kear,
+    _rule_category, _rule_matches_scope, _rule_relationship, _ruleset_scope_context,
 )
 
 
 class ComplianceTest(unittest.TestCase):
+    def test_rule_description_is_part_of_compliance_inventory_contract(self):
+        self.assertIn("rule_description", RULE_FIELDS)
+        self.assertLess(RULE_FIELDS.index("rule_description"), RULE_FIELDS.index("rule_enabled"))
+
     def test_rule_scope_matching_is_anchored_and_environment_is_optional(self):
         rule = {
             "ruleset_scope": "env:PRD;app:PAYMENTS",
@@ -175,6 +181,83 @@ class ComplianceTest(unittest.TestCase):
             "Microsegmentation Solution", "Environment", "Entity", "", "",
         ]))
         self.assertFalse(_is_microcosmos_headers(["app", "env", "Owner"]))
+
+    def test_remote_kear_prefers_environment_then_unique_cross_environment_kear(self):
+        rows = [
+            {"Module": "CG.MUREX.IAAS", "Environment": "PRD", "Kear Id": "K-ONE"},
+            {"Module": "CG.MUREX.IAAS", "Environment": "DEV", "Kear Id": "K-ONE"},
+            {"Module": "SHARED", "Environment": "PRD", "Kear Id": "K-PRD"},
+            {"Module": "SHARED", "Environment": "DEV", "Kear Id": "K-DEV"},
+        ]
+        lookup = _microcosmos_kear_lookup(rows)
+        self.assertEqual(
+            _resolve_remote_kear("APM_L3.GBTO.EUR_CG.MUREX.IAAS", "DEV", lookup),
+            ("K-ONE", ""),
+        )
+        self.assertEqual(
+            _resolve_remote_kear("APM_L3.GBTO.EUR_CG.MUREX.IAAS", "UAT", lookup),
+            ("K-ONE", ""),
+        )
+        self.assertEqual(
+            _resolve_remote_kear("APM_L3.GBTO.EUR_SHARED", "UAT", lookup),
+            ("", "REMOTE_KEAR_AMBIGUOUS"),
+        )
+
+    def test_relationship_detects_incoming_remote_app_and_same_kear_intra_app(self):
+        rule = {
+            "ruleset_name": "APP_RULESET", "rule_type": "allow",
+            "ruleset_scope": "app:APM_L3.GBTO.EUR_CG.MUREX;env:DEV",
+            "src_all_workloads": "false", "src_iplists": "",
+            "src_labels": "role:DB.OCP;app:APM_L3.GBTO.EUR_CG.MUREX.IAAS;env:DEV",
+            "dst_all_workloads": "false", "dst_iplists": "", "dst_labels": "role:DB.OCP",
+        }
+        input_row = {"Kear Id": "K-LOCAL"}
+        remote = {"cg.murex.iaas": {"dev": {"K-REMOTE"}}}
+        self.assertEqual(_rule_relationship(rule, input_row, remote), {
+            "kear_remote": "K-REMOTE", "direction": "incoming",
+            "rule_category": "business_rule", "warning": "",
+        })
+        same_kear = {"cg.murex.iaas": {"dev": {"K-LOCAL"}}}
+        self.assertEqual(_rule_relationship(rule, input_row, same_kear)["direction"], "intra-app")
+
+    def test_relationship_handles_local_roles_all_workloads_iplists_and_ambiguity(self):
+        base = {
+            "ruleset_name": "APP_RULESET", "rule_type": "allow",
+            "ruleset_scope": "app:APM_L3.GBTO.EUR_LOCAL;env:PRD",
+            "src_all_workloads": "false", "src_iplists": "", "src_labels": "role:WEB",
+            "dst_all_workloads": "false", "dst_iplists": "", "dst_labels": "role:DB",
+        }
+        local = _rule_relationship(base, {"Kear Id": "K-LOCAL"}, {})
+        self.assertEqual((local["kear_remote"], local["direction"]), ("K-LOCAL", "intra-app"))
+
+        incoming = dict(base, src_labels="", src_iplists="EXT_NET")
+        self.assertEqual(_rule_relationship(incoming, {"Kear Id": "K-LOCAL"}, {})["direction"], "incoming")
+        outgoing = dict(base, dst_labels="", dst_all_workloads="true", src_iplists="")
+        self.assertEqual(_rule_relationship(outgoing, {"Kear Id": "K-LOCAL"}, {})["direction"], "intra-app")
+        outgoing = dict(base, dst_labels="", dst_iplists="EXT_NET")
+        self.assertEqual(_rule_relationship(outgoing, {"Kear Id": "K-LOCAL"}, {})["direction"], "outgoing")
+        ambiguous = dict(base, src_labels="", src_iplists="EXT_A", dst_labels="", dst_iplists="EXT_B")
+        result = _rule_relationship(ambiguous, {"Kear Id": "K-LOCAL"}, {})
+        self.assertEqual(result["direction"], "undetermined")
+        self.assertEqual(result["warning"], "DIRECTION_UNDETERMINED")
+
+    def test_rule_category_precedence(self):
+        self.assertEqual(_rule_category({
+            "ruleset_name": "GLOBAL_BASE", "rule_type": "deny",
+            "src_iplists": "ZNOT_ADMIN", "dst_iplists": "",
+        }), "infra_rule")
+        self.assertEqual(_rule_category({
+            "ruleset_name": "APP_RULESET", "rule_type": "deny",
+            "src_iplists": "", "dst_iplists": "",
+        }), "strategic_rule")
+        self.assertEqual(_rule_category({
+            "ruleset_name": "APP_RULESET", "rule_type": "allow",
+            "src_iplists": "", "dst_iplists": "ZNOT_REMOTE",
+        }), "strategic_rule")
+        self.assertEqual(_rule_category({
+            "ruleset_name": "APP_RULESET", "rule_type": "allow",
+            "src_iplists": "NOT_ZNOT_REMOTE", "dst_iplists": "",
+        }), "business_rule")
 
 
 if __name__ == "__main__":

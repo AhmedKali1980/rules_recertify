@@ -193,6 +193,34 @@ class RuleSearchTest(unittest.TestCase):
         self.assertEqual(group_by_item["BI"]["status"], "FOUND")
         self.assertEqual(group_by_item["BIR"]["status"], "NOT_USED_IN_ANY_LABEL_GROUP")
 
+    def test_text_search_does_not_match_hyphenated_or_dotted_suffixes(self):
+        exact_raw = {
+            "rule_href": "/r/exact", "ruleset_href": "/rs",
+            "src_labels": "app:APA_GCR_A7094",
+        }
+        suffixed_raw = {
+            "rule_href": "/r/suffixed", "ruleset_href": "/rs",
+            "src_labels": "app:APA_GCR_A7094-FLX;role:APA_GCR_A7094.EXTRA",
+        }
+        rules = [
+            {**raw, "raw_json": json.dumps(raw), "snapshot_at": "now"}
+            for raw in (exact_raw, suffixed_raw)
+        ]
+        results, summary = search_latest_rules(rules, ["APA_GCR_A7094"], {}, False)
+        matched = [row["rule_href"] for row in results if row["status"] == "FOUND"]
+        self.assertEqual(matched, ["/r/exact"])
+        self.assertEqual(summary[0]["matching rules"], 1)
+
+        groups = [{
+            "name": "GROUP", "key": "app",
+            "member_labels": "APA_GCR_A7094-FLX",
+            "member_label_groups": "",
+            "fully_expanded_members": "app:APA_GCR_A7094.EXTRA",
+            "href": "/g/1",
+        }]
+        group_rows = search_label_groups(groups, ["APA_GCR_A7094"])
+        self.assertEqual(group_rows[0]["status"], "NOT_USED_IN_ANY_LABEL_GROUP")
+
     def test_rule_search_excludes_names_and_descriptions(self):
         raw = {
             "rule_href": "/r", "ruleset_href": "/rs",

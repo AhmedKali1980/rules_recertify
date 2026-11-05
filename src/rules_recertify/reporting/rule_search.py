@@ -66,10 +66,42 @@ RESULT_RULE_FIELDS = (
 )
 
 
-def _contains_whole_item(value: object, item: str, case_sensitive: bool) -> bool:
-    flags = 0 if case_sensitive else re.IGNORECASE
-    pattern = rf"(?<![A-Za-z0-9_]){re.escape(item)}(?![A-Za-z0-9_])"
-    return re.search(pattern, str(value or ""), flags) is not None
+_LABEL_SELECTOR = re.compile(
+    r"^(?:app|env|role|loc|location|os|module)\s*:\s*(.*)$",
+    re.IGNORECASE,
+)
+_REFERENCE_ANNOTATION = re.compile(r"^(.*?)\s+\((/[^)]+)\)$")
+
+
+def _contains_exact_item(value: object, item: str, case_sensitive: bool) -> bool:
+    """Match one complete semicolon-delimited selector, never a substring.
+
+    Rule exports prefix label values with their dimension (for example
+    ``app:APA_GCR_A7094``). Compare both that complete selector and its label
+    value, but do not treat punctuation such as ``-`` or ``.`` as a boundary:
+    ``APA_GCR_A7094`` must not match ``APA_GCR_A7094-FLX``.
+    """
+    expected = item.strip()
+    if not expected:
+        return False
+
+    def equals(candidate: str) -> bool:
+        candidate = candidate.strip()
+        return candidate == expected if case_sensitive else candidate.casefold() == expected.casefold()
+
+    for token in re.split(r"[;\r\n]+", str(value or "")):
+        token = token.strip()
+        if not token:
+            continue
+        if equals(token):
+            return True
+        label = _LABEL_SELECTOR.fullmatch(token)
+        if label and equals(label.group(1)):
+            return True
+        reference = _REFERENCE_ANNOTATION.fullmatch(token)
+        if reference and (equals(reference.group(1)) or equals(reference.group(2))):
+            return True
+    return False
 
 
 def load_search_items(path: Path) -> List[str]:
@@ -179,7 +211,7 @@ def search_latest_rules(
             else:
                 for field in SEARCH_FIELDS:
                     value = str(raw.get(field, rule.get(field, "")) or "")
-                    if _contains_whole_item(value, item, case_sensitive):
+                    if _contains_exact_item(value, item, case_sensitive):
                         found_fields.append(field)
             if found_fields:
                 matched_count += 1
@@ -267,7 +299,7 @@ def search_label_groups(
     output: List[Dict[str, str]] = []
 
     def contains(value: object, needle: str) -> bool:
-        return _contains_whole_item(value, needle, case_sensitive)
+        return _contains_exact_item(value, needle, case_sensitive)
 
     for item in items:
         matched: set[int] = set()

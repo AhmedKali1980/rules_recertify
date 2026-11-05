@@ -15,9 +15,10 @@ from .workbook import _expand_services, _load_report_services
 
 
 RULE_FIELDS = (
-    "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type", "rule_enabled",
-    "unscoped_consumers", "src_all_workloads", "src_labels", "src_iplists",
-    "dst_all_workloads", "dst_labels", "dst_iplists", "services",
+    "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
+    "rule_description", "rule_enabled", "unscoped_consumers", "src_all_workloads",
+    "src_labels", "src_iplists", "dst_all_workloads", "dst_labels", "dst_iplists",
+    "services",
 )
 LABEL_GROUP_FIELDS = (
     "name", "key", "description", "member_labels", "member_label_groups",
@@ -45,6 +46,8 @@ def generate_compliance_workbook(
     if missing:
         raise ValueError("compliance snapshot file is missing or empty: " + ", ".join(missing))
     input_rows, input_columns = _load_scope_input(input_path, snapshot / "labels.csv")
+    microcosmos_input = "Program (MIO)" in input_columns
+    microcosmos_lookup = _microcosmos_kear_lookup(input_rows) if microcosmos_input else {}
     rules = list(read_rows(snapshot / "rules_inventory.csv", RULE_FIELDS))
     groups = list(read_rows(snapshot / "export_labelgroups.csv", LABEL_GROUP_FIELDS))
     services, service_reference = _load_report_services(raw_dir)
@@ -71,11 +74,14 @@ def generate_compliance_workbook(
         }
         if not matched:
             rows.append({
-                **input_values, "Program (KPI)": programs,
+                **_with_rule_enrichment_columns(input_values), "Program (KPI)": programs,
                 "Match status": "APP_NOT_FOUND" if not app else "NO_MATCH",
                 "Warning": "",
                 "Global Consumer in use": "FALSE",
-                **{field: "" for field in RULE_FIELDS[:5]},
+                **{field: "" for field in (
+                    "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
+                    "rule_description", "rule_enabled",
+                )},
                 "Source": "", "Destination": "", "Source contains User": "FALSE",
                 "Destination contains User": "FALSE",
                 "services": "",
@@ -88,16 +94,20 @@ def generate_compliance_workbook(
             source, source_kind = _factor_side(rule, "src")
             destination, destination_kind = _factor_side(rule, "dst")
             expanded_services = _expand_services(rule["services"], services)
+            enrichment = _rule_relationship(
+                rule, input_row, microcosmos_lookup if microcosmos_input else None,
+            )
             rows.append({
-                **input_values,
+                **_with_rule_enrichment_columns(input_values, enrichment),
                 "Program (KPI)": programs,
                 "Match status": "MATCHED",
-                "Warning": _extrascope_warning(rule),
+                "Warning": _join_warnings(_extrascope_warning(rule), enrichment["warning"]),
                 "Global Consumer in use": str(_global_consumer_in_use(rule)).upper(),
                 "ruleset_name": rule["ruleset_name"],
                 "ruleset_scope": rule["ruleset_scope"],
                 "ruleset_enabled": rule["ruleset_enabled"],
                 "rule_type": rule["rule_type"],
+                "rule_description": rule["rule_description"],
                 "rule_enabled": rule["rule_enabled"],
                 "Source": source,
                 "Destination": destination,
@@ -249,6 +259,158 @@ def _module_from_app(app: str) -> str:
     """Return the part after the second underscore in an application label."""
     components = app.split("_", 2)
     return components[2].strip() if len(components) == 3 else ""
+
+
+def _microcosmos_kear_lookup(
+    rows: Sequence[Mapping[str, str]],
+) -> Dict[str, Dict[str, set[str]]]:
+    """Index Microcosmos Kear IDs by module and environment."""
+    lookup: Dict[str, Dict[str, set[str]]] = {}
+    for row in rows:
+        module = _get_case_insensitive(row, "Module").strip().casefold()
+        environment = str(
+            row.get("__compliance_env", _get_case_insensitive(row, "Environment"))
+        ).strip().casefold()
+        kear = _get_case_insensitive(row, "Kear Id").strip()
+        if module and kear:
+            lookup.setdefault(module, {}).setdefault(environment, set()).add(kear)
+    return lookup
+
+
+def _resolve_remote_kear(
+    app: str, environment: str, lookup: Mapping[str, Mapping[str, set[str]]],
+) -> Tuple[str, str]:
+    """Resolve a remote app, preferring its environment without guessing."""
+    module = _module_from_app(app).casefold()
+    by_environment = lookup.get(module, {})
+    if not by_environment:
+        return "", "REMOTE_KEAR_NOT_FOUND"
+    exact = by_environment.get(environment.casefold(), set())
+    if len(exact) == 1:
+        return next(iter(exact)), ""
+    if len(exact) > 1:
+        return "", "REMOTE_KEAR_AMBIGUOUS"
+    all_kears = {kear for kears in by_environment.values() for kear in kears}
+    if len(all_kears) == 1:
+        # A single application Kear may legitimately cover PRD and DEV modules.
+        return next(iter(all_kears)), ""
+    return "", "REMOTE_KEAR_AMBIGUOUS"
+
+
+def _side_relationship(
+    rule: Mapping[str, str], prefix: str, local_app: str,
+) -> Tuple[str, set[str]]:
+    """Classify one rule side relative to the application ruleset scope."""
+    all_workloads = parse_bool(rule.get(f"{prefix}_all_workloads", ""))
+    has_iplist = bool(_iplist_names(rule.get(f"{prefix}_iplists", "")))
+    explicit_apps = _labels(rule.get(f"{prefix}_labels", "")).get("app", set())
+    local = local_app.casefold()
+    remote_apps = {app for app in explicit_apps if app != local}
+    has_local_app = local in explicit_apps
+
+    kinds = sum((bool(all_workloads), has_iplist, has_local_app, bool(remote_apps)))
+    if has_iplist and kinds > 1:
+        return "ambiguous", remote_apps
+    if all_workloads and remote_apps:
+        return "ambiguous", remote_apps
+    if has_local_app and remote_apps:
+        return "ambiguous", remote_apps
+    if has_iplist:
+        return "iplist", set()
+    if remote_apps:
+        return "remote_app", remote_apps
+    if all_workloads or has_local_app or rule.get(f"{prefix}_labels", "").strip():
+        return "local", set()
+    return "empty", set()
+
+
+def _rule_relationship(
+    rule: Mapping[str, str], input_row: Mapping[str, str],
+    lookup: Optional[Mapping[str, Mapping[str, set[str]]]],
+) -> Dict[str, str]:
+    """Calculate Kear Remote, Direction, Rule Category, and diagnostics."""
+    scope = _labels(rule.get("ruleset_scope", ""))
+    local_apps = scope.get("app", set())
+    local_app = next(iter(local_apps)) if len(local_apps) == 1 else ""
+    local_kear = _get_case_insensitive(input_row, "Kear Id").strip()
+    environment = next(iter(scope.get("env", set())), "")
+    source_kind, source_apps = _side_relationship(rule, "src", local_app)
+    destination_kind, destination_apps = _side_relationship(rule, "dst", local_app)
+    category = _rule_category(rule)
+
+    if not local_app:
+        return {"kear_remote": "", "direction": "undetermined",
+                "rule_category": category, "warning": "LOCAL_SCOPE_UNDETERMINED"}
+    if source_kind == destination_kind == "local":
+        return {"kear_remote": local_kear, "direction": "intra-app",
+                "rule_category": category, "warning": ""}
+
+    remote_apps: set[str] = set()
+    if source_kind in {"remote_app", "iplist"} and destination_kind == "local":
+        direction, remote_apps = "incoming", source_apps
+    elif source_kind == "local" and destination_kind in {"remote_app", "iplist"}:
+        direction, remote_apps = "outgoing", destination_apps
+    else:
+        return {"kear_remote": "", "direction": "undetermined",
+                "rule_category": category, "warning": "DIRECTION_UNDETERMINED"}
+
+    if not remote_apps:
+        return {"kear_remote": "", "direction": direction,
+                "rule_category": category, "warning": ""}
+    if len(remote_apps) != 1 or lookup is None:
+        warning = (
+            "REMOTE_KEAR_AMBIGUOUS"
+            if len(remote_apps) != 1 else "REMOTE_KEAR_UNAVAILABLE"
+        )
+        return {"kear_remote": "", "direction": direction,
+                "rule_category": category, "warning": warning}
+    remote_kear, warning = _resolve_remote_kear(next(iter(remote_apps)), environment, lookup)
+    if remote_kear and local_kear and remote_kear.casefold() == local_kear.casefold():
+        direction = "intra-app"
+    return {"kear_remote": remote_kear, "direction": direction,
+            "rule_category": category, "warning": warning}
+
+
+def _rule_category(rule: Mapping[str, str]) -> str:
+    """Apply the approved infrastructure/strategic/business precedence."""
+    name = rule.get("ruleset_name", "").strip().upper()
+    if name.startswith(("BOUQUETS_", "GLOBAL_")):
+        return "infra_rule"
+    iplist_names = _iplist_names(rule.get("src_iplists", ""))
+    iplist_names.extend(_iplist_names(rule.get("dst_iplists", "")))
+    if rule.get("rule_type", "").strip().casefold() == "deny" or any(
+        name.upper().startswith("ZNOT_") for name in iplist_names
+    ):
+        return "strategic_rule"
+    return "business_rule"
+
+
+def _with_rule_enrichment_columns(
+    values: Mapping[str, object], enrichment: Optional[Mapping[str, str]] = None,
+) -> Dict[str, object]:
+    """Insert relationship columns after Kear Id (or app for standard input)."""
+    enrichment = enrichment or {}
+    output: Dict[str, object] = {}
+    inserted = False
+    for key, value in values.items():
+        output[key] = value
+        insertion_point = key.casefold() == "kear id" or (
+            key.casefold() == "app" and "Kear Id" not in values
+        )
+        if insertion_point:
+            output["Kear Remote"] = enrichment.get("kear_remote", "")
+            output["Direction"] = enrichment.get("direction", "")
+            output["Rule Category"] = enrichment.get("rule_category", "")
+            inserted = True
+    if not inserted:
+        output.update({"Kear Remote": enrichment.get("kear_remote", ""),
+                       "Direction": enrichment.get("direction", ""),
+                       "Rule Category": enrichment.get("rule_category", "")})
+    return output
+
+
+def _join_warnings(*warnings: str) -> str:
+    return "; ".join(dict.fromkeys(warning for warning in warnings if warning))
 
 
 def _deduplicate_inputs(rows: Sequence[Dict[str, str]], keys: Sequence[str]) -> List[Dict[str, str]]:

@@ -426,6 +426,18 @@ un message explicite dans la colonne `Warning`, uniquement lorsqu'une règle
 Extrascope combine `unscoped_consumers=TRUE` et `src_all_workloads=TRUE`, car
 elle consomme alors l'ensemble des workloads managés du PCE.
 
+Le rapport ajoute aussi `Kear Remote`, `Direction`, `Rule Category` et la
+colonne `rule_description` provenant de `rules_inventory.csv`. En mode
+Microcosmos, le scope de la ruleset désigne l'application locale ; les rôles
+seuls et `All workloads` héritent de ce scope. Une application explicite
+différente est résolue par son `Module` et son environnement dans l'extract
+Microcosmos. La direction vaut `incoming`, `outgoing`, `intra-app` ou
+`undetermined` quand la topologie ne permet aucune conclusion fiable. Deux
+modules rattachés au même Kear sont considérés `intra-app`. Les rulesets
+`BOUQUETS_*` et `GLOBAL_*` sont classés `infra_rule`; les règles deny ou
+utilisant une IP List `ZNOT_*` sont `strategic_rule`; les autres sont
+`business_rule`.
+
 ## Rapport des rulesets BOUQUETS INFRA
 
 La commande suivante sélectionne dans le snapshot les règles dont le
@@ -460,6 +472,10 @@ avec un en-tête facultatif `item`. Chaque ligne peut contenir un label
 applicatif, un rôle, un label group, une IP List, un workload, un service nommé,
 un port ou un range. La recherche texte est littérale et insensible à la casse
 par défaut ; `--case-sensitive` active la comparaison sensible à la casse.
+La comparaison porte sur la valeur complète de chaque sélecteur séparé par un
+point-virgule. Elle n'utilise pas une recherche par sous-chaîne : par exemple
+`APA_GCR_A7094` ne correspond ni à `APA_GCR_A7094-FLX` ni à
+`APA_GCR_A7094.EXTRA`.
 
 Les ports acceptent notamment `TCP/22`, `22 TCP`, `TCP/137-138`, `137-138 UDP`
 ou un port sans protocole comme `3389`. Plusieurs ports/ranges peuvent être

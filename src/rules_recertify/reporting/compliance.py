@@ -726,6 +726,11 @@ def _rule_relationship(
     destination_input_match = input_app in _expanded_selector_labels(
         rule.get("dst_labels", ""), rule.get("dst_label_groups", ""), group_index,
     ).get("app", set())
+    scope_uses_app_group = bool(
+        _labels(_format_ruleset_scope(rule.get("ruleset_scope", ""), group_index)).get(
+            "appgroup", set()
+        )
+    )
 
     # A ruleset scoped by an application group can be discovered through an
     # explicit application on the opposite side.  In that case direction is
@@ -734,16 +739,16 @@ def _rule_relationship(
     if (
         source_input_match
         and not destination_input_match
-        and parse_bool(rule.get("dst_all_workloads", ""))
-        and input_app not in local_apps
+        and bool(parse_bool(rule.get("dst_all_workloads", "")))
+        and scope_uses_app_group
     ):
         return {"kear_remote": "", "direction": "outgoing",
                 "rule_category": category, "warning": ""}
     if (
         destination_input_match
         and not source_input_match
-        and parse_bool(rule.get("src_all_workloads", ""))
-        and input_app not in local_apps
+        and bool(parse_bool(rule.get("src_all_workloads", "")))
+        and scope_uses_app_group
     ):
         return {"kear_remote": "", "direction": "incoming",
                 "rule_category": category, "warning": ""}
@@ -860,7 +865,11 @@ def _labels(value: object) -> Dict[str, set[str]]:
     for component in re.split(r"[;\n]", str(value or "")):
         key, separator, item = component.strip().partition(":")
         if separator and key.strip() and item.strip():
-            output.setdefault(key.strip().casefold(), set()).add(item.strip().casefold())
+            normalized_item = re.sub(r"\s*\(/[^)]*\)\s*$", "", item).strip()
+            if normalized_item:
+                output.setdefault(key.strip().casefold(), set()).add(
+                    normalized_item.casefold()
+                )
     return output
 
 

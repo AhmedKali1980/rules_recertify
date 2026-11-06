@@ -177,13 +177,17 @@ class ComplianceTest(unittest.TestCase):
     def test_appgroup_scope_all_workloads_is_remote_from_explicit_matched_source(self):
         groups = _label_group_index([{
             "name": "LUIGI_SGEF.PL-LGA", "key": "app",
-            "member_labels": "app:LUIGI_APP", "fully_expanded_members": "app:LUIGI_APP",
+            "member_labels": "app:LUIGI_APP",
+            "fully_expanded_members": "app:LUIGI_APP;app:CSM_BCK_FRA.TSM.RBDF",
         }])
         rule = {
             "ruleset_name": "LUIGI_INFRA_SGEF.PL-IN-RS", "rule_type": "allow",
             "ruleset_scope": "appgroup:LUIGI_SGEF.PL-LGA",
             "src_all_workloads": "false", "src_iplists": "",
-            "src_labels": "env:PRD;app:CSM_BCK_FRA.TSM.RBDF",
+            "src_labels": (
+                "env:PRD;app:CSM_BCK_FRA.TSM.RBDF "
+                "(/orgs/1/sec_policy/draft/labels/42)"
+            ),
             "src_label_groups": "", "dst_all_workloads": "true",
             "dst_iplists": "", "dst_labels": "", "dst_label_groups": "",
         }

@@ -444,6 +444,10 @@ l'ordre, de `Business Rules` (`business_rule` et `strategic_rule`), `Infra Rules
 (`infra_rule`) et `Data Quality` (`APP_NOT_FOUND` et `NO_MATCH`). Chaque feuille
 de données reste une table directement filtrable avec entête figée. Un Kear distant non
 résolu est affiché comme `KEAR_NOT_ONBOARDED_IN_MICROCOSMOS` plutôt que vide.
+Les Label Groups confirmés par `export_labelgroups.csv` restent dans les colonnes
+existantes : par exemple `appgroup:PAYMENTS` dans `ruleset_scope`, `Source` ou
+`Destination`. Les exclusions de labels et de Label Groups sont rendues sous la
+forme `ALL EXCEPT(<selector>)`, sans ajouter de colonne au rapport.
 Le `rule_href` permet également d'enrichir chaque ligne depuis la base SQLite :
 statut d'usage, dernier hit, nombre de jours depuis ce hit, total des flux,
 période observée et complétude du détail par port. Les catalogues

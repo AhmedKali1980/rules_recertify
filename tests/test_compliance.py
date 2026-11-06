@@ -7,6 +7,7 @@ from pathlib import Path
 from rules_recertify.reporting.compliance import (
     KEAR_NOT_ONBOARDED, RULE_FIELDS,
     _contains_user_iplist, _extrascope_warning, _factor_side, _global_consumer_in_use,
+    _format_ruleset_scope, _label_group_index,
     _has_intra_zone_iplist, _is_microcosmos_headers,
     _load_scope_input, _module_from_app, _prepare_microcosmos_input,
     _microcosmos_kear_lookup, _programs_for_app, _resolve_remote_kear,
@@ -101,6 +102,11 @@ class ComplianceTest(unittest.TestCase):
     def test_rule_description_is_part_of_compliance_inventory_contract(self):
         self.assertIn("rule_description", RULE_FIELDS)
         self.assertLess(RULE_FIELDS.index("rule_description"), RULE_FIELDS.index("rule_enabled"))
+        for field in (
+            "src_labels_exclusions", "src_label_groups", "src_label_groups_exclusions",
+            "dst_labels_exclusions", "dst_label_groups", "dst_label_groups_exclusions",
+        ):
+            self.assertIn(field, RULE_FIELDS)
 
     def test_rule_scope_matching_is_anchored_and_environment_is_optional(self):
         rule = {
@@ -130,6 +136,43 @@ class ComplianceTest(unittest.TestCase):
         )
         self.assertEqual(_factor_side(iplist, "dst"), ("NZ3_APP", "iplist"))
         self.assertEqual(_factor_side(labels, "src"), ("app:A;env:PRD", "labels"))
+
+    def test_factorization_renders_verified_groups_and_all_except_selectors(self):
+        groups = _label_group_index([
+            {"name": "APP_BUNDLE", "key": "app", "member_labels": "app:APP_A"},
+            {"name": "ROLE_BUNDLE", "key": "role", "member_labels": "role:WEB"},
+        ])
+        rule = {
+            "src_all_workloads": "false", "src_iplists": "",
+            "src_labels": "env:PRD", "src_label_groups": "APP_BUNDLE",
+            "src_labels_exclusions": "role:LEGACY",
+            "src_label_groups_exclusions": "ROLE_BUNDLE",
+        }
+        self.assertEqual(_factor_side(rule, "src", groups), (
+            "env:PRD; appgroup:APP_BUNDLE; ALL EXCEPT(role:LEGACY); "
+            "ALL EXCEPT(rolegroup:ROLE_BUNDLE)",
+            "labels",
+        ))
+
+    def test_scope_label_group_is_rendered_and_matches_expanded_members(self):
+        groups = _label_group_index([{
+            "name": "PAYMENTS_APPS", "key": "app",
+            "member_labels": "PAYMENTS;app:PAYMENTS_BATCH",
+            "fully_expanded_members": "PAYMENTS;PAYMENTS_BATCH",
+        }])
+        rule = {
+            "ruleset_scope": "app:PAYMENTS_APPS;env:PRD",
+            "src_labels": "role:WEB", "src_label_groups": "",
+            "dst_labels": "", "dst_label_groups": "",
+        }
+        self.assertEqual(
+            _format_ruleset_scope(rule["ruleset_scope"], groups),
+            "appgroup:PAYMENTS_APPS;env:PRD",
+        )
+        self.assertTrue(_rule_matches_scope(rule, "PAYMENTS", "PRD", groups))
+        self.assertFalse(_rule_matches_scope(rule, "OTHER", "PRD", groups))
+        canonical = dict(rule, ruleset_scope="appgroup:PAYMENTS_APPS;env:PRD")
+        self.assertTrue(_rule_matches_scope(canonical, "PAYMENTS_BATCH", "PRD", groups))
 
     def test_all_workloads_scope_context_is_ordered_and_deduplicated(self):
         self.assertEqual(

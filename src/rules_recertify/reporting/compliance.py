@@ -18,8 +18,10 @@ from .workbook import _expand_services, _load_report_services
 RULE_FIELDS = (
     "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
     "rule_description", "rule_enabled", "unscoped_consumers", "src_all_workloads",
-    "src_labels", "src_iplists", "dst_all_workloads", "dst_labels", "dst_iplists",
-    "services", "rule_href",
+    "src_labels", "src_labels_exclusions", "src_label_groups",
+    "src_label_groups_exclusions", "src_iplists", "dst_all_workloads", "dst_labels",
+    "dst_labels_exclusions", "dst_label_groups", "dst_label_groups_exclusions",
+    "dst_iplists", "services", "rule_href",
 )
 LABEL_GROUP_FIELDS = (
     "name", "key", "description", "member_labels", "member_label_groups",
@@ -52,6 +54,7 @@ def generate_compliance_workbook(
     microcosmos_lookup = _microcosmos_kear_lookup(input_rows) if microcosmos_input else {}
     rules = list(read_rows(snapshot / "rules_inventory.csv", RULE_FIELDS))
     groups = list(read_rows(snapshot / "export_labelgroups.csv", LABEL_GROUP_FIELDS))
+    group_index = _label_group_index(groups)
     services, _ = _load_report_services(raw_dir)
     report_catalogs = tuple(dict.fromkeys((*dangerous_port_lists, *PORT_CATALOGS)))
     usage_by_rule = database.compliance_usage() if database is not None else {}
@@ -66,7 +69,9 @@ def generate_compliance_workbook(
         app = _get_case_insensitive(input_row, "app").strip()
         env = str(input_row.get("__compliance_env", _get_case_insensitive(input_row, "env"))).strip()
         programs = _programs_for_app(app, groups)
-        matched = [row for row in rules if _rule_matches_scope(row, app, env)]
+        matched = [
+            row for row in rules if _rule_matches_scope(row, app, env, group_index)
+        ]
         primary_columns = (
             [*MICROCOSMOS_COLUMNS, "app"]
             if "Program (MIO)" in input_columns else input_columns
@@ -96,11 +101,12 @@ def generate_compliance_workbook(
             })
             continue
         for rule in matched:
-            source, source_kind = _factor_side(rule, "src")
-            destination, destination_kind = _factor_side(rule, "dst")
+            source, source_kind = _factor_side(rule, "src", group_index)
+            destination, destination_kind = _factor_side(rule, "dst", group_index)
             expanded_services = _expand_services(rule["services"], services)
             enrichment = _rule_relationship(
                 rule, input_row, microcosmos_lookup if microcosmos_input else None,
+                group_index,
             )
             usage = _usage_columns(
                 usage_by_rule.get(rule["rule_href"]), report_catalogs,
@@ -112,7 +118,7 @@ def generate_compliance_workbook(
                 "Warning": _join_warnings(_extrascope_warning(rule), enrichment["warning"]),
                 "Global Consumer in use": str(_global_consumer_in_use(rule)).upper(),
                 "ruleset_name": rule["ruleset_name"],
-                "ruleset_scope": rule["ruleset_scope"],
+                "ruleset_scope": _format_ruleset_scope(rule["ruleset_scope"], group_index),
                 "ruleset_enabled": rule["ruleset_enabled"],
                 "rule_type": rule["rule_type"],
                 "rule_description": rule["rule_description"],
@@ -322,6 +328,7 @@ def _write_summary_sheet(
         ("Kear Remote", "Resolved from the explicit remote app label using Microcosmos Module and Environment. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
         ("Direction", "The ruleset_scope app is local. Role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules whose source explicitly selects the input app are outgoing."),
         ("Rule Category", "BOUQUETS_* and GLOBAL_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
+        ("Label groups & exclusions", "Label groups confirmed in export_labelgroups.csv are rendered in the existing scope, Source, and Destination columns as <key>group:<name> (for example appgroup:PAYMENTS). Excluded labels and groups are rendered as ALL EXCEPT(<selector>)."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
         ("Dangerous-port hits", "Observed per-port flows are intersected with the configured To Control, To Eradicate and Admin catalogues. Exposure columns describe allowed rule services; Hit columns describe observed traffic."),
@@ -659,11 +666,17 @@ def _resolve_remote_kear(
 
 def _side_relationship(
     rule: Mapping[str, str], prefix: str, local_app: str,
+    group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
 ) -> Tuple[str, set[str]]:
     """Classify one rule side relative to the application ruleset scope."""
     all_workloads = parse_bool(rule.get(f"{prefix}_all_workloads", ""))
     has_iplist = bool(_iplist_names(rule.get(f"{prefix}_iplists", "")))
-    explicit_apps = _labels(rule.get(f"{prefix}_labels", "")).get("app", set())
+    explicit_apps = set(
+        _labels(rule.get(f"{prefix}_labels", "")).get("app", set())
+    )
+    explicit_apps.update(_group_member_values(
+        rule.get(f"{prefix}_label_groups", ""), "app", group_index or {},
+    ))
     local = local_app.casefold()
     remote_apps = {app for app in explicit_apps if app != local}
     has_local_app = local in explicit_apps
@@ -687,16 +700,24 @@ def _side_relationship(
 def _rule_relationship(
     rule: Mapping[str, str], input_row: Mapping[str, str],
     lookup: Optional[Mapping[str, Mapping[str, set[str]]]],
+    group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
 ) -> Dict[str, str]:
     """Calculate Kear Remote, Direction, Rule Category, and diagnostics."""
-    scope = _labels(rule.get("ruleset_scope", ""))
-    local_apps = scope.get("app", set())
-    local_app = next(iter(local_apps)) if len(local_apps) == 1 else ""
+    group_index = group_index or {}
     input_app = _get_case_insensitive(input_row, "app").strip().casefold()
+    scope = _expanded_selector_labels(rule.get("ruleset_scope", ""), "", group_index)
+    local_apps = scope.get("app", set())
+    local_app = (
+        input_app if input_app in local_apps
+        else next(iter(local_apps)) if len(local_apps) == 1
+        else ""
+    )
     local_kear = _get_case_insensitive(input_row, "Kear Id").strip()
     environment = next(iter(scope.get("env", set())), "")
-    source_kind, source_apps = _side_relationship(rule, "src", local_app)
-    destination_kind, destination_apps = _side_relationship(rule, "dst", local_app)
+    source_kind, source_apps = _side_relationship(rule, "src", local_app, group_index)
+    destination_kind, destination_apps = _side_relationship(
+        rule, "dst", local_app, group_index,
+    )
     category = _rule_category(rule)
 
     # OUTBOUND2APA is a tactical, unscoped construct: the explicitly selected
@@ -706,7 +727,9 @@ def _rule_relationship(
         not local_app
         and "OUTBOUND2APA" in rule.get("ruleset_name", "").upper()
         and input_app
-        and input_app in _labels(rule.get("src_labels", "")).get("app", set())
+        and input_app in _expanded_selector_labels(
+            rule.get("src_labels", ""), rule.get("src_label_groups", ""), group_index,
+        ).get("app", set())
     )
     if tactical_outbound:
         return {"kear_remote": "", "direction": "outgoing",
@@ -813,10 +836,125 @@ def _labels(value: object) -> Dict[str, set[str]]:
     return output
 
 
-def _rule_matches_scope(rule: Mapping[str, str], app: str, env: str) -> bool:
+def _parts(value: object) -> List[str]:
+    return [part.strip() for part in re.split(r"[;\n]", str(value or "")) if part.strip()]
+
+
+def _clean_label_group_reference(value: object) -> str:
+    text = re.sub(r"^Label\s*Group\s*:\s*", "", str(value or "").strip(), flags=re.I)
+    return re.sub(r"\s*\(/[^)]*\)\s*$", "", text).strip()
+
+
+def _label_group_index(
+    groups: Sequence[Mapping[str, str]],
+) -> Dict[str, Mapping[str, object]]:
+    """Index only the label groups confirmed by the snapshot export."""
+    output: Dict[str, Mapping[str, object]] = {}
+    for group in groups:
+        name = str(group.get("name", "")).strip()
+        key = str(group.get("key", "")).strip().casefold()
+        if name and key:
+            output[name.casefold()] = {
+                **group, "name": name, "key": key,
+            }
+    return output
+
+
+def _group_member_values(
+    references: object, key: str,
+    group_index: Mapping[str, Mapping[str, object]],
+) -> set[str]:
+    values: set[str] = set()
+    for reference in _parts(references):
+        name = _clean_label_group_reference(reference)
+        group = group_index.get(name.casefold())
+        if not group or str(group.get("key", "")).casefold() != key.casefold():
+            continue
+        members = ";".join((
+            str(group.get("member_labels", "")),
+            str(group.get("fully_expanded_members", "")),
+        ))
+        for member in _parts(members):
+            member_key, separator, member_value = member.partition(":")
+            if separator and member_key.strip().casefold() == key.casefold():
+                values.add(member_value.strip().casefold())
+            elif not separator:
+                bare_member = re.sub(r"\s*\(/[^)]*\)\s*$", "", member).strip()
+                if bare_member:
+                    values.add(bare_member.casefold())
+    return values
+
+
+def _display_label_groups(
+    references: object, group_index: Mapping[str, Mapping[str, object]],
+) -> List[str]:
+    output = []
+    for reference in _parts(references):
+        name = _clean_label_group_reference(reference)
+        group = group_index.get(name.casefold())
+        prefix = f"{group['key']}group" if group else "labelgroup"
+        output.append(f"{prefix}:{name}")
+    return output
+
+
+def _expanded_selector_labels(
+    labels_value: object, group_references: object,
+    group_index: Mapping[str, Mapping[str, object]],
+) -> Dict[str, set[str]]:
+    labels = _labels(labels_value)
+    for key, values in tuple(labels.items()):
+        for value in tuple(values):
+            name = _clean_label_group_reference(value)
+            group = group_index.get(name.casefold())
+            group_key = str(group.get("key", "")).casefold() if group else ""
+            selector_key = key[:-5] if key.endswith("group") else key
+            if group and group_key == selector_key:
+                labels.setdefault(selector_key, set()).update(
+                    _group_member_values(name, selector_key, group_index)
+                )
+    for reference in _parts(group_references):
+        name = _clean_label_group_reference(reference)
+        group = group_index.get(name.casefold())
+        if not group:
+            continue
+        key = str(group.get("key", "")).casefold()
+        labels.setdefault(key, set()).update(_group_member_values(name, key, group_index))
+    return labels
+
+
+def _format_ruleset_scope(
+    scope: object, group_index: Mapping[str, Mapping[str, object]],
+) -> str:
+    """Render confirmed scope label groups as e.g. ``appgroup:GROUP``."""
+    output = []
+    for component in _parts(scope):
+        key, separator, value = component.partition(":")
+        normalized_key = key.strip().casefold()
+        selector_key = normalized_key[:-5] if normalized_key.endswith("group") else normalized_key
+        name = _clean_label_group_reference(value)
+        group = group_index.get(name.casefold()) if separator else None
+        if group and str(group.get("key", "")).casefold() == selector_key:
+            output.append(f"{selector_key}group:{group['name']}")
+        else:
+            output.append(component)
+    return ";".join(output)
+
+
+def _rule_matches_scope(
+    rule: Mapping[str, str], app: str, env: str,
+    group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
+) -> bool:
     wanted_app, wanted_env = app.casefold(), env.casefold()
-    for field in ("ruleset_scope", "src_labels", "dst_labels"):
-        labels = _labels(rule.get(field, ""))
+    group_index = group_index or {}
+    for field, group_field in (
+        ("ruleset_scope", ""),
+        ("src_labels", "src_label_groups"),
+        ("dst_labels", "dst_label_groups"),
+    ):
+        labels = _expanded_selector_labels(
+            rule.get(field, ""), rule.get(group_field, "") if group_field else "",
+            group_index,
+        )
         if wanted_app not in labels.get("app", set()):
             continue
         if not wanted_env or wanted_env in labels.get("env", set()):
@@ -839,15 +977,36 @@ def _programs_for_app(app: str, groups: Sequence[Mapping[str, str]]) -> str:
     return ";".join(dict.fromkeys(programs))
 
 
-def _factor_side(rule: Mapping[str, str], prefix: str) -> Tuple[str, str]:
+def _factor_side(
+    rule: Mapping[str, str], prefix: str,
+    group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
+) -> Tuple[str, str]:
+    group_index = group_index or {}
+    selectors: List[str] = []
     if parse_bool(rule.get(f"{prefix}_all_workloads", "")):
         context = _ruleset_scope_context(rule.get("ruleset_scope", ""))
-        return (f"All workloads ({context})" if context else "All workloads"), "all_workloads"
-    if rule.get(f"{prefix}_iplists", "").strip():
-        return rule[f"{prefix}_iplists"], "iplist"
-    if rule.get(f"{prefix}_labels", "").strip():
-        return rule[f"{prefix}_labels"], "labels"
-    return "", ""
+        selectors.append(f"All workloads ({context})" if context else "All workloads")
+        kind = "all_workloads"
+    elif rule.get(f"{prefix}_iplists", "").strip():
+        selectors.append(rule[f"{prefix}_iplists"].strip())
+        kind = "iplist"
+    else:
+        labels = rule.get(f"{prefix}_labels", "").strip()
+        if labels:
+            selectors.append(labels)
+        selectors.extend(_display_label_groups(
+            rule.get(f"{prefix}_label_groups", ""), group_index,
+        ))
+        kind = "labels" if selectors else ""
+
+    excluded = [
+        *_parts(rule.get(f"{prefix}_labels_exclusions", "")),
+        *_display_label_groups(
+            rule.get(f"{prefix}_label_groups_exclusions", ""), group_index,
+        ),
+    ]
+    selectors.extend(f"ALL EXCEPT({value})" for value in excluded)
+    return "; ".join(dict.fromkeys(selectors)), kind or ("labels" if excluded else "")
 
 
 def _ruleset_scope_context(scope: object) -> str:

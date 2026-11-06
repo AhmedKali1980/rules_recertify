@@ -821,6 +821,11 @@ strategic categories), `Infra Rules`, and `Data Quality` (`APP_NOT_FOUND` and
 freezes the header and first two columns, and uses conditional status
 formatting. When no remote Kear can be resolved, `Kear Remote` contains the
 explicit `KEAR_NOT_ONBOARDED_IN_MICROCOSMOS` status instead of an empty value.
+Label Groups verified against `export_labelgroups.csv` stay in the existing
+`ruleset_scope`, `Source`, and `Destination` columns and use the
+`<key>group:<name>` notation, such as `appgroup:PAYMENTS`. Excluded labels and
+Label Groups are rendered as `ALL EXCEPT(<selector>)`; no additional selector
+columns are introduced.
 
 The command initializes and reads the configured recertification SQLite
 database. `rule_href` links each inventory rule to its completed usage windows

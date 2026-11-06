@@ -425,6 +425,68 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
+    def extend_backfill(self, backfill_id: str, target_end: str) -> Mapping[str, object]:
+        """Extend an idle backfill target without changing its existing cursor."""
+        now = _now()
+        with self.connect() as db:
+            state = db.execute(
+                "SELECT backfill_target_end,next_window_start,status FROM backfill_states "
+                "WHERE backfill_id=?", (backfill_id,),
+            ).fetchone()
+            if state is None:
+                raise ValueError(f"unknown backfill: {backfill_id}")
+            if state[2] == "RUNNING":
+                raise ValueError(f"cannot extend a running backfill: {backfill_id}")
+            if target_end <= state[0]:
+                raise ValueError(
+                    f"new backfill target must be after {state[0]}, got {target_end}"
+                )
+            if target_end <= state[1]:
+                raise ValueError(
+                    f"new backfill target must be after cursor {state[1]}, got {target_end}"
+                )
+            db.execute(
+                "UPDATE backfill_states SET backfill_target_end=?,status='PENDING',updated_at=? "
+                "WHERE backfill_id=?",
+                (target_end, now, backfill_id),
+            )
+            updated = db.execute(
+                "SELECT * FROM backfill_states WHERE backfill_id=?", (backfill_id,),
+            ).fetchone()
+            return dict(updated)
+
+    def backfill_resume_run(self, backfill_id: str, window_start: str,
+                            window_end: str) -> Optional[Mapping[str, object]]:
+        """Return the last failed run when it belongs to the window being retried."""
+        with self.connect() as db:
+            row = db.execute(
+                """SELECT r.run_id,r.details_json FROM backfill_states b
+                JOIN runs r ON r.run_id=b.last_run_id
+                WHERE b.backfill_id=? AND b.status='FAILED'
+                  AND r.run_type=? AND r.status='ERROR'""",
+                (backfill_id, RUN_TYPE_BACKFILL),
+            ).fetchone()
+        if row is None:
+            return None
+        details = json.loads(str(row[1] or "{}"))
+        if (
+            details.get("traffic_start") != window_start
+            or details.get("traffic_end") != window_end
+        ):
+            return None
+        return {"run_id": str(row[0]), "details": details}
+
+    def usage_for_window(self, window_start: str,
+                         window_end: str) -> List[Mapping[str, object]]:
+        """Load already committed usage so a resumed run can build a complete audit."""
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT raw_json FROM usage_windows
+                WHERE substr(window_start,1,10)=? AND substr(window_end,1,10)=?""",
+                (window_start, window_end),
+            ).fetchall()
+        return [json.loads(str(row[0])) for row in rows]
+
     def update_backfill_window(self, backfill_id: str, run_id: str,
                                window_end: str, success: bool,
                                run_details: Optional[Mapping[str, object]] = None,
@@ -546,6 +608,56 @@ class Database:
                     db.execute("INSERT INTO usage_ports VALUES(?,?,?,?,?,?)", (*key, port["protocol"], port["port"] if port["port"] is not None else -1, port["flows"]))
                 count += 1
         return count
+
+    def compliance_usage(self) -> Dict[str, Dict[str, object]]:
+        """Return completed usage-window and per-port history keyed by rule href."""
+        with self.connect() as db:
+            windows = db.execute(
+                """SELECT rule_href,
+                COUNT(*) AS observed_windows,
+                COALESCE(SUM(CASE WHEN flows > 0 THEN flows ELSE 0 END), 0) AS total_flows,
+                MIN(window_start) AS first_observed,
+                MAX(window_end) AS last_observed,
+                MAX(CASE WHEN flows > 0 THEN window_end END) AS last_hit,
+                SUM(CASE WHEN port_breakdown_complete = 0 THEN 1 ELSE 0 END)
+                  AS incomplete_windows
+                FROM usage_windows
+                WHERE status = 'completed'
+                GROUP BY rule_href"""
+            ).fetchall()
+            ports = db.execute(
+                """SELECT p.rule_href,p.protocol,p.port,SUM(p.flows) AS flows,
+                MAX(p.window_end) AS last_hit
+                FROM usage_ports p
+                JOIN usage_windows w ON w.rule_href=p.rule_href
+                  AND w.window_start=p.window_start AND w.window_end=p.window_end
+                WHERE w.status='completed' AND p.flows > 0
+                GROUP BY p.rule_href,p.protocol,p.port"""
+            ).fetchall()
+        output: Dict[str, Dict[str, object]] = {
+            str(row["rule_href"]): {
+                "observed_windows": int(row["observed_windows"]),
+                "total_flows": int(row["total_flows"]),
+                "first_observed": str(row["first_observed"] or ""),
+                "last_observed": str(row["last_observed"] or ""),
+                "last_hit": str(row["last_hit"] or ""),
+                "incomplete_windows": int(row["incomplete_windows"] or 0),
+                "ports": [],
+            }
+            for row in windows
+        }
+        for row in ports:
+            output.setdefault(str(row["rule_href"]), {
+                "observed_windows": 0, "total_flows": 0, "first_observed": "",
+                "last_observed": "", "last_hit": "", "incomplete_windows": 0,
+                "ports": [],
+            })["ports"].append({
+                "protocol": str(row["protocol"]).upper(),
+                "port": int(row["port"]),
+                "flows": int(row["flows"]),
+                "last_hit": str(row["last_hit"] or ""),
+            })
+        return output
 
     def prune(self, retention_days: int, as_of: Optional[date] = None) -> int:
         cutoff = (as_of or datetime.now(timezone.utc).date()) - timedelta(days=retention_days)

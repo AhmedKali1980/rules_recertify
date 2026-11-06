@@ -23,7 +23,8 @@ an operator or another system runs `report` only when a deliverable is needed.
 - Python 3.9.25 and `venv`.
 - Workloader 12.0.20, default `/DATA/WORKLOADER/ver12/workloader`.
 - SQLite 3.24 or newer. Production provides `3.26.0-20.el8_10`.
-- An approved offline `openpyxl` package for workbook generation.
+- An approved offline `openpyxl` 3.1 or newer package for workbook generation
+  (required for rich-text selector prefixes in bouquet reports).
 - Network/PCE credentials already accepted by Workloader.
 
 No online package lookup is required by collection, ingestion, SQLite, or tests.

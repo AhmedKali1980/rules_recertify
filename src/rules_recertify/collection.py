@@ -11,6 +11,7 @@ from .collection_engine import (
     collect,
     collect_policy,
     collect_traffic,
+    extend_backfill_traffic,
     initialize_backfill_traffic,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "collect",
     "collect_policy",
     "collect_traffic",
+    "extend_backfill_traffic",
     "initialize_backfill_traffic",
 ]

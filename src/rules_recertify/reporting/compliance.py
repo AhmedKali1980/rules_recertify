@@ -181,12 +181,13 @@ def _usage_columns(
         return output
     total_flows = int(usage.get("total_flows", 0) or 0)
     last_hit = str(usage.get("last_hit", "") or "")
+    last_hit_date = _iso_date(last_hit)
     output.update({
         "Usage Status": "HIT" if total_flows > 0 else "NO_HIT",
         "Last Hit": last_hit,
         "Days Since Last Hit": (
-            ((as_of or datetime.now(timezone.utc).date()) - date.fromisoformat(last_hit)).days
-            if last_hit else ""
+            ((as_of or datetime.now(timezone.utc).date()) - last_hit_date).days
+            if last_hit_date else ""
         ),
         "Total Hit Flows": total_flows,
         "Observed Windows": int(usage.get("observed_windows", 0) or 0),
@@ -220,6 +221,21 @@ def _usage_columns(
             (str(item.get("last_hit", "")) for item in matched), default="",
         )
     return output
+
+
+def _iso_date(value: object) -> Optional[date]:
+    """Read a database ISO date or timestamp, including the common UTC ``Z`` suffix."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
 
 
 def _excel_safe(value: object) -> object:

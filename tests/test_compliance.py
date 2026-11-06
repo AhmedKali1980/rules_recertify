@@ -27,7 +27,7 @@ class ComplianceTest(unittest.TestCase):
         usage = {
             "observed_windows": 3, "total_flows": 21,
             "first_observed": "2026-10-01", "last_observed": "2026-10-22",
-            "last_hit": "2026-10-22", "incomplete_windows": 1,
+            "last_hit": "2026-10-22T00:00:00Z", "incomplete_windows": 1,
             "ports": [
                 {"protocol": "TCP", "port": 22, "flows": 7, "last_hit": "2026-10-22"},
                 {"protocol": "TCP", "port": 23, "flows": 5, "last_hit": "2026-10-15"},
@@ -45,6 +45,17 @@ class ComplianceTest(unittest.TestCase):
         self.assertEqual(columns["PORTS_ADMIN Hit Flows"], 7)
         self.assertEqual(columns["Port Breakdown Complete"], "FALSE")
         self.assertIn("TCP/22 (7 flows)", columns["PORTS_TO_CONTROL Hit Ports"])
+
+    def test_usage_timestamp_with_utc_z_suffix_does_not_break_days_since_last_hit(self):
+        columns = _usage_columns({
+            "observed_windows": 1, "total_flows": 1,
+            "first_observed": "2026-10-18T00:00:00Z",
+            "last_observed": "2026-10-25T00:00:00Z",
+            "last_hit": "2026-10-25T00:00:00Z",
+            "incomplete_windows": 0, "ports": [],
+        }, ("PORTS_TO_CONTROL",), as_of=date(2026, 11, 6))
+        self.assertEqual(columns["Last Hit"], "2026-10-25T00:00:00Z")
+        self.assertEqual(columns["Days Since Last Hit"], 12)
 
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is not installed")
     def test_professional_workbook_sheets_have_dashboard_table_and_navigation(self):

@@ -439,8 +439,10 @@ utilisant une IP List `ZNOT_*` sont `strategic_rule`; les autres sont
 `business_rule`.
 
 Le classeur professionnel commence par une feuille `Summary` en anglais qui
-documente les règles de calcul et présente les KPI. La feuille `Compliance`
-reste une table directement filtrable avec entête figée. Un Kear distant non
+documente les règles de calcul et présente les KPI. Elle est suivie, dans
+l'ordre, de `Business Rules` (`business_rule` et `strategic_rule`), `Infra Rules`
+(`infra_rule`) et `Data Quality` (`APP_NOT_FOUND` et `NO_MATCH`). Chaque feuille
+de données reste une table directement filtrable avec entête figée. Un Kear distant non
 résolu est affiché comme `KEAR_NOT_ONBOARDED_IN_MICROCOSMOS` plutôt que vide.
 Le `rule_href` permet également d'enrichir chaque ligne depuis la base SQLite :
 statut d'usage, dernier hit, nombre de jours depuis ce hit, total des flux,

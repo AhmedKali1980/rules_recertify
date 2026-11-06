@@ -52,7 +52,7 @@ def generate_compliance_workbook(
     microcosmos_lookup = _microcosmos_kear_lookup(input_rows) if microcosmos_input else {}
     rules = list(read_rows(snapshot / "rules_inventory.csv", RULE_FIELDS))
     groups = list(read_rows(snapshot / "export_labelgroups.csv", LABEL_GROUP_FIELDS))
-    services, service_reference = _load_report_services(raw_dir)
+    services, _ = _load_report_services(raw_dir)
     report_catalogs = tuple(dict.fromkeys((*dangerous_port_lists, *PORT_CATALOGS)))
     usage_by_rule = database.compliance_usage() if database is not None else {}
     intra_zone_rulesets = {
@@ -142,15 +142,17 @@ def generate_compliance_workbook(
     workbook = Workbook()
     workbook.remove(workbook.active)
     _write_summary_sheet(workbook, rows, report_catalogs)
-    _write_compliance_sheet(workbook, rows)
-    _write_metadata_sheet(workbook, [{
-        "rules inventory": str(snapshot / "rules_inventory.csv"),
-        "input": str(input_path) if input_path else str(snapshot / "labels.csv"),
-        "service reference": service_reference,
-        "usage database": str(database.path) if database is not None else "not provided",
-        "dangerous port lists": ";".join(report_catalogs),
-        "generated at UTC": datetime.now(timezone.utc).isoformat(),
-    }])
+    business_rows, infra_rows, data_quality_rows = _partition_compliance_rows(rows)
+    headers = list(rows[0]) if rows else ["Match status"]
+    _write_compliance_sheet(
+        workbook, business_rows, "Business Rules", "BusinessRules", headers,
+    )
+    _write_compliance_sheet(
+        workbook, infra_rows, "Infra Rules", "InfraRules", headers,
+    )
+    _write_compliance_sheet(
+        workbook, data_quality_rows, "Data Quality", "DataQuality", headers,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     workbook.save(temporary)
@@ -318,8 +320,8 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the explicit remote app label using Microcosmos Module and Environment. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "The ruleset_scope app is local. Role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined."),
-        ("Rule Category", "BOUQUETS_* and GLOBAL_* rulesets are infra_rule. Other deny rules or rules using a ZNOT_* IP List are strategic_rule. Remaining rules are business_rule."),
+        ("Direction", "The ruleset_scope app is local. Role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules whose source explicitly selects the input app are outgoing."),
+        ("Rule Category", "BOUQUETS_* and GLOBAL_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
         ("Dangerous-port hits", "Observed per-port flows are intersected with the configured To Control, To Eradicate and Admin catalogues. Exposure columns describe allowed rule services; Hit columns describe observed traffic."),
@@ -363,9 +365,11 @@ def _write_summary_sheet(
 
 def _write_compliance_sheet(
     workbook: object, rows: Sequence[Mapping[str, object]],
+    sheet_name: str = "Compliance", table_name: str = "ComplianceResults",
+    headers: Optional[Sequence[str]] = None,
 ) -> None:
     from openpyxl.formatting.rule import CellIsRule
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.worksheet.table import Table, TableStyleInfo
 
     navy, white, dark = "10233B", "FFFFFF", "172D48"
@@ -373,27 +377,35 @@ def _write_compliance_sheet(
     pale_red, red = "FCE8E6", "B42318"
     pale_amber, amber = "FFF2DA", "B35D0A"
     pale_blue, blue = "E2EDF7", "0B6B8B"
-    sheet = workbook.create_sheet("Compliance")
-    headers = list(rows[0]) if rows else ["Match status"]
+    sheet = workbook.create_sheet(sheet_name)
+    headers = list(headers or (list(rows[0]) if rows else ["Match status"]))
     sheet.append(headers)
     for row in rows:
         sheet.append([_excel_safe(row.get(header, "")) for header in headers])
     sheet.sheet_view.showGridLines = False
     sheet.sheet_view.zoomScale = 85
     sheet.freeze_panes = "C2"
-    sheet.sheet_properties.tabColor = "057D79"
+    sheet.sheet_properties.tabColor = (
+        "B42318" if sheet_name == "Data Quality"
+        else "0B6B8B" if sheet_name == "Infra Rules"
+        else "057D79"
+    )
     sheet.row_dimensions[1].height = 34
+    vertical_side = Side(style="thin", color="D5DEE9")
+    vertical_border = Border(left=vertical_side, right=vertical_side)
     for cell in sheet[1]:
         cell.fill = PatternFill("solid", fgColor=navy)
         cell.font = Font(name="Aptos", size=10, bold=True, color=white)
         cell.alignment = Alignment(vertical="center", wrap_text=True, indent=1)
+        cell.border = vertical_border
     for row_number in range(2, sheet.max_row + 1):
         for cell in sheet[row_number]:
             cell.font = Font(name="Aptos", size=10, color=dark)
             cell.alignment = Alignment(vertical="center", wrap_text=True)
+            cell.border = vertical_border
         sheet.row_dimensions[row_number].height = 30
     if rows:
-        table = Table(displayName="ComplianceResults", ref=sheet.dimensions)
+        table = Table(displayName=table_name, ref=sheet.dimensions)
         table.tableStyleInfo = TableStyleInfo(
             name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
             showRowStripes=True, showColumnStripes=False,
@@ -450,6 +462,27 @@ def _write_compliance_sheet(
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.page_setup.fitToWidth = 1
     sheet.page_setup.fitToHeight = 0
+
+
+def _partition_compliance_rows(
+    rows: Sequence[Mapping[str, object]],
+) -> Tuple[List[Mapping[str, object]], List[Mapping[str, object]], List[Mapping[str, object]]]:
+    """Split report rows into business, infrastructure, and data-quality tabs."""
+    data_quality_statuses = {"APP_NOT_FOUND", "NO_MATCH"}
+    data_quality = [
+        row for row in rows if str(row.get("Match status", "")) in data_quality_statuses
+    ]
+    infra = [
+        row for row in rows
+        if str(row.get("Match status", "")) not in data_quality_statuses
+        and row.get("Rule Category") == "infra_rule"
+    ]
+    business = [
+        row for row in rows
+        if str(row.get("Match status", "")) not in data_quality_statuses
+        and row.get("Rule Category") in {"business_rule", "strategic_rule"}
+    ]
+    return business, infra, data_quality
 
 
 def _write_metadata_sheet(workbook: object, rows: Sequence[Mapping[str, object]]) -> None:
@@ -659,12 +692,25 @@ def _rule_relationship(
     scope = _labels(rule.get("ruleset_scope", ""))
     local_apps = scope.get("app", set())
     local_app = next(iter(local_apps)) if len(local_apps) == 1 else ""
+    input_app = _get_case_insensitive(input_row, "app").strip().casefold()
     local_kear = _get_case_insensitive(input_row, "Kear Id").strip()
     environment = next(iter(scope.get("env", set())), "")
     source_kind, source_apps = _side_relationship(rule, "src", local_app)
     destination_kind, destination_apps = _side_relationship(rule, "dst", local_app)
     category = _rule_category(rule)
 
+    # OUTBOUND2APA is a tactical, unscoped construct: the explicitly selected
+    # source application is the local endpoint and the destination is unmanaged.
+    # The input application remains the authoritative local identity/Kear.
+    tactical_outbound = (
+        not local_app
+        and "OUTBOUND2APA" in rule.get("ruleset_name", "").upper()
+        and input_app
+        and input_app in _labels(rule.get("src_labels", "")).get("app", set())
+    )
+    if tactical_outbound:
+        return {"kear_remote": "", "direction": "outgoing",
+                "rule_category": category, "warning": ""}
     if not local_app:
         return {"kear_remote": "", "direction": "undetermined",
                 "rule_category": category, "warning": "LOCAL_SCOPE_UNDETERMINED"}
@@ -703,11 +749,13 @@ def _rule_category(rule: Mapping[str, str]) -> str:
     name = rule.get("ruleset_name", "").strip().upper()
     if name.startswith(("BOUQUETS_", "GLOBAL_")):
         return "infra_rule"
+    description = rule.get("rule_description", "").lstrip().casefold()
     iplist_names = _iplist_names(rule.get("src_iplists", ""))
     iplist_names.extend(_iplist_names(rule.get("dst_iplists", "")))
-    if rule.get("rule_type", "").strip().casefold() == "deny" or any(
-        name.upper().startswith("ZNOT_") for name in iplist_names
-    ):
+    strategic_description = description.startswith(("[+srule]", "[+drule]"))
+    deny_rule = rule.get("rule_type", "").strip().casefold() == "deny"
+    strategic_iplist = any(name.upper().startswith("ZNOT_") for name in iplist_names)
+    if strategic_description or deny_rule or strategic_iplist:
         return "strategic_rule"
     return "business_rule"
 

@@ -815,8 +815,10 @@ rules are `business_rule`.
 
 The workbook opens on a corporate-formatted `Summary` dashboard that documents
 every calculated field and presents report, ownership, classification, and
-traffic KPIs. The `Compliance` sheet starts directly with its filterable table
-header, freezes the header and first two columns, and uses conditional status
+traffic KPIs. It is followed in order by `Business Rules` (business and
+strategic categories), `Infra Rules`, and `Data Quality` (`APP_NOT_FOUND` and
+`NO_MATCH`). Each data sheet starts directly with its filterable table header,
+freezes the header and first two columns, and uses conditional status
 formatting. When no remote Kear can be resolved, `Kear Remote` contains the
 explicit `KEAR_NOT_ONBOARDED_IN_MICROCOSMOS` status instead of an empty value.
 

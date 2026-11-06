@@ -11,7 +11,8 @@ from rules_recertify.reporting.compliance import (
     _load_scope_input, _module_from_app, _prepare_microcosmos_input,
     _microcosmos_kear_lookup, _programs_for_app, _resolve_remote_kear,
     _rule_category, _rule_matches_scope, _rule_relationship, _ruleset_scope_context,
-    _usage_columns, _with_rule_enrichment_columns, _write_compliance_sheet,
+    _partition_compliance_rows, _usage_columns, _with_rule_enrichment_columns,
+    _write_compliance_sheet,
     _write_summary_sheet,
 )
 
@@ -69,12 +70,33 @@ class ComplianceTest(unittest.TestCase):
             "Port Breakdown Complete": "NO_DATA", "Global Consumer in use": "FALSE",
         }]
         _write_summary_sheet(workbook, rows, ("PORTS_TO_CONTROL",))
-        _write_compliance_sheet(workbook, rows)
-        self.assertEqual(workbook.sheetnames, ["Summary", "Compliance"])
-        self.assertEqual(workbook["Compliance"].freeze_panes, "C2")
+        business, infra, quality = _partition_compliance_rows(rows)
+        headers = list(rows[0])
+        _write_compliance_sheet(workbook, business, "Business Rules", "BusinessRules", headers)
+        _write_compliance_sheet(workbook, infra, "Infra Rules", "InfraRules", headers)
+        _write_compliance_sheet(workbook, quality, "Data Quality", "DataQuality", headers)
+        self.assertEqual(workbook.sheetnames, [
+            "Summary", "Business Rules", "Infra Rules", "Data Quality",
+        ])
+        self.assertEqual(workbook["Business Rules"].freeze_panes, "C2")
         self.assertFalse(workbook["Summary"].sheet_view.showGridLines)
-        self.assertFalse(workbook["Compliance"].sheet_view.showGridLines)
-        self.assertIn("ComplianceResults", workbook["Compliance"].tables)
+        self.assertFalse(workbook["Business Rules"].sheet_view.showGridLines)
+        self.assertIn("BusinessRules", workbook["Business Rules"].tables)
+        self.assertEqual(workbook["Business Rules"]["A1"].border.left.style, "thin")
+        self.assertEqual(workbook["Business Rules"]["A2"].border.right.style, "thin")
+
+    def test_compliance_rows_are_partitioned_into_three_exclusive_tabs(self):
+        rows = [
+            {"id": "business", "Match status": "MATCHED", "Rule Category": "business_rule"},
+            {"id": "strategic", "Match status": "MATCHED", "Rule Category": "strategic_rule"},
+            {"id": "infra", "Match status": "MATCHED", "Rule Category": "infra_rule"},
+            {"id": "missing-app", "Match status": "APP_NOT_FOUND", "Rule Category": ""},
+            {"id": "no-match", "Match status": "NO_MATCH", "Rule Category": "infra_rule"},
+        ]
+        business, infra, quality = _partition_compliance_rows(rows)
+        self.assertEqual([row["id"] for row in business], ["business", "strategic"])
+        self.assertEqual([row["id"] for row in infra], ["infra"])
+        self.assertEqual([row["id"] for row in quality], ["missing-app", "no-match"])
 
     def test_rule_description_is_part_of_compliance_inventory_contract(self):
         self.assertIn("rule_description", RULE_FIELDS)
@@ -320,6 +342,38 @@ class ComplianceTest(unittest.TestCase):
             "ruleset_name": "APP_RULESET", "rule_type": "allow",
             "src_iplists": "NOT_ZNOT_REMOTE", "dst_iplists": "",
         }), "business_rule")
+        for marker in ("[+srule]", "[+drule]"):
+            self.assertEqual(_rule_category({
+                "ruleset_name": "APP_RULESET", "rule_type": "allow",
+                "rule_description": f"{marker} governed exception",
+                "src_iplists": "", "dst_iplists": "",
+            }), "strategic_rule")
+        self.assertEqual(_rule_category({
+            "ruleset_name": "APP_RULESET", "rule_type": "allow",
+            "rule_description": "ordinary text [+srule] later",
+            "src_iplists": "", "dst_iplists": "",
+        }), "business_rule")
+
+    def test_unscoped_outbound2apa_rule_is_outgoing_from_matched_source_app(self):
+        rule = {
+            "ruleset_name": "TACTICAL_OUTBOUND2APA_UNMANAGED", "rule_type": "allow",
+            "ruleset_scope": "", "src_all_workloads": "false",
+            "src_iplists": "", "src_labels": "app:LOCAL_APP;env:PRD;role:WEB",
+            "dst_all_workloads": "false", "dst_iplists": "UNMANAGED_REMOTE",
+            "dst_labels": "",
+        }
+        result = _rule_relationship(
+            rule, {"app": "LOCAL_APP", "Kear Id": "K-LOCAL"}, {},
+        )
+        self.assertEqual(result, {
+            "kear_remote": "", "direction": "outgoing",
+            "rule_category": "business_rule", "warning": "",
+        })
+
+        unrelated = _rule_relationship(
+            rule, {"app": "OTHER_APP", "Kear Id": "K-OTHER"}, {},
+        )
+        self.assertEqual(unrelated["direction"], "undetermined")
 
 
 if __name__ == "__main__":

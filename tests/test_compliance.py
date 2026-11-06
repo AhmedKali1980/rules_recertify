@@ -174,6 +174,35 @@ class ComplianceTest(unittest.TestCase):
         canonical = dict(rule, ruleset_scope="appgroup:PAYMENTS_APPS;env:PRD")
         self.assertTrue(_rule_matches_scope(canonical, "PAYMENTS_BATCH", "PRD", groups))
 
+    def test_appgroup_scope_all_workloads_is_remote_from_explicit_matched_source(self):
+        groups = _label_group_index([{
+            "name": "LUIGI_SGEF.PL-LGA", "key": "app",
+            "member_labels": "app:LUIGI_APP", "fully_expanded_members": "app:LUIGI_APP",
+        }])
+        rule = {
+            "ruleset_name": "LUIGI_INFRA_SGEF.PL-IN-RS", "rule_type": "allow",
+            "ruleset_scope": "appgroup:LUIGI_SGEF.PL-LGA",
+            "src_all_workloads": "false", "src_iplists": "",
+            "src_labels": "env:PRD;app:CSM_BCK_FRA.TSM.RBDF",
+            "src_label_groups": "", "dst_all_workloads": "true",
+            "dst_iplists": "", "dst_labels": "", "dst_label_groups": "",
+        }
+        self.assertTrue(_rule_matches_scope(
+            rule, "CSM_BCK_FRA.TSM.RBDF", "PRD", groups,
+        ))
+        self.assertEqual(
+            _factor_side(rule, "dst", groups),
+            ("All workloads (appgroup:LUIGI_SGEF.PL-LGA)", "all_workloads"),
+        )
+        self.assertEqual(_rule_relationship(
+            rule,
+            {"app": "CSM_BCK_FRA.TSM.RBDF", "Kear Id": "K-CSM"},
+            {}, groups,
+        ), {
+            "kear_remote": "", "direction": "outgoing",
+            "rule_category": "business_rule", "warning": "",
+        })
+
     def test_all_workloads_scope_context_is_ordered_and_deduplicated(self):
         self.assertEqual(
             _ruleset_scope_context("env:PRD;app:APP_A;app:APP_A"),

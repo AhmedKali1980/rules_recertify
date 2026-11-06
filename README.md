@@ -448,6 +448,10 @@ Les Label Groups confirmés par `export_labelgroups.csv` restent dans les colonn
 existantes : par exemple `appgroup:PAYMENTS` dans `ruleset_scope`, `Source` ou
 `Destination`. Les exclusions de labels et de Label Groups sont rendues sous la
 forme `ALL EXCEPT(<selector>)`, sans ajouter de colonne au rapport.
+Lorsqu'une règle scopée par un `appgroup` est découverte grâce à une application
+explicite en Source et que la Destination vaut `All workloads`, la direction est
+calculée relativement à l'application qui a déclenché le match et vaut
+`outgoing` (`incoming` pour le cas symétrique).
 Le `rule_href` permet également d'enrichir chaque ligne depuis la base SQLite :
 statut d'usage, dernier hit, nombre de jours depuis ce hit, total des flux,
 période observée et complétude du détail par port. Les catalogues

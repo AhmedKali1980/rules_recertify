@@ -326,7 +326,7 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the explicit remote app label using Microcosmos Module and Environment. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "The ruleset_scope app is local. Role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules whose source explicitly selects the input app are outgoing."),
+        ("Direction", "The ruleset_scope app is normally local. When an app-group-scoped rule is discovered through an explicit app on one side and All workloads on the other, direction is relative to that matched input app (source = outgoing, destination = incoming). Otherwise role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules whose source explicitly selects the input app are outgoing."),
         ("Rule Category", "BOUQUETS_* and GLOBAL_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
         ("Label groups & exclusions", "Label groups confirmed in export_labelgroups.csv are rendered in the existing scope, Source, and Destination columns as <key>group:<name> (for example appgroup:PAYMENTS). Excluded labels and groups are rendered as ALL EXCEPT(<selector>)."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
@@ -720,6 +720,34 @@ def _rule_relationship(
     )
     category = _rule_category(rule)
 
+    source_input_match = input_app in _expanded_selector_labels(
+        rule.get("src_labels", ""), rule.get("src_label_groups", ""), group_index,
+    ).get("app", set())
+    destination_input_match = input_app in _expanded_selector_labels(
+        rule.get("dst_labels", ""), rule.get("dst_label_groups", ""), group_index,
+    ).get("app", set())
+
+    # A ruleset scoped by an application group can be discovered through an
+    # explicit application on the opposite side.  In that case direction is
+    # relative to the Microcosmos input application which caused the match;
+    # All workloads represents the (remote) ruleset scope.
+    if (
+        source_input_match
+        and not destination_input_match
+        and parse_bool(rule.get("dst_all_workloads", ""))
+        and input_app not in local_apps
+    ):
+        return {"kear_remote": "", "direction": "outgoing",
+                "rule_category": category, "warning": ""}
+    if (
+        destination_input_match
+        and not source_input_match
+        and parse_bool(rule.get("src_all_workloads", ""))
+        and input_app not in local_apps
+    ):
+        return {"kear_remote": "", "direction": "incoming",
+                "rule_category": category, "warning": ""}
+
     # OUTBOUND2APA is a tactical, unscoped construct: the explicitly selected
     # source application is the local endpoint and the destination is unmanaged.
     # The input application remains the authoritative local identity/Kear.
@@ -984,7 +1012,7 @@ def _factor_side(
     group_index = group_index or {}
     selectors: List[str] = []
     if parse_bool(rule.get(f"{prefix}_all_workloads", "")):
-        context = _ruleset_scope_context(rule.get("ruleset_scope", ""))
+        context = _ruleset_scope_context(rule.get("ruleset_scope", ""), group_index)
         selectors.append(f"All workloads ({context})" if context else "All workloads")
         kind = "all_workloads"
     elif rule.get(f"{prefix}_iplists", "").strip():
@@ -1009,17 +1037,24 @@ def _factor_side(
     return "; ".join(dict.fromkeys(selectors)), kind or ("labels" if excluded else "")
 
 
-def _ruleset_scope_context(scope: object) -> str:
+def _ruleset_scope_context(
+    scope: object,
+    group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
+) -> str:
     """Render app/env labels from a ruleset scope in a stable readable order."""
-    values: Dict[str, List[str]] = {"app": [], "env": []}
-    for component in re.split(r"[;\n]", str(scope or "")):
+    values: Dict[str, List[str]] = {
+        "app": [], "appgroup": [], "env": [], "envgroup": [],
+    }
+    formatted_scope = _format_ruleset_scope(scope, group_index or {})
+    for component in re.split(r"[;\n]", formatted_scope):
         key, separator, value = component.strip().partition(":")
         normalized_key = key.strip().casefold()
         value = value.strip()
         if separator and normalized_key in values and value and value not in values[normalized_key]:
             values[normalized_key].append(value)
     return "; ".join(
-        f"{key}:{', '.join(values[key])}" for key in ("app", "env") if values[key]
+        f"{key}:{', '.join(values[key])}"
+        for key in ("app", "appgroup", "env", "envgroup") if values[key]
     )
 
 

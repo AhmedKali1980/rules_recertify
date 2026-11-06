@@ -826,6 +826,11 @@ Label Groups verified against `export_labelgroups.csv` stay in the existing
 `<key>group:<name>` notation, such as `appgroup:PAYMENTS`. Excluded labels and
 Label Groups are rendered as `ALL EXCEPT(<selector>)`; no additional selector
 columns are introduced.
+When an app-group-scoped rule is discovered through an explicit source
+application and its destination is `All workloads`, direction is evaluated
+relative to the application that caused the match and is `outgoing`. The
+symmetrical case—explicit destination application and source `All workloads`—is
+`incoming`.
 
 The command initializes and reads the configured recertification SQLite
 database. `rule_href` links each inventory rule to its completed usage windows

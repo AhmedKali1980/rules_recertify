@@ -4,13 +4,14 @@ from __future__ import annotations
 import csv
 import importlib.util
 import re
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
+from ..history.database import Database
 from ..workloader.csvio import parse_bool, read_rows
-from .dangerous_ports import dangerous_ports
-from .rule_search import _write_sheet
+from .dangerous_ports import PORT_CATALOGS, _catalog_interval, dangerous_ports
 from .workbook import _expand_services, _load_report_services
 
 
@@ -18,7 +19,7 @@ RULE_FIELDS = (
     "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
     "rule_description", "rule_enabled", "unscoped_consumers", "src_all_workloads",
     "src_labels", "src_iplists", "dst_all_workloads", "dst_labels", "dst_iplists",
-    "services",
+    "services", "rule_href",
 )
 LABEL_GROUP_FIELDS = (
     "name", "key", "description", "member_labels", "member_label_groups",
@@ -29,11 +30,12 @@ MICROCOSMOS_COLUMNS = (
     "Microsegmentation Solution", "Environment", "Entity", "Program (MIO)",
 )
 MICROCOSMOS_REQUIRED_COLUMNS = MICROCOSMOS_COLUMNS[:-1]
+KEAR_NOT_ONBOARDED = "KEAR_NOT_ONBOARDED_IN_MICROCOSMOS"
 
 
 def generate_compliance_workbook(
     raw_dir: Path, output: Path, dangerous_port_lists: Sequence[str],
-    input_path: Optional[Path] = None,
+    input_path: Optional[Path] = None, database: Optional[Database] = None,
 ) -> Path:
     """Evaluate matching snapshot rules for optional app/environment input rows."""
     if importlib.util.find_spec("openpyxl") is None:
@@ -51,6 +53,8 @@ def generate_compliance_workbook(
     rules = list(read_rows(snapshot / "rules_inventory.csv", RULE_FIELDS))
     groups = list(read_rows(snapshot / "export_labelgroups.csv", LABEL_GROUP_FIELDS))
     services, service_reference = _load_report_services(raw_dir)
+    report_catalogs = tuple(dict.fromkeys((*dangerous_port_lists, *PORT_CATALOGS)))
+    usage_by_rule = database.compliance_usage() if database is not None else {}
     intra_zone_rulesets = {
         _ruleset_identity(row) for row in rules
         if _has_intra_zone_iplist(row.get("src_iplists", ""))
@@ -80,13 +84,14 @@ def generate_compliance_workbook(
                 "Global Consumer in use": "FALSE",
                 **{field: "" for field in (
                     "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
-                    "rule_description", "rule_enabled",
+                    "rule_description", "rule_enabled", "rule_href",
                 )},
                 "Source": "", "Destination": "", "Source contains User": "FALSE",
                 "Destination contains User": "FALSE",
                 "services": "",
-                **{catalog: "" for catalog in dangerous_port_lists},
+                **{catalog: "" for catalog in report_catalogs},
                 "Protection type": "",
+                **_empty_usage_columns(report_catalogs),
                 **extra_values,
             })
             continue
@@ -96,6 +101,9 @@ def generate_compliance_workbook(
             expanded_services = _expand_services(rule["services"], services)
             enrichment = _rule_relationship(
                 rule, input_row, microcosmos_lookup if microcosmos_input else None,
+            )
+            usage = _usage_columns(
+                usage_by_rule.get(rule["rule_href"]), report_catalogs,
             )
             rows.append({
                 **_with_rule_enrichment_columns(input_values, enrichment),
@@ -109,6 +117,7 @@ def generate_compliance_workbook(
                 "rule_type": rule["rule_type"],
                 "rule_description": rule["rule_description"],
                 "rule_enabled": rule["rule_enabled"],
+                "rule_href": rule["rule_href"],
                 "Source": source,
                 "Destination": destination,
                 "Source contains User": str(
@@ -120,23 +129,26 @@ def generate_compliance_workbook(
                 "services": rule["services"],
                 **{
                     catalog: dangerous_ports(expanded_services, [catalog])
-                    for catalog in dangerous_port_lists
+                    for catalog in report_catalogs
                 },
                 "Protection type": (
                     "Intra-zone" if _ruleset_identity(rule) in intra_zone_rulesets else ""
                 ),
+                **usage,
                 **extra_values,
             })
 
     from openpyxl import Workbook
     workbook = Workbook()
     workbook.remove(workbook.active)
-    _write_sheet(workbook, "Compliance", rows)
-    _write_sheet(workbook, "Metadata", [{
+    _write_summary_sheet(workbook, rows, report_catalogs)
+    _write_compliance_sheet(workbook, rows)
+    _write_metadata_sheet(workbook, [{
         "rules inventory": str(snapshot / "rules_inventory.csv"),
         "input": str(input_path) if input_path else str(snapshot / "labels.csv"),
         "service reference": service_reference,
-        "dangerous port lists": ";".join(dangerous_port_lists),
+        "usage database": str(database.path) if database is not None else "not provided",
+        "dangerous port lists": ";".join(report_catalogs),
         "generated at UTC": datetime.now(timezone.utc).isoformat(),
     }])
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -144,6 +156,305 @@ def generate_compliance_workbook(
     workbook.save(temporary)
     temporary.replace(output)
     return output
+
+
+def _empty_usage_columns(catalogs: Sequence[str]) -> Dict[str, object]:
+    output: Dict[str, object] = {
+        "Usage Status": "NO_DATA", "Last Hit": "", "Days Since Last Hit": "",
+        "Total Hit Flows": 0, "Observed Windows": 0, "First Observed": "",
+        "Last Observed": "", "Port Breakdown Complete": "NO_DATA",
+    }
+    for catalog in catalogs:
+        output[f"{catalog} Hit Ports"] = ""
+        output[f"{catalog} Hit Flows"] = 0
+        output[f"{catalog} Last Hit"] = ""
+    return output
+
+
+def _usage_columns(
+    usage: Optional[Mapping[str, object]], catalogs: Sequence[str],
+    as_of: Optional[date] = None,
+) -> Dict[str, object]:
+    """Render rule usage and dangerous-port hits as analysis-ready columns."""
+    output = _empty_usage_columns(catalogs)
+    if not usage:
+        return output
+    total_flows = int(usage.get("total_flows", 0) or 0)
+    last_hit = str(usage.get("last_hit", "") or "")
+    output.update({
+        "Usage Status": "HIT" if total_flows > 0 else "NO_HIT",
+        "Last Hit": last_hit,
+        "Days Since Last Hit": (
+            ((as_of or datetime.now(timezone.utc).date()) - date.fromisoformat(last_hit)).days
+            if last_hit else ""
+        ),
+        "Total Hit Flows": total_flows,
+        "Observed Windows": int(usage.get("observed_windows", 0) or 0),
+        "First Observed": str(usage.get("first_observed", "") or ""),
+        "Last Observed": str(usage.get("last_observed", "") or ""),
+        "Port Breakdown Complete": (
+            "FALSE" if int(usage.get("incomplete_windows", 0) or 0) else "TRUE"
+        ),
+    })
+    ports = list(usage.get("ports", []) or [])
+    for catalog in catalogs:
+        matched = []
+        for port in ports:
+            protocol = str(port.get("protocol", "")).upper()
+            number = int(port.get("port", -1))
+            if number < 0 or not any(
+                protocol == expected_protocol and start <= number <= end
+                for expected_protocol, start, end in (
+                    _catalog_interval(definition) for definition in PORT_CATALOGS[catalog]
+                )
+            ):
+                continue
+            matched.append(port)
+        matched.sort(key=lambda item: (str(item.get("protocol", "")), int(item.get("port", -1))))
+        output[f"{catalog} Hit Ports"] = ", ".join(
+            f"{str(item['protocol']).upper()}/{item['port']} ({item['flows']} flows)"
+            for item in matched
+        )
+        output[f"{catalog} Hit Flows"] = sum(int(item.get("flows", 0)) for item in matched)
+        output[f"{catalog} Last Hit"] = max(
+            (str(item.get("last_hit", "")) for item in matched), default="",
+        )
+    return output
+
+
+def _excel_safe(value: object) -> object:
+    if value is None:
+        return ""
+    if isinstance(value, (bool, int, float, datetime, date)):
+        return value
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", str(value))
+    if len(cleaned) > 32767:
+        cleaned = cleaned[:32740] + " ... [TRUNCATED FOR EXCEL]"
+    return "'" + cleaned if cleaned.startswith("=") else cleaned
+
+
+def _write_summary_sheet(
+    workbook: object, rows: Sequence[Mapping[str, object]], catalogs: Sequence[str],
+) -> None:
+    from openpyxl.chart import BarChart, Reference
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    navy, dark, blue, teal = "10233B", "172D48", "0B6B8B", "057D79"
+    white, pale, light = "FFFFFF", "E9F5F6", "F0F4F9"
+    green, red, amber = "087443", "B42318", "B35D0A"
+    sheet = workbook.create_sheet("Summary")
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_view.zoomScale = 85
+    sheet.freeze_panes = "A4"
+    sheet.sheet_properties.tabColor = teal
+    for column in range(1, 14):
+        sheet.column_dimensions[sheet.cell(1, column).column_letter].width = 14
+
+    def box(cell_range: str, value: object, background: str, color: str,
+            size: int = 11, bold: bool = False, centered: bool = False) -> None:
+        sheet.merge_cells(cell_range)
+        cell = sheet[cell_range.split(":")[0]]
+        cell.value = _excel_safe(value)
+        cell.fill = PatternFill("solid", fgColor=background)
+        cell.font = Font(
+            name="Aptos Display" if size >= 19 else "Aptos",
+            size=size, bold=bold, color=color,
+        )
+        cell.alignment = Alignment(
+            vertical="center", horizontal="center" if centered else "left",
+            indent=0 if centered else 1, wrap_text=True,
+        )
+
+    box("A1:M2", "RULE COMPLIANCE & RECERTIFICATION REPORT", navy, white, 20, True)
+    box(
+        "A3:M3",
+        "Policy scope, Microcosmos ownership, rule classification and observed traffic usage",
+        pale, dark, 10, True,
+    )
+    sheet.row_dimensions[1].height = 30
+    sheet.row_dimensions[2].height = 26
+    sheet.row_dimensions[3].height = 30
+
+    matched = [row for row in rows if row.get("Match status") == "MATCHED"]
+    usage = Counter(str(row.get("Usage Status", "")) for row in matched)
+    cards = (
+        ("A5:C5", "A6:C7", "Report rows", len(rows), teal),
+        ("D5:F5", "D6:F7", "Matched rules", len(matched), green),
+        ("G5:I5", "G6:I7", "Rules with hits", usage["HIT"], blue),
+        ("J5:M5", "J6:M7", "Rules without usage data", usage["NO_DATA"], amber),
+        ("A9:C9", "A10:C11", "Remote Kear not onboarded", sum(
+            row.get("Kear Remote") == KEAR_NOT_ONBOARDED for row in matched
+        ), red),
+        ("D9:F9", "D10:F11", "Undetermined direction", sum(
+            row.get("Direction") == "undetermined" for row in matched
+        ), amber),
+        ("G9:I9", "G10:I11", "Strategic rules", sum(
+            row.get("Rule Category") == "strategic_rule" for row in matched
+        ), red),
+        ("J9:M9", "J10:M11", "Infrastructure rules", sum(
+            row.get("Rule Category") == "infra_rule" for row in matched
+        ), blue),
+    )
+    for label_range, value_range, label, metric, accent in cards:
+        box(label_range, label, dark, white, 10, True, True)
+        box(value_range, metric, light, accent, 24, True, True)
+
+    box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
+    explanations = [
+        ("Kear Remote", "Resolved from the explicit remote app label using Microcosmos Module and Environment. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
+        ("Direction", "The ruleset_scope app is local. Role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined."),
+        ("Rule Category", "BOUQUETS_* and GLOBAL_* rulesets are infra_rule. Other deny rules or rules using a ZNOT_* IP List are strategic_rule. Remaining rules are business_rule."),
+        ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
+        ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
+        ("Dangerous-port hits", "Observed per-port flows are intersected with the configured To Control, To Eradicate and Admin catalogues. Exposure columns describe allowed rule services; Hit columns describe observed traffic."),
+        ("Port Breakdown Complete", "FALSE means at least one completed usage window omitted or could not fully parse per-port details; aggregate hit flows can still be available."),
+        ("Global Consumer", "TRUE only when unscoped_consumers and src_all_workloads are both true, which applies an Extrascope consumer rule to all managed PCE workloads."),
+    ]
+    row_number = 15
+    for subject, explanation in explanations:
+        box(f"A{row_number}:C{row_number}", subject, light, dark, 10, True)
+        box(f"D{row_number}:M{row_number}", explanation, light, dark, 10)
+        sheet.row_dimensions[row_number].height = 42
+        row_number += 1
+
+    box("A25:M25", "TRAFFIC USAGE DISTRIBUTION", navy, white, 11, True)
+    sheet["A27"], sheet["B27"] = "STATUS", "RULE ROWS"
+    for cell in sheet[27][:2]:
+        cell.fill = PatternFill("solid", fgColor=navy)
+        cell.font = Font(name="Aptos", size=10, bold=True, color=white)
+    for offset, status in enumerate(("HIT", "NO_HIT", "NO_DATA"), 28):
+        sheet.cell(offset, 1, status)
+        sheet.cell(offset, 2, usage[status])
+    chart = BarChart()
+    chart.type = "col"
+    chart.style = 10
+    chart.title = "Rule usage status"
+    chart.y_axis.title = "Report rows"
+    chart.add_data(Reference(sheet, min_col=2, min_row=27, max_row=30), titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=28, max_row=30))
+    chart.legend = None
+    chart.width, chart.height = 20, 8
+    sheet.add_chart(chart, "D27")
+
+    box("A38:M38", "DANGEROUS-PORT CATALOGUES", navy, white, 11, True)
+    row_number = 39
+    for catalog in catalogs:
+        box(f"A{row_number}:C{row_number}", catalog, light, dark, 10, True)
+        box(f"D{row_number}:M{row_number}", ", ".join(PORT_CATALOGS[catalog]), light, dark, 10)
+        sheet.row_dimensions[row_number].height = 32
+        row_number += 1
+
+
+def _write_compliance_sheet(
+    workbook: object, rows: Sequence[Mapping[str, object]],
+) -> None:
+    from openpyxl.formatting.rule import CellIsRule
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+
+    navy, white, dark = "10233B", "FFFFFF", "172D48"
+    pale_green, green = "E0F4EA", "087443"
+    pale_red, red = "FCE8E6", "B42318"
+    pale_amber, amber = "FFF2DA", "B35D0A"
+    pale_blue, blue = "E2EDF7", "0B6B8B"
+    sheet = workbook.create_sheet("Compliance")
+    headers = list(rows[0]) if rows else ["Match status"]
+    sheet.append(headers)
+    for row in rows:
+        sheet.append([_excel_safe(row.get(header, "")) for header in headers])
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_view.zoomScale = 85
+    sheet.freeze_panes = "C2"
+    sheet.sheet_properties.tabColor = "057D79"
+    sheet.row_dimensions[1].height = 34
+    for cell in sheet[1]:
+        cell.fill = PatternFill("solid", fgColor=navy)
+        cell.font = Font(name="Aptos", size=10, bold=True, color=white)
+        cell.alignment = Alignment(vertical="center", wrap_text=True, indent=1)
+    for row_number in range(2, sheet.max_row + 1):
+        for cell in sheet[row_number]:
+            cell.font = Font(name="Aptos", size=10, color=dark)
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+        sheet.row_dimensions[row_number].height = 30
+    if rows:
+        table = Table(displayName="ComplianceResults", ref=sheet.dimensions)
+        table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
+            showRowStripes=True, showColumnStripes=False,
+        )
+        sheet.add_table(table)
+    else:
+        sheet.auto_filter.ref = sheet.dimensions
+
+    preferred_widths = {
+        "rule_description": 55, "Source": 50, "Destination": 50, "services": 45,
+        "Warning": 55, "ruleset_scope": 45, "rule_href": 48,
+    }
+    for index, header in enumerate(headers, 1):
+        values = [len(str(row.get(header, "") or "")) for row in rows[:250]]
+        width = preferred_widths.get(header, min(max([len(header), *values]) + 2, 36))
+        sheet.column_dimensions[sheet.cell(1, index).column_letter].width = width
+
+    formats = {
+        "MATCHED": (pale_green, green), "HIT": (pale_green, green),
+        "intra-app": (pale_green, green), "business_rule": (pale_green, green),
+        "NO_MATCH": (pale_red, red), "APP_NOT_FOUND": (pale_red, red),
+        KEAR_NOT_ONBOARDED: (pale_amber, amber), "undetermined": (pale_amber, amber),
+        "NO_HIT": (pale_amber, amber), "strategic_rule": (pale_amber, amber),
+        "NO_DATA": (pale_blue, blue), "incoming": (pale_blue, blue),
+        "outgoing": (pale_blue, blue), "infra_rule": (pale_blue, blue),
+    }
+    for header in (
+        "Match status", "Kear Remote", "Direction", "Rule Category", "Usage Status",
+        "Port Breakdown Complete", "Global Consumer in use",
+    ):
+        if header not in headers or sheet.max_row < 2:
+            continue
+        letter = sheet.cell(1, headers.index(header) + 1).column_letter
+        cell_range = f"{letter}2:{letter}{sheet.max_row}"
+        column_formats = dict(formats)
+        if header == "Port Breakdown Complete":
+            column_formats.update({
+                "TRUE": (pale_green, green), "FALSE": (pale_red, red),
+            })
+        elif header == "Global Consumer in use":
+            column_formats.update({
+                "TRUE": (pale_red, red), "FALSE": (pale_green, green),
+            })
+        for status, (background, foreground) in column_formats.items():
+            sheet.conditional_formatting.add(
+                cell_range,
+                CellIsRule(
+                    operator="equal", formula=[f'"{status}"'],
+                    fill=PatternFill("solid", fgColor=background),
+                    font=Font(name="Aptos", bold=True, color=foreground),
+                ),
+            )
+    sheet.print_title_rows = "1:1"
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+
+
+def _write_metadata_sheet(workbook: object, rows: Sequence[Mapping[str, object]]) -> None:
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    sheet = workbook.create_sheet("Metadata")
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_view.zoomScale = 85
+    sheet.append(["PROPERTY", "VALUE"])
+    for key, value in rows[0].items():
+        sheet.append([key, _excel_safe(value)])
+    for cell in sheet[1]:
+        cell.fill = PatternFill("solid", fgColor="10233B")
+        cell.font = Font(name="Aptos", size=10, bold=True, color="FFFFFF")
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            cell.font = Font(name="Aptos", size=10, color="172D48")
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+    sheet.column_dimensions["A"].width = 28
+    sheet.column_dimensions["B"].width = 100
+    sheet.freeze_panes = "A2"
 
 
 def _load_scope_input(input_path: Optional[Path], labels_path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
@@ -398,12 +709,12 @@ def _with_rule_enrichment_columns(
             key.casefold() == "app" and "Kear Id" not in values
         )
         if insertion_point:
-            output["Kear Remote"] = enrichment.get("kear_remote", "")
+            output["Kear Remote"] = enrichment.get("kear_remote", "") or KEAR_NOT_ONBOARDED
             output["Direction"] = enrichment.get("direction", "")
             output["Rule Category"] = enrichment.get("rule_category", "")
             inserted = True
     if not inserted:
-        output.update({"Kear Remote": enrichment.get("kear_remote", ""),
+        output.update({"Kear Remote": enrichment.get("kear_remote", "") or KEAR_NOT_ONBOARDED,
                        "Direction": enrichment.get("direction", ""),
                        "Rule Category": enrichment.get("rule_category", "")})
     return output

@@ -813,6 +813,23 @@ Rulesets beginning with `BOUQUETS_` or `GLOBAL_` are `infra_rule`; otherwise a
 deny rule or a rule using a `ZNOT_` IP List is `strategic_rule`, and remaining
 rules are `business_rule`.
 
+The workbook opens on a corporate-formatted `Summary` dashboard that documents
+every calculated field and presents report, ownership, classification, and
+traffic KPIs. The `Compliance` sheet starts directly with its filterable table
+header, freezes the header and first two columns, and uses conditional status
+formatting. When no remote Kear can be resolved, `Kear Remote` contains the
+explicit `KEAR_NOT_ONBOARDED_IN_MICROCOSMOS` status instead of an empty value.
+
+The command initializes and reads the configured recertification SQLite
+database. `rule_href` links each inventory rule to its completed usage windows
+and produces `Usage Status`, `Last Hit`, `Days Since Last Hit`, total flow,
+observation-range, and port-breakdown completeness fields. For
+`PORTS_TO_CONTROL`, `PORTS_TO_ERADICATE`, and `PORTS_ADMIN`, the report keeps
+the existing policy-exposure column and adds observed hit ports, hit flows, and
+the last dangerous-port hit date. `NO_DATA` is distinct from a genuinely
+observed `NO_HIT`; incomplete per-port data is explicitly marked `FALSE` and
+must not be interpreted as proof that no dangerous port was used.
+
 ### 6.3 Infrastructure bouquet workbook
 
 `bouquets-report` selects rules whose `ruleset_name` begins with the exact

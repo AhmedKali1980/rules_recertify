@@ -8,6 +8,46 @@ from rules_recertify.history.database import (
 from rules_recertify.history.metrics import summarize_usage
 
 class HistoryTest(unittest.TestCase):
+    def test_compliance_usage_aggregates_completed_windows_and_ports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(Path(directory) / "db.sqlite")
+            db.initialize()
+            with db.connect() as connection:
+                connection.execute(
+                    "INSERT INTO runs(run_id,run_type,status,started_at) VALUES(?,?,?,?)",
+                    ("run", RUN_TYPE_TRAFFIC, "SUCCESS", "2026-10-01"),
+                )
+                connection.executemany(
+                    """INSERT INTO usage_windows
+                    (rule_href,window_start,window_end,status,flows,run_id,raw_json,
+                     port_breakdown_complete,port_details_omitted_count)
+                    VALUES(?,?,?,?,?,?,?,?,?)""",
+                    [
+                        ("/r/1", "2026-10-01", "2026-10-08", "completed", 4,
+                         "run", "{}", 1, 0),
+                        ("/r/1", "2026-10-08", "2026-10-15", "completed", 6,
+                         "run", "{}", 0, 1),
+                        ("/r/1", "2026-10-15", "2026-10-22", "pending", None,
+                         "run", "{}", 1, 0),
+                    ],
+                )
+                connection.executemany(
+                    "INSERT INTO usage_ports VALUES(?,?,?,?,?,?)",
+                    [
+                        ("/r/1", "2026-10-01", "2026-10-08", "TCP", 22, 4),
+                        ("/r/1", "2026-10-08", "2026-10-15", "TCP", 22, 6),
+                    ],
+                )
+            usage = db.compliance_usage()["/r/1"]
+        self.assertEqual(usage["observed_windows"], 2)
+        self.assertEqual(usage["total_flows"], 10)
+        self.assertEqual(usage["last_hit"], "2026-10-15")
+        self.assertEqual(usage["incomplete_windows"], 1)
+        self.assertEqual(usage["ports"], [{
+            "protocol": "TCP", "port": 22, "flows": 10,
+            "last_hit": "2026-10-15",
+        }])
+
     def test_new_database_uses_latest_explicit_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             db=Database(Path(directory)/"db.sqlite"); db.initialize()

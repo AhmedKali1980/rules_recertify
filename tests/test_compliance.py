@@ -1,19 +1,70 @@
 import importlib.util
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from rules_recertify.reporting.compliance import (
-    RULE_FIELDS,
+    KEAR_NOT_ONBOARDED, RULE_FIELDS,
     _contains_user_iplist, _extrascope_warning, _factor_side, _global_consumer_in_use,
     _has_intra_zone_iplist, _is_microcosmos_headers,
     _load_scope_input, _module_from_app, _prepare_microcosmos_input,
     _microcosmos_kear_lookup, _programs_for_app, _resolve_remote_kear,
     _rule_category, _rule_matches_scope, _rule_relationship, _ruleset_scope_context,
+    _usage_columns, _with_rule_enrichment_columns, _write_compliance_sheet,
+    _write_summary_sheet,
 )
 
 
 class ComplianceTest(unittest.TestCase):
+    def test_empty_remote_kear_has_explicit_microcosmos_status(self):
+        enriched = _with_rule_enrichment_columns(
+            {"Kear Id": "K-LOCAL", "app": "APP"}, {"kear_remote": ""},
+        )
+        self.assertEqual(enriched["Kear Remote"], KEAR_NOT_ONBOARDED)
+
+    def test_usage_columns_include_last_hit_and_dangerous_port_hits(self):
+        usage = {
+            "observed_windows": 3, "total_flows": 21,
+            "first_observed": "2026-10-01", "last_observed": "2026-10-22",
+            "last_hit": "2026-10-22", "incomplete_windows": 1,
+            "ports": [
+                {"protocol": "TCP", "port": 22, "flows": 7, "last_hit": "2026-10-22"},
+                {"protocol": "TCP", "port": 23, "flows": 5, "last_hit": "2026-10-15"},
+                {"protocol": "TCP", "port": 443, "flows": 9, "last_hit": "2026-10-22"},
+            ],
+        }
+        columns = _usage_columns(
+            usage, ("PORTS_TO_CONTROL", "PORTS_TO_ERADICATE", "PORTS_ADMIN"),
+            as_of=date(2026, 11, 1),
+        )
+        self.assertEqual(columns["Usage Status"], "HIT")
+        self.assertEqual(columns["Days Since Last Hit"], 10)
+        self.assertEqual(columns["PORTS_TO_CONTROL Hit Flows"], 7)
+        self.assertEqual(columns["PORTS_TO_ERADICATE Hit Flows"], 5)
+        self.assertEqual(columns["PORTS_ADMIN Hit Flows"], 7)
+        self.assertEqual(columns["Port Breakdown Complete"], "FALSE")
+        self.assertIn("TCP/22 (7 flows)", columns["PORTS_TO_CONTROL Hit Ports"])
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is not installed")
+    def test_professional_workbook_sheets_have_dashboard_table_and_navigation(self):
+        from openpyxl import Workbook
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        rows = [{
+            "Kear Id": "K-LOCAL", "Kear Remote": KEAR_NOT_ONBOARDED,
+            "Direction": "undetermined", "Rule Category": "strategic_rule",
+            "Match status": "MATCHED", "Usage Status": "NO_DATA",
+            "Port Breakdown Complete": "NO_DATA", "Global Consumer in use": "FALSE",
+        }]
+        _write_summary_sheet(workbook, rows, ("PORTS_TO_CONTROL",))
+        _write_compliance_sheet(workbook, rows)
+        self.assertEqual(workbook.sheetnames, ["Summary", "Compliance"])
+        self.assertEqual(workbook["Compliance"].freeze_panes, "C2")
+        self.assertFalse(workbook["Summary"].sheet_view.showGridLines)
+        self.assertFalse(workbook["Compliance"].sheet_view.showGridLines)
+        self.assertIn("ComplianceResults", workbook["Compliance"].tables)
+
     def test_rule_description_is_part_of_compliance_inventory_contract(self):
         self.assertIn("rule_description", RULE_FIELDS)
         self.assertLess(RULE_FIELDS.index("rule_description"), RULE_FIELDS.index("rule_enabled"))

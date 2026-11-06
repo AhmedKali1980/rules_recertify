@@ -438,6 +438,18 @@ modules rattachés au même Kear sont considérés `intra-app`. Les rulesets
 utilisant une IP List `ZNOT_*` sont `strategic_rule`; les autres sont
 `business_rule`.
 
+Le classeur professionnel commence par une feuille `Summary` en anglais qui
+documente les règles de calcul et présente les KPI. La feuille `Compliance`
+reste une table directement filtrable avec entête figée. Un Kear distant non
+résolu est affiché comme `KEAR_NOT_ONBOARDED_IN_MICROCOSMOS` plutôt que vide.
+Le `rule_href` permet également d'enrichir chaque ligne depuis la base SQLite :
+statut d'usage, dernier hit, nombre de jours depuis ce hit, total des flux,
+période observée et complétude du détail par port. Les catalogues
+`PORTS_TO_CONTROL`, `PORTS_TO_ERADICATE` et `PORTS_ADMIN` disposent de colonnes
+supplémentaires indiquant les ports réellement observés, leurs flux cumulés et
+leur dernière date de hit. `NO_DATA` reste volontairement distinct de
+`NO_HIT`.
+
 ## Rapport des rulesets BOUQUETS INFRA
 
 La commande suivante sélectionne dans le snapshot les règles dont le

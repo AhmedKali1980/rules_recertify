@@ -609,6 +609,56 @@ class Database:
                 count += 1
         return count
 
+    def compliance_usage(self) -> Dict[str, Dict[str, object]]:
+        """Return completed usage-window and per-port history keyed by rule href."""
+        with self.connect() as db:
+            windows = db.execute(
+                """SELECT rule_href,
+                COUNT(*) AS observed_windows,
+                COALESCE(SUM(CASE WHEN flows > 0 THEN flows ELSE 0 END), 0) AS total_flows,
+                MIN(window_start) AS first_observed,
+                MAX(window_end) AS last_observed,
+                MAX(CASE WHEN flows > 0 THEN window_end END) AS last_hit,
+                SUM(CASE WHEN port_breakdown_complete = 0 THEN 1 ELSE 0 END)
+                  AS incomplete_windows
+                FROM usage_windows
+                WHERE status = 'completed'
+                GROUP BY rule_href"""
+            ).fetchall()
+            ports = db.execute(
+                """SELECT p.rule_href,p.protocol,p.port,SUM(p.flows) AS flows,
+                MAX(p.window_end) AS last_hit
+                FROM usage_ports p
+                JOIN usage_windows w ON w.rule_href=p.rule_href
+                  AND w.window_start=p.window_start AND w.window_end=p.window_end
+                WHERE w.status='completed' AND p.flows > 0
+                GROUP BY p.rule_href,p.protocol,p.port"""
+            ).fetchall()
+        output: Dict[str, Dict[str, object]] = {
+            str(row["rule_href"]): {
+                "observed_windows": int(row["observed_windows"]),
+                "total_flows": int(row["total_flows"]),
+                "first_observed": str(row["first_observed"] or ""),
+                "last_observed": str(row["last_observed"] or ""),
+                "last_hit": str(row["last_hit"] or ""),
+                "incomplete_windows": int(row["incomplete_windows"] or 0),
+                "ports": [],
+            }
+            for row in windows
+        }
+        for row in ports:
+            output.setdefault(str(row["rule_href"]), {
+                "observed_windows": 0, "total_flows": 0, "first_observed": "",
+                "last_observed": "", "last_hit": "", "incomplete_windows": 0,
+                "ports": [],
+            })["ports"].append({
+                "protocol": str(row["protocol"]).upper(),
+                "port": int(row["port"]),
+                "flows": int(row["flows"]),
+                "last_hit": str(row["last_hit"] or ""),
+            })
+        return output
+
     def prune(self, retention_days: int, as_of: Optional[date] = None) -> int:
         cutoff = (as_of or datetime.now(timezone.utc).date()) - timedelta(days=retention_days)
         with self.connect() as db:

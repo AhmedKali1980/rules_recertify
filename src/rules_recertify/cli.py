@@ -138,13 +138,15 @@ def parser() -> argparse.ArgumentParser:
         help="Output XLSX path (default: output_dir/iplist_search_<UTC timestamp>.xlsx)",
     )
     compliance = commands.add_parser(
-        "compliance-report", help="Evaluate snapshot rules for application scopes",
+        "compliance-report",
+        help="Evaluate application rules with Microcosmos ownership and usage history",
     )
     compliance.add_argument("--input", type=Path,
                             help=("Optional CSV/XLSX containing app and optional env columns, "
                                   "or a Microcosmos XLSX containing Module and Environment"))
     compliance.add_argument("--out", type=Path,
-                            help="Output XLSX path (default: output_dir/compliance_<timestamp>.xlsx)")
+                            help=("Professional XLSX with Summary, Compliance and Metadata sheets "
+                                  "(default: output_dir/compliance_<timestamp>.xlsx)"))
     bouquets = commands.add_parser(
         "bouquets-report", help="Export BOUQUETS_* infrastructure rulesets and dictionaries",
     )
@@ -366,11 +368,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             ))
             return 0
         if args.command == "compliance-report":
+            db.initialize()
             target = args.out or Path(settings.output_dir) / (
                 "compliance_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
             )
             print(generate_compliance_workbook(
-                Path(settings.raw_dir), target, settings.dangerous_port_lists, args.input,
+                Path(settings.raw_dir), target, settings.dangerous_port_lists, args.input, db,
             ))
             return 0
         if args.command == "bouquets-report":

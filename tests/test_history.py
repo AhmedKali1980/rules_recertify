@@ -8,6 +8,46 @@ from rules_recertify.history.database import (
 from rules_recertify.history.metrics import summarize_usage
 
 class HistoryTest(unittest.TestCase):
+    def test_compliance_usage_aggregates_completed_windows_and_ports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(Path(directory) / "db.sqlite")
+            db.initialize()
+            with db.connect() as connection:
+                connection.execute(
+                    "INSERT INTO runs(run_id,run_type,status,started_at) VALUES(?,?,?,?)",
+                    ("run", RUN_TYPE_TRAFFIC, "SUCCESS", "2026-10-01"),
+                )
+                connection.executemany(
+                    """INSERT INTO usage_windows
+                    (rule_href,window_start,window_end,status,flows,run_id,raw_json,
+                     port_breakdown_complete,port_details_omitted_count)
+                    VALUES(?,?,?,?,?,?,?,?,?)""",
+                    [
+                        ("/r/1", "2026-10-01", "2026-10-08", "completed", 4,
+                         "run", "{}", 1, 0),
+                        ("/r/1", "2026-10-08", "2026-10-15", "completed", 6,
+                         "run", "{}", 0, 1),
+                        ("/r/1", "2026-10-15", "2026-10-22", "pending", None,
+                         "run", "{}", 1, 0),
+                    ],
+                )
+                connection.executemany(
+                    "INSERT INTO usage_ports VALUES(?,?,?,?,?,?)",
+                    [
+                        ("/r/1", "2026-10-01", "2026-10-08", "TCP", 22, 4),
+                        ("/r/1", "2026-10-08", "2026-10-15", "TCP", 22, 6),
+                    ],
+                )
+            usage = db.compliance_usage()["/r/1"]
+        self.assertEqual(usage["observed_windows"], 2)
+        self.assertEqual(usage["total_flows"], 10)
+        self.assertEqual(usage["last_hit"], "2026-10-15")
+        self.assertEqual(usage["incomplete_windows"], 1)
+        self.assertEqual(usage["ports"], [{
+            "protocol": "TCP", "port": 22, "flows": 10,
+            "last_hit": "2026-10-15",
+        }])
+
     def test_new_database_uses_latest_explicit_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             db=Database(Path(directory)/"db.sqlite"); db.initialize()
@@ -135,6 +175,43 @@ class HistoryTest(unittest.TestCase):
             self.assertEqual(state["next_window_start"], "2026-01-10")
             with self.assertRaisesRegex(ValueError, "already complete"):
                 db.begin_backfill_window("initial", "run-4")
+
+    def test_completed_backfill_can_be_extended_without_replaying_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db=Database(Path(directory)/"db.sqlite"); db.initialize()
+            db.initialize_backfill("history", "2026-06-20", "2026-09-20")
+            with db.connect() as connection:
+                connection.execute(
+                    "UPDATE backfill_states SET next_window_start='2026-09-20',"
+                    "last_successful_window_end='2026-09-20',status='COMPLETED' "
+                    "WHERE backfill_id='history'"
+                )
+            state=db.extend_backfill("history", "2026-10-11")
+            self.assertEqual(state["backfill_start"], "2026-06-20")
+            self.assertEqual(state["next_window_start"], "2026-09-20")
+            self.assertEqual(state["backfill_target_end"], "2026-10-11")
+            self.assertEqual(state["status"], "PENDING")
+            windows=[]
+            for index in range(3):
+                lease=db.begin_backfill_window("history", f"extended-{index}")
+                windows.append((lease["window_start"], lease["window_end"]))
+                db.update_backfill_window(
+                    "history", f"extended-{index}", lease["window_end"], True,
+                )
+            self.assertEqual(windows, [
+                ("2026-09-20", "2026-09-27"),
+                ("2026-09-27", "2026-10-04"),
+                ("2026-10-04", "2026-10-11"),
+            ])
+            self.assertEqual(db.backfill_state("history")["status"], "COMPLETED")
+
+    def test_running_backfill_cannot_be_extended(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db=Database(Path(directory)/"db.sqlite"); db.initialize()
+            db.initialize_backfill("history", "2026-06-20", "2026-09-20")
+            db.begin_backfill_window("history", "active")
+            with self.assertRaisesRegex(ValueError, "cannot extend a running backfill"):
+                db.extend_backfill("history", "2026-10-11")
 
     def test_92_day_backfill_has_thirteen_full_windows_and_one_partial(self):
         with tempfile.TemporaryDirectory() as directory:

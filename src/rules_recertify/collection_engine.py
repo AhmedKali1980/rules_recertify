@@ -44,9 +44,11 @@ RULE_REQUIRED = ("ruleset_href", "rule_href")
 USAGE_REQUIRED = (*RULE_REQUIRED, "async_query_status", "flows", "flows_by_port", "query_body")
 LABEL_REQUIRED = ("key", "value")
 POLICY_REFERENCE_EXPORTS = (
-    "export_wkld.csv", "export_iplists.csv", "export_services.csv",
+    "export_wkld.csv", "export_iplists.csv", "export_services.csv", "export_labelgroups.csv",
     "export_wkld.derived.csv", "export_iplists.derived.csv",
 )
+SNAPSHOT_DIRECTORY_MODE = 0o2750
+SNAPSHOT_FILE_MODE = 0o640
 
 
 def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> Dict[str, object]:
@@ -119,6 +121,8 @@ def collect_policy(settings: Settings, pce_stub_dir: Optional[Path] = None) -> D
                 name for name in (*POLICY_REFERENCE_EXPORTS, "export_wkld.l3sm.m.csv")
                 if (run_dir / name).is_file()
             ],
+            "snapshot_path": str(raw_root / "snapshot"),
+            "manifest_path": str(raw_root / "snapshot" / "manifest.json"),
         })
         details["artifacts"] = _record_artifacts(db, run_id, run_dir)
         details["current_stage"] = "FINALIZED"
@@ -231,6 +235,15 @@ def initialize_backfill_traffic(settings: Settings, target_end: date,
     return dict(db.backfill_state(backfill_id) or {})
 
 
+def extend_backfill_traffic(settings: Settings, target_end: date,
+                            backfill_id: str = "traffic-92-days") -> Dict[str, object]:
+    """Move an existing idle backfill target forward, preserving completed windows."""
+    if not backfill_id.strip():
+        raise ValueError("backfill_id must not be empty")
+    db = Database(Path(settings.state_db)); db.initialize()
+    return dict(db.extend_backfill(backfill_id, target_end.isoformat()))
+
+
 def backfill_traffic(settings: Settings, backfill_id: str = "traffic-92-days",
                      no_wait: bool = False) -> Dict[str, object]:
     """Process at most one oldest-first backfill window."""
@@ -311,6 +324,7 @@ def _collect_traffic_run(
     invalid_query_rules: List[Mapping[str, object]] = []
     invalid_port_rules: List[Mapping[str, object]] = []
     traffic_audit_path: Optional[Path] = None
+    resume_run: Optional[Mapping[str, object]] = None
     try:
         if cursor_name:
             db.begin_traffic_window(
@@ -319,6 +333,9 @@ def _collect_traffic_run(
             )
             cursor_started = True
         if backfill_id:
+            resume_run = db.backfill_resume_run(
+                backfill_id, traffic_start.isoformat(), traffic_end.isoformat(),
+            )
             lease = db.begin_backfill_window(
                 backfill_id, run_id, settings.traffic_window_days,
             )
@@ -338,6 +355,7 @@ def _collect_traffic_run(
             )
             details["reference_exports"] = [
                 "export_wkld.csv", "export_iplists.csv", "export_services.csv",
+                "export_labelgroups.csv",
                 "export_wkld.derived.csv", "export_iplists.derived.csv",
             ]
             details["current_stage"] = "EXPORTING_RULESETS"
@@ -450,6 +468,75 @@ def _collect_traffic_run(
         pending_batches = list(batches)
         runtime_oversized = []
         index = 0
+        if resume_run:
+            previous = resume_run.get("details", {})
+            assert isinstance(previous, dict)
+            previous_batches = previous.get("batches", [])
+            completed_batches = (
+                previous_batches if isinstance(previous_batches, list) else []
+            )
+            sequential = all(
+                isinstance(item, dict) and item.get("batch") == number
+                for number, item in enumerate(completed_batches, 1)
+            )
+            same_plan_size = previous.get("batch_count") == len(batches)
+            stored_usage = db.usage_for_window(
+                traffic_start.isoformat(), traffic_end.isoformat(),
+            )
+            stored_rule_hrefs = {
+                str(row.get("rule_href", "")) for row in stored_usage
+            }
+            completed_rulesets = {
+                item.href
+                for batch in batches[:len(completed_batches)]
+                for item in batch
+            }
+            expected_rule_hrefs = {
+                str(row.get("rule_href", "")) for row in inventory
+                if str(row.get("ruleset_href", "")) in completed_rulesets
+            }
+            completed_results = all(
+                isinstance(item, dict)
+                and int(item.get("total", 0)) > 0
+                and int(item.get("completed", 0)) == int(item.get("total", 0))
+                for item in completed_batches
+            )
+            covered = expected_rule_hrefs <= stored_rule_hrefs
+            if (
+                completed_batches and sequential and same_plan_size
+                and len(completed_batches) <= len(batches)
+                and completed_results and covered
+            ):
+                index = len(completed_batches)
+                pending_batches = pending_batches[index:]
+                details["batches"] = [
+                    {**item, "output": "", "resumed": True}
+                    for item in completed_batches if isinstance(item, dict)
+                ]
+                details["resumed_from_run_id"] = resume_run["run_id"]
+                details["resumed_completed_batches"] = index
+                details["resume_batch"] = index + 1
+                for row in stored_usage:
+                    copied = dict(row)
+                    ruleset_href = str(copied.get("ruleset_href", ""))
+                    copied["_batch"] = next(
+                        (
+                            batch_number for batch_number, batch in enumerate(batches, 1)
+                            if any(item.href == ruleset_href for item in batch)
+                        ),
+                        "",
+                    )
+                    usage_by_rule[str(copied.get("rule_href", ""))] = copied
+                LOG.info(
+                    "Resuming failed backfill at batch %s; preserving %s completed batches from run %s",
+                    index + 1, index, resume_run["run_id"],
+                )
+            elif completed_batches:
+                details["resume_ignored_reason"] = "BATCH_PLAN_CHANGED"
+                LOG.warning(
+                    "Cannot safely resume backfill batches from run %s because the batch plan changed; restarting window",
+                    resume_run["run_id"],
+                )
         while pending_batches:
             batch = pending_batches.pop(0)
             index += 1
@@ -597,7 +684,13 @@ def _collect_traffic_run(
             for item, reported_rule_count in runtime_oversized
         ]
         details["runtime_oversized_ruleset_count"] = len(runtime_oversized)
-        details.pop("current_batch", None)
+        # ``index`` also counts submission attempts that Workloader asks us to
+        # split (or rulesets rejected at runtime).  It must not be presented as
+        # the number of async batches: that made successful runs appear as
+        # 43/44 even though all 43 resulting query batches had completed.
+        details["batch_attempt_count"] = index
+        details["batch_count"] = len(details["batches"])
+        details["current_batch"] = details["batch_count"]
         details.pop("current_batch_started_at", None)
         details["current_stage"] = "FINALIZED"
         summary = _summarize_batches(details["batches"])
@@ -824,6 +917,10 @@ def _validate_policy_exports(run_dir: Path) -> None:
     )))
     list(read_rows(run_dir / "export_iplists.csv", ("name", "include")))
     list(read_rows(run_dir / "export_services.csv", ("name", "service_ports")))
+    list(read_rows(run_dir / "export_labelgroups.csv", (
+        "name", "key", "description", "member_labels", "member_label_groups",
+        "fully_expanded_members", "href",
+    )))
     list(read_rows(run_dir / "labels.csv", LABEL_REQUIRED))
     list(read_rows(run_dir / "rulesets.csv", ("href", "enabled")))
     list(read_rows(run_dir / "rules_inventory.csv", RULE_REQUIRED))
@@ -853,6 +950,11 @@ def _publish_materialized_snapshot(run_dir: Path, snapshot_dir: Path) -> Optiona
             if not target.is_file() or sha256_file(source) != sha256_file(target):
                 shutil.rmtree(temporary, ignore_errors=True)
                 raise RuntimeError(f"Snapshot verification failed for {source.name}")
+    try:
+        _normalize_snapshot_permissions(temporary)
+    except OSError as exc:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise RuntimeError(f"Unable to apply snapshot permissions: {exc}") from exc
     previous: Optional[Path] = None
     if snapshot_dir.exists():
         snapshot_dir.replace(backup)
@@ -864,6 +966,20 @@ def _publish_materialized_snapshot(run_dir: Path, snapshot_dir: Path) -> Optiona
             previous.replace(snapshot_dir)
         raise
     return previous
+
+
+def _normalize_snapshot_permissions(snapshot_dir: Path) -> None:
+    """Make a published policy snapshot readable by the owning team group.
+
+    Snapshot files must not inherit restrictive modes such as ``0600`` from
+    individual Workloader/import processes. Keep them non-public and
+    non-writable by the group while granting consistent group read access.
+    """
+    snapshot_dir.chmod(SNAPSHOT_DIRECTORY_MODE)
+    for path in snapshot_dir.rglob("*"):
+        if path.is_symlink():
+            continue
+        path.chmod(SNAPSHOT_DIRECTORY_MODE if path.is_dir() else SNAPSHOT_FILE_MODE)
 
 
 def _restore_materialized_snapshot(snapshot_dir: Path, backup: Optional[Path]) -> None:

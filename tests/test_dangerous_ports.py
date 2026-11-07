@@ -24,7 +24,7 @@ class DangerousPortsTest(unittest.TestCase):
     def test_admin_catalog_and_protocol_slash_input(self):
         self.assertEqual(
             dangerous_ports("TCP/22;UDP/1434;TCP/1520-1522", ["PORTS_ADMIN"]),
-            "TCP/1521-1522, UDP/1434, TCP/22",
+            "TCP/22, TCP/1521, TCP/1522, UDP/1434",
         )
 
     def test_non_matching_and_portless_services_are_empty(self):

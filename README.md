@@ -434,7 +434,7 @@ différente est résolue par son `Module` et son environnement dans l'extract
 Microcosmos. La direction vaut `incoming`, `outgoing`, `intra-app` ou
 `undetermined` quand la topologie ne permet aucune conclusion fiable. Deux
 modules rattachés au même Kear sont considérés `intra-app`. Les rulesets
-`BOUQUETS_*` et `GLOBAL_*` sont classés `infra_rule`; les règles deny ou
+`BOUQUETS_*`, `GLOBAL_*` et `LUIGI_*` sont classés `infra_rule`; les règles deny ou
 utilisant une IP List `ZNOT_*` sont `strategic_rule`; les autres sont
 `business_rule`.
 
@@ -452,6 +452,9 @@ Lorsqu'une règle scopée par un `appgroup` est découverte grâce à une applic
 explicite en Source et que la Destination vaut `All workloads`, la direction est
 calculée relativement à l'application qui a déclenché le match et vaut
 `outgoing` (`incoming` pour le cas symétrique).
+Une extrémité composée uniquement d'exclusions, par exemple
+`ALL EXCEPT(role:FRONTEND)`, hérite du scope de la ruleset. Deux extrémités de
+ce type restent donc `intra-app`.
 Le `rule_href` permet également d'enrichir chaque ligne depuis la base SQLite :
 statut d'usage, dernier hit, nombre de jours depuis ce hit, total des flux,
 période observée et complétude du détail par port. Les catalogues

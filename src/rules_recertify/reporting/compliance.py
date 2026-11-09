@@ -65,6 +65,12 @@ def generate_compliance_workbook(
     }
 
     rows: List[Dict[str, object]] = []
+    input_rows_by_app: Dict[str, List[Mapping[str, str]]] = {}
+    for candidate in input_rows:
+        candidate_app = _get_case_insensitive(candidate, "app").strip().casefold()
+        if candidate_app:
+            input_rows_by_app.setdefault(candidate_app, []).append(candidate)
+    emitted_outbound: set[Tuple[str, str]] = set()
     for input_row in input_rows:
         app = _get_case_insensitive(input_row, "app").strip()
         env = str(input_row.get("__compliance_env", _get_case_insensitive(input_row, "env"))).strip()
@@ -101,19 +107,38 @@ def generate_compliance_workbook(
             })
             continue
         for rule in matched:
+            effective_input = input_row
+            outbound_source = _outbound2apa_source_app(rule, group_index)
+            if outbound_source:
+                outbound_key = (rule.get("rule_href", ""), outbound_source.casefold())
+                if outbound_key in emitted_outbound:
+                    continue
+                source_rows = input_rows_by_app.get(outbound_source.casefold(), [])
+                if source_rows:
+                    effective_input = _preferred_input_row(source_rows, env)
+                emitted_outbound.add(outbound_key)
+            effective_app = _get_case_insensitive(effective_input, "app").strip()
+            effective_programs = _programs_for_app(effective_app, groups)
+            effective_input_values = {
+                column: effective_input.get(column, "") for column in primary_columns
+            }
+            effective_extra_values = {
+                column: effective_input.get(column, "")
+                for column in input_columns if column not in primary_columns
+            }
             source, source_kind = _factor_side(rule, "src", group_index)
             destination, destination_kind = _factor_side(rule, "dst", group_index)
             expanded_services = _expand_services(rule["services"], services)
             enrichment = _rule_relationship(
-                rule, input_row, microcosmos_lookup if microcosmos_input else None,
+                rule, effective_input, microcosmos_lookup if microcosmos_input else None,
                 group_index,
             )
             usage = _usage_columns(
                 usage_by_rule.get(rule["rule_href"]), report_catalogs,
             )
             rows.append({
-                **_with_rule_enrichment_columns(input_values, enrichment),
-                "Program (KPI)": programs,
+                **_with_rule_enrichment_columns(effective_input_values, enrichment),
+                "Program (KPI)": effective_programs,
                 "Match status": "MATCHED",
                 "Warning": _join_warnings(_extrascope_warning(rule), enrichment["warning"]),
                 "Global Consumer in use": str(_global_consumer_in_use(rule)).upper(),
@@ -141,7 +166,7 @@ def generate_compliance_workbook(
                     "Intra-zone" if _ruleset_identity(rule) in intra_zone_rulesets else ""
                 ),
                 **usage,
-                **extra_values,
+                **effective_extra_values,
             })
 
     from openpyxl import Workbook
@@ -326,8 +351,9 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the explicit remote app label using Microcosmos Module and Environment. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "The ruleset_scope app is normally local. When an app-group-scoped rule is discovered through an explicit app on one side and All workloads on the other, direction is relative to that matched input app (source = outgoing, destination = incoming). Otherwise role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules whose source explicitly selects the input app are outgoing."),
-        ("Rule Category", "BOUQUETS_* and GLOBAL_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
+        ("Direction", "The ruleset_scope app is normally local. When an app-group-scoped rule is discovered through an explicit app on one side and All workloads on the other, direction is relative to that matched input app (source = outgoing, destination = incoming). Otherwise role-only selectors, exclusion-only ALL EXCEPT selectors, and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules are always aligned to their single explicit source app and classified as outgoing."),
+        ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for an unmanaged destination. If its destination explicitly selects a managed application, the rule remains in Business Rules but receives OUTBOUND2APA_DESTINATION_MANAGED."),
+        ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
         ("Label groups & exclusions", "Label groups confirmed in export_labelgroups.csv are rendered in the existing scope, Source, and Destination columns as <key>group:<name> (for example appgroup:PAYMENTS). Excluded labels and groups are rendered as ALL EXCEPT(<selector>)."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
@@ -664,6 +690,38 @@ def _resolve_remote_kear(
     return "", "REMOTE_KEAR_AMBIGUOUS"
 
 
+def _outbound2apa_source_app(
+    rule: Mapping[str, str],
+    group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
+) -> str:
+    """Return the single local source app for an unscoped OUTBOUND2APA rule."""
+    if "OUTBOUND2APA" not in rule.get("ruleset_name", "").upper():
+        return ""
+    scope_apps = _expanded_selector_labels(
+        rule.get("ruleset_scope", ""), "", group_index or {},
+    ).get("app", set())
+    if scope_apps:
+        return ""
+    source_apps = _expanded_selector_labels(
+        rule.get("src_labels", ""), rule.get("src_label_groups", ""),
+        group_index or {},
+    ).get("app", set())
+    return next(iter(source_apps)) if len(source_apps) == 1 else ""
+
+
+def _preferred_input_row(
+    rows: Sequence[Mapping[str, str]], environment: str,
+) -> Mapping[str, str]:
+    """Prefer the source application's row in the rule's environment."""
+    wanted = environment.casefold()
+    exact = [
+        row for row in rows
+        if str(row.get("__compliance_env", _get_case_insensitive(row, "env")))
+        .strip().casefold() == wanted
+    ]
+    return exact[0] if exact else rows[0]
+
+
 def _side_relationship(
     rule: Mapping[str, str], prefix: str, local_app: str,
     group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
@@ -677,11 +735,17 @@ def _side_relationship(
     explicit_apps.update(_group_member_values(
         rule.get(f"{prefix}_label_groups", ""), "app", group_index or {},
     ))
+    has_exclusions = bool(
+        _parts(rule.get(f"{prefix}_labels_exclusions", ""))
+        or _parts(rule.get(f"{prefix}_label_groups_exclusions", ""))
+    )
     local = local_app.casefold()
     remote_apps = {app for app in explicit_apps if app != local}
     has_local_app = local in explicit_apps
 
-    kinds = sum((bool(all_workloads), has_iplist, has_local_app, bool(remote_apps)))
+    kinds = sum((
+        bool(all_workloads), has_iplist, has_local_app, bool(remote_apps), has_exclusions,
+    ))
     if has_iplist and kinds > 1:
         return "ambiguous", remote_apps
     if all_workloads and remote_apps:
@@ -692,7 +756,10 @@ def _side_relationship(
         return "iplist", set()
     if remote_apps:
         return "remote_app", remote_apps
-    if all_workloads or has_local_app or rule.get(f"{prefix}_labels", "").strip():
+    if (
+        all_workloads or has_local_app or has_exclusions
+        or rule.get(f"{prefix}_labels", "").strip()
+    ):
         return "local", set()
     return "empty", set()
 
@@ -713,7 +780,12 @@ def _rule_relationship(
         else ""
     )
     local_kear = _get_case_insensitive(input_row, "Kear Id").strip()
-    environment = next(iter(scope.get("env", set())), "")
+    environment = next(
+        iter(scope.get("env", set())),
+        str(input_row.get(
+            "__compliance_env", _get_case_insensitive(input_row, "Environment"),
+        )).strip(),
+    )
     source_kind, source_apps = _side_relationship(rule, "src", local_app, group_index)
     destination_kind, destination_apps = _side_relationship(
         rule, "dst", local_app, group_index,
@@ -753,20 +825,27 @@ def _rule_relationship(
         return {"kear_remote": "", "direction": "incoming",
                 "rule_category": category, "warning": ""}
 
-    # OUTBOUND2APA is a tactical, unscoped construct: the explicitly selected
-    # source application is the local endpoint and the destination is unmanaged.
-    # The input application remains the authoritative local identity/Kear.
-    tactical_outbound = (
-        not local_app
-        and "OUTBOUND2APA" in rule.get("ruleset_name", "").upper()
-        and input_app
-        and input_app in _expanded_selector_labels(
-            rule.get("src_labels", ""), rule.get("src_label_groups", ""), group_index,
-        ).get("app", set())
-    )
-    if tactical_outbound:
-        return {"kear_remote": "", "direction": "outgoing",
-                "rule_category": category, "warning": ""}
+    # OUTBOUND2APA is a tactical, unscoped construct. Its single explicit
+    # source application is always local, even when the rule was initially
+    # discovered through a managed destination application.
+    outbound_source = _outbound2apa_source_app(rule, group_index)
+    if outbound_source and input_app == outbound_source.casefold():
+        destination_labels = _expanded_selector_labels(
+            rule.get("dst_labels", ""), rule.get("dst_label_groups", ""), group_index,
+        )
+        destination_apps = destination_labels.get("app", set())
+        warning = "OUTBOUND2APA_DESTINATION_MANAGED" if destination_apps else ""
+        remote_kear = ""
+        if len(destination_apps) == 1 and lookup is not None:
+            destination_environment = next(
+                iter(destination_labels.get("env", set())), environment,
+            )
+            remote_kear, remote_warning = _resolve_remote_kear(
+                next(iter(destination_apps)), destination_environment, lookup,
+            )
+            warning = _join_warnings(warning, remote_warning)
+        return {"kear_remote": remote_kear, "direction": "outgoing",
+                "rule_category": category, "warning": warning}
     if not local_app:
         return {"kear_remote": "", "direction": "undetermined",
                 "rule_category": category, "warning": "LOCAL_SCOPE_UNDETERMINED"}
@@ -803,7 +882,7 @@ def _rule_relationship(
 def _rule_category(rule: Mapping[str, str]) -> str:
     """Apply the approved infrastructure/strategic/business precedence."""
     name = rule.get("ruleset_name", "").strip().upper()
-    if name.startswith(("BOUQUETS_", "GLOBAL_")):
+    if name.startswith(("BOUQUETS_", "GLOBAL_", "LUIGI_")):
         return "infra_rule"
     description = rule.get("rule_description", "").lstrip().casefold()
     iplist_names = _iplist_names(rule.get("src_iplists", ""))

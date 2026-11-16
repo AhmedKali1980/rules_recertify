@@ -167,7 +167,7 @@ def _factor_side(
         for value in _parts(rule.get(field, "")):
             name = _clean_reference(value)
             key = group_types.get(name.casefold(), "unknown")
-            output.append(f"labelgroup.{key}:{name}" + (" [excluded]" if exclusion else ""))
+            output.append(f"{key}group:{name}" + (" [excluded]" if exclusion else ""))
             groups.add(name)
     for value in _parts(rule.get(f"{prefix}_iplists", "")):
         name = _clean_reference(value)

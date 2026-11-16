@@ -47,13 +47,18 @@ class BouquetsReportTest(unittest.TestCase):
         )
         self.assertEqual(value.splitlines(), [
             "label.app:APP_A", "label.role:DB.OCP", "label.env:DEV [excluded]",
-            "labelgroup.loc:EUR-LGL", "iplist:Any (0.0.0.0/0)",
+            "locgroup:EUR-LGL", "iplist:Any (0.0.0.0/0)",
         ])
         self.assertIsInstance(value, str)
         self.assertEqual(value.count("\n"), 4)
         self.assertEqual(iplists, {"Any (0.0.0.0/0)"})
         self.assertEqual(groups, {"EUR-LGL"})
         self.assertEqual(pairs, set())
+
+    def test_application_groups_use_appgroup_prefix(self):
+        rule = {"src_label_groups": "PAYMENTS", "src_label_groups_exclusions": "OLD"}
+        value, _, _, _ = _factor_side(rule, "src", {}, {"payments": "app", "old": "app"})
+        self.assertEqual(value.splitlines(), ["appgroup:PAYMENTS", "appgroup:OLD [excluded]"])
 
     def test_workbook_filters_bouquets_and_builds_dictionaries(self):
         try:

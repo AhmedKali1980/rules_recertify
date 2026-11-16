@@ -328,7 +328,7 @@ def _write_summary_sheet(
         ("Kear Remote", "Resolved from the explicit remote app label using Microcosmos Module and Environment. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
         ("Direction", "The ruleset_scope app is normally local. When an app-group-scoped rule is discovered through an explicit app on one side and All workloads on the other, direction is relative to that matched input app (source = outgoing, destination = incoming). Otherwise role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules whose source explicitly selects the input app are outgoing."),
         ("Rule Category", "BOUQUETS_* and GLOBAL_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
-        ("Label groups & exclusions", "Label groups confirmed in export_labelgroups.csv are rendered in the existing scope, Source, and Destination columns as <key>group:<name> (for example appgroup:PAYMENTS). Excluded labels and groups are rendered as ALL EXCEPT(<selector>)."),
+        ("Label groups & exclusions", "Label groups confirmed in export_labelgroups.csv are rendered in the existing scope, Source, and Destination columns as <key>group:<name> (for example appgroup:PAYMENTS). Excluded labels and groups are rendered as EXCEPT(<selector>) within the remaining ruleset scope."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
         ("Dangerous-port hits", "Observed per-port flows are intersected with the configured To Control, To Eradicate and Admin catalogues. Exposure columns describe allowed rule services; Hit columns describe observed traffic."),
@@ -671,12 +671,15 @@ def _side_relationship(
     """Classify one rule side relative to the application ruleset scope."""
     all_workloads = parse_bool(rule.get(f"{prefix}_all_workloads", ""))
     has_iplist = bool(_iplist_names(rule.get(f"{prefix}_iplists", "")))
-    explicit_apps = set(
-        _labels(rule.get(f"{prefix}_labels", "")).get("app", set())
-    )
-    explicit_apps.update(_group_member_values(
-        rule.get(f"{prefix}_label_groups", ""), "app", group_index or {},
-    ))
+    explicit_apps = _expanded_selector_labels(
+        rule.get(f"{prefix}_labels", ""),
+        rule.get(f"{prefix}_label_groups", ""), group_index or {},
+    ).get("app", set())
+    excluded_apps = _expanded_selector_labels(
+        rule.get(f"{prefix}_labels_exclusions", ""),
+        rule.get(f"{prefix}_label_groups_exclusions", ""), group_index or {},
+    ).get("app", set())
+    explicit_apps = explicit_apps - excluded_apps
     local = local_app.casefold()
     remote_apps = {app for app in explicit_apps if app != local}
     has_local_app = local in explicit_apps
@@ -692,7 +695,10 @@ def _side_relationship(
         return "iplist", set()
     if remote_apps:
         return "remote_app", remote_apps
-    if all_workloads or has_local_app or rule.get(f"{prefix}_labels", "").strip():
+    if all_workloads or has_local_app or any(
+        rule.get(f"{prefix}_{field}", "").strip()
+        for field in ("labels", "label_groups", "labels_exclusions", "label_groups_exclusions")
+    ):
         return "local", set()
     return "empty", set()
 
@@ -879,6 +885,7 @@ def _parts(value: object) -> List[str]:
 
 def _clean_label_group_reference(value: object) -> str:
     text = re.sub(r"^Label\s*Group\s*:\s*", "", str(value or "").strip(), flags=re.I)
+    text = re.sub(r"^(?:app|env|role|loc)(?:group)?\s*:\s*", "", text, flags=re.I)
     return re.sub(r"\s*\(/[^)]*\)\s*$", "", text).strip()
 
 
@@ -946,6 +953,7 @@ def _expanded_selector_labels(
             group_key = str(group.get("key", "")).casefold() if group else ""
             selector_key = key[:-5] if key.endswith("group") else key
             if group and group_key == selector_key:
+                labels[key].discard(value)
                 labels.setdefault(selector_key, set()).update(
                     _group_member_values(name, selector_key, group_index)
                 )
@@ -1020,30 +1028,30 @@ def _factor_side(
 ) -> Tuple[str, str]:
     group_index = group_index or {}
     selectors: List[str] = []
-    if parse_bool(rule.get(f"{prefix}_all_workloads", "")):
+    all_workloads = parse_bool(rule.get(f"{prefix}_all_workloads", ""))
+    iplists = rule.get(f"{prefix}_iplists", "").strip()
+    if all_workloads:
         context = _ruleset_scope_context(rule.get("ruleset_scope", ""), group_index)
         selectors.append(f"All workloads ({context})" if context else "All workloads")
-        kind = "all_workloads"
-    elif rule.get(f"{prefix}_iplists", "").strip():
-        selectors.append(rule[f"{prefix}_iplists"].strip())
-        kind = "iplist"
-    else:
-        labels = rule.get(f"{prefix}_labels", "").strip()
-        if labels:
-            selectors.append(labels)
-        selectors.extend(_display_label_groups(
-            rule.get(f"{prefix}_label_groups", ""), group_index,
-        ))
-        kind = "labels" if selectors else ""
-
+    if iplists:
+        selectors.append(iplists)
+    labels = rule.get(f"{prefix}_labels", "").strip()
+    if labels:
+        selectors.append(_format_ruleset_scope(labels, group_index))
+    selectors.extend(_display_label_groups(
+        rule.get(f"{prefix}_label_groups", ""), group_index,
+    ))
     excluded = [
-        *_parts(rule.get(f"{prefix}_labels_exclusions", "")),
+        *_parts(_format_ruleset_scope(
+            rule.get(f"{prefix}_labels_exclusions", ""), group_index,
+        )),
         *_display_label_groups(
             rule.get(f"{prefix}_label_groups_exclusions", ""), group_index,
         ),
     ]
-    selectors.extend(f"ALL EXCEPT({value})" for value in excluded)
-    return "; ".join(dict.fromkeys(selectors)), kind or ("labels" if excluded else "")
+    selectors.extend(f"EXCEPT({value})" for value in excluded)
+    kind = "all_workloads" if all_workloads else "iplist" if iplists else "labels" if selectors else ""
+    return "; ".join(dict.fromkeys(selectors)), kind
 
 
 def _ruleset_scope_context(

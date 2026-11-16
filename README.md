@@ -475,6 +475,17 @@ Les colonnes d'identité de la ligne restent inchangées. Une correspondance
 absente ou ambiguë, ou une extrémité mêlant applications et IP Lists/workloads
 explicites, ne suffit pas à établir cette identité locale.
 
+Un repli distinct couvre un module managed absent de Microcosmos, selon la
+convention de labels `APM_` (managed) et `APU_`/`APA_` (non managed). Pour une
+ligne rattachée à un scope `APU_` ou `APA_` dont le Kear est confirmé, un seul
+label `APM_` explicite sur un seul côté suffit à déterminer la direction si
+son module est absent de l'index Microcosmos : Source donne `outgoing`,
+Destination donne `incoming`. L'avertissement
+`DIRECTION_FROM_MANAGED_APP_LABEL` distingue cette inférence d'une résolution
+de Kear. Le Kear de la ligne reste inchangé ; aucun Kear n'est attribué au
+module absent. Les correspondances Microcosmos connues restent prioritaires,
+et ce repli ne tranche pas entre deux côtés managed ou des sélecteurs mixtes.
+
 Les sélecteurs `src_workloads` et `dst_workloads` sont conservés dans deux
 colonnes dédiées et affichés comme `workload:<nom>` dans `Source` et
 `Destination`, en complément des labels, groupes et IP Lists. Leurs noms

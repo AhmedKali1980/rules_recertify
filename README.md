@@ -428,8 +428,8 @@ elle consomme alors l'ensemble des workloads managés du PCE.
 
 Le rapport ajoute aussi `Kear Remote`, `Direction`, `Rule Category` et la
 colonne `rule_description` provenant de `rules_inventory.csv`. En mode
-Microcosmos, le scope de la ruleset désigne l'application locale ; les rôles
-seuls et `All workloads` héritent de ce scope. Une application explicite
+Microcosmos, les rôles seuls et `All workloads` sont interprétés dans le
+scope de la ruleset. Une application explicite
 différente est résolue par son `Module` et son environnement dans l'extract
 Microcosmos. La direction vaut `incoming`, `outgoing`, `intra-app` ou
 `undetermined` quand la topologie ne permet aucune conclusion fiable. Deux
@@ -437,6 +437,19 @@ modules rattachés au même Kear sont considérés `intra-app`. Les rulesets
 `BOUQUETS_*`, `GLOBAL_*` et `LUIGI_*` sont classés `infra_rule`; les règles deny ou
 utilisant une IP List `ZNOT_*` sont `strategic_rule`; les autres sont
 `business_rule`.
+
+Les colonnes d'identité (`Kear Id`, `Module`, `Application Name`, `Account`,
+`app`) restent celles de l'application Microcosmos évaluée sur chaque ligne.
+Une règle peut donc apparaître pour une application différente de celle du
+`ruleset_scope` lorsqu'elle est sélectionnée en Source ou Destination.
+Avec `unscoped_consumers=TRUE`, une application sélectionnée par le groupe en
+Source peut consommer les services d'un rôle limité au scope d'une autre
+application : sa ligne est alors `outgoing`, et `Kear Remote` désigne
+l'application du scope. Le sens inverse est `incoming`. Les applications
+exclues d'un sélecteur ne sont pas sélectionnées par ce sélecteur ; avec
+`unscoped_consumers=FALSE`, les membres d'un groupe Source restent limités
+aux applications du scope. Un Kear distant absent ou ambigu reste signalé,
+sans choisir arbitrairement un identifiant.
 
 Le classeur professionnel commence par une feuille `Summary` en anglais qui
 documente les règles de calcul et présente les KPI. Elle est suivie, dans

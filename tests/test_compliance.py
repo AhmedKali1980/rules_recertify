@@ -488,7 +488,7 @@ class ComplianceTest(unittest.TestCase):
         )
         self.assertEqual(
             _factor_side(exclusions_only, "src"),
-            ("ALL EXCEPT(role:FRONTEND)", "labels"),
+            ("EXCEPT(role:FRONTEND)", "labels"),
         )
 
         incoming = dict(base, src_labels="", src_iplists="EXT_NET")

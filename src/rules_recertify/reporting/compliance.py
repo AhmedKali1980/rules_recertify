@@ -350,8 +350,8 @@ def _write_summary_sheet(
 
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
-        ("Kear Remote", "Resolved from the explicit remote app label using Microcosmos Module and Environment. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "The ruleset_scope app is normally local. When an app-group-scoped rule is discovered through an explicit app on one side and All workloads on the other, direction is relative to that matched input app (source = outgoing, destination = incoming). Otherwise role-only selectors, exclusion-only EXCEPT selectors, and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules are always aligned to their single explicit source app and classified as outgoing."),
+        ("Kear Remote", "Resolved from the opposite application's labels or ruleset scope using Microcosmos Module and Environment. Kear Id and other identity columns remain those of the evaluated input application. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
+        ("Direction", "Direction is relative to the evaluated input application. An Extrascope consumer selected outside the provider scope is outgoing toward that scope; an explicitly selected destination reached from the scope is incoming. Role-only selectors, exclusion-only EXCEPT selectors, and All workloads inherit the ruleset scope. Equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules stay aligned to their single explicit source app."),
         ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for an unmanaged destination. If its destination explicitly selects a managed application, the rule remains in Business Rules but receives OUTBOUND2APA_DESTINATION_MANAGED."),
         ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
         ("Label groups & exclusions", "Label groups confirmed in export_labelgroups.csv are rendered in the existing scope, Source, and Destination columns as <key>group:<name> (for example appgroup:PAYMENTS). Excluded labels and groups are rendered as EXCEPT(<selector>) within the remaining ruleset scope."),
@@ -722,6 +722,29 @@ def _preferred_input_row(
     return exact[0] if exact else rows[0]
 
 
+def _side_applications(
+    rule: Mapping[str, str], prefix: str,
+    group_index: Mapping[str, Mapping[str, object]],
+) -> set[str]:
+    """Expand included applications without retaining excluded group members."""
+    included = _expanded_selector_labels(
+        rule.get(f"{prefix}_labels", ""),
+        rule.get(f"{prefix}_label_groups", ""), group_index,
+    ).get("app", set())
+    excluded = _expanded_selector_labels(
+        rule.get(f"{prefix}_labels_exclusions", ""),
+        rule.get(f"{prefix}_label_groups_exclusions", ""), group_index,
+    ).get("app", set())
+    applications = included - excluded
+    if prefix == "src" and parse_bool(rule.get("unscoped_consumers", "")) is False:
+        scope_apps = _expanded_selector_labels(
+            rule.get("ruleset_scope", ""), "", group_index,
+        ).get("app", set())
+        if scope_apps:
+            applications &= scope_apps
+    return applications
+
+
 def _side_relationship(
     rule: Mapping[str, str], prefix: str, local_app: str,
     group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
@@ -729,15 +752,7 @@ def _side_relationship(
     """Classify one rule side relative to the application ruleset scope."""
     all_workloads = parse_bool(rule.get(f"{prefix}_all_workloads", ""))
     has_iplist = bool(_iplist_names(rule.get(f"{prefix}_iplists", "")))
-    explicit_apps = _expanded_selector_labels(
-        rule.get(f"{prefix}_labels", ""),
-        rule.get(f"{prefix}_label_groups", ""), group_index or {},
-    ).get("app", set())
-    excluded_apps = _expanded_selector_labels(
-        rule.get(f"{prefix}_labels_exclusions", ""),
-        rule.get(f"{prefix}_label_groups_exclusions", ""), group_index or {},
-    ).get("app", set())
-    explicit_apps = explicit_apps - excluded_apps
+    explicit_apps = _side_applications(rule, prefix, group_index or {})
     has_exclusions = bool(
         _parts(rule.get(f"{prefix}_labels_exclusions", ""))
         or _parts(rule.get(f"{prefix}_label_groups_exclusions", ""))
@@ -795,12 +810,8 @@ def _rule_relationship(
     )
     category = _rule_category(rule)
 
-    source_input_match = input_app in _expanded_selector_labels(
-        rule.get("src_labels", ""), rule.get("src_label_groups", ""), group_index,
-    ).get("app", set())
-    destination_input_match = input_app in _expanded_selector_labels(
-        rule.get("dst_labels", ""), rule.get("dst_label_groups", ""), group_index,
-    ).get("app", set())
+    source_input_match = input_app in _side_applications(rule, "src", group_index)
+    destination_input_match = input_app in _side_applications(rule, "dst", group_index)
     scope_uses_app_group = bool(
         _labels(_format_ruleset_scope(rule.get("ruleset_scope", ""), group_index)).get(
             "appgroup", set()
@@ -849,6 +860,22 @@ def _rule_relationship(
             warning = _join_warnings(warning, remote_warning)
         return {"kear_remote": remote_kear, "direction": "outgoing",
                 "rule_category": category, "warning": warning}
+
+    # Keep the relationship relative to this row's Microcosmos identity. An
+    # Extrascope consumer can be selected through a group outside the provider
+    # scope; role-only providers then refer to that scope, not to the consumer.
+    if input_app and local_apps and input_app not in local_apps:
+        if source_input_match and not destination_input_match and destination_kind == "local":
+            return _relationship_to_apps(
+                "outgoing", local_apps, environment, lookup, local_kear, category,
+            )
+        if destination_input_match and not source_input_match and source_kind == "local":
+            return _relationship_to_apps(
+                "incoming", local_apps, environment, lookup, local_kear, category,
+            )
+        return {"kear_remote": "", "direction": "undetermined",
+                "rule_category": category, "warning": "DIRECTION_UNDETERMINED"}
+
     if not local_app:
         return {"kear_remote": "", "direction": "undetermined",
                 "rule_category": category, "warning": "LOCAL_SCOPE_UNDETERMINED"}
@@ -865,6 +892,17 @@ def _rule_relationship(
         return {"kear_remote": "", "direction": "undetermined",
                 "rule_category": category, "warning": "DIRECTION_UNDETERMINED"}
 
+    return _relationship_to_apps(
+        direction, remote_apps, environment, lookup, local_kear, category,
+    )
+
+
+def _relationship_to_apps(
+    direction: str, remote_apps: set[str], environment: str,
+    lookup: Optional[Mapping[str, Mapping[str, set[str]]]],
+    local_kear: str, category: str,
+) -> Dict[str, str]:
+    """Resolve the opposite Kear without mixing it with the report row's Kear."""
     if not remote_apps:
         return {"kear_remote": "", "direction": direction,
                 "rule_category": category, "warning": ""}
@@ -1076,7 +1114,11 @@ def _rule_matches_scope(
             rule.get(field, ""), rule.get(group_field, "") if group_field else "",
             group_index,
         )
-        if wanted_app not in labels.get("app", set()):
+        applications = (
+            labels.get("app", set()) if field == "ruleset_scope"
+            else _side_applications(rule, field.split("_", 1)[0], group_index)
+        )
+        if wanted_app not in applications:
             continue
         if not wanted_env or wanted_env in labels.get("env", set()):
             return True

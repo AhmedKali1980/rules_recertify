@@ -459,6 +459,20 @@ Lorsqu'un côté local est identifié, un `appgroup` distant ne rend pas la
 direction indéterminée : le flux est `outgoing` depuis la Source locale ou
 `incoming` vers la Destination locale. Un groupe distant inconnu ou contenant
 plusieurs applications conserve son avertissement de résolution de Kear.
+La même logique s'applique à une Source mixte (`Any` et groupe applicatif)
+face à une Destination `All workloads` résolue dans le scope : la direction
+reste `incoming`, même si le Kear distant n'est pas unique. Si l'application
+évaluée est explicitement identifiée en Source alors que le scope désigne
+une autre application, sa ligne est `outgoing` vers l'élément réellement
+présent en Destination ; une application distante explicite prend priorité
+sur une déduction à partir du scope.
+
+Les sélecteurs `src_workloads` et `dst_workloads` sont conservés dans deux
+colonnes dédiées et affichés comme `workload:<nom>` dans `Source` et
+`Destination`, en complément des labels, groupes et IP Lists. Leurs noms
+seuls ne permettent pas de déduire un Kear : sa résolution reste signalée
+comme indisponible lorsqu'aucune application distante n'est identifiée.
+Ces champs restent facultatifs pour lire les exports plus anciens.
 
 Pour une règle sans scope dont le nom contient `OUTBOUND2APA`, la direction
 reflète les extrémités réelles, même si elles ne respectent pas la convention

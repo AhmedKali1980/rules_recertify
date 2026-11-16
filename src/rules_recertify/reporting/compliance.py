@@ -19,10 +19,12 @@ RULE_FIELDS = (
     "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
     "rule_description", "rule_enabled", "unscoped_consumers", "src_all_workloads",
     "src_labels", "src_labels_exclusions", "src_label_groups",
-    "src_label_groups_exclusions", "src_iplists", "dst_all_workloads", "dst_labels",
+    "src_label_groups_exclusions", "src_iplists", "src_workloads", "dst_all_workloads", "dst_labels",
     "dst_labels_exclusions", "dst_label_groups", "dst_label_groups_exclusions",
-    "dst_iplists", "services", "rule_href",
+    "dst_iplists", "dst_workloads", "services", "rule_href",
 )
+OPTIONAL_RULE_FIELDS = ("src_workloads", "dst_workloads")
+REQUIRED_RULE_FIELDS = tuple(field for field in RULE_FIELDS if field not in OPTIONAL_RULE_FIELDS)
 LABEL_GROUP_FIELDS = (
     "name", "key", "description", "member_labels", "member_label_groups",
     "fully_expanded_members", "href",
@@ -52,7 +54,10 @@ def generate_compliance_workbook(
     input_rows, input_columns = _load_scope_input(input_path, snapshot / "labels.csv")
     microcosmos_input = "Program (MIO)" in input_columns
     microcosmos_lookup = _microcosmos_kear_lookup(input_rows) if microcosmos_input else {}
-    rules = list(read_rows(snapshot / "rules_inventory.csv", RULE_FIELDS))
+    rules = [
+        {**dict.fromkeys(OPTIONAL_RULE_FIELDS, ""), **row}
+        for row in read_rows(snapshot / "rules_inventory.csv", REQUIRED_RULE_FIELDS)
+    ]
     groups = list(read_rows(snapshot / "export_labelgroups.csv", LABEL_GROUP_FIELDS))
     group_index = _label_group_index(groups)
     services, _ = _load_report_services(raw_dir)
@@ -91,7 +96,8 @@ def generate_compliance_workbook(
                     "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
                     "rule_description", "rule_enabled", "rule_href",
                 )},
-                "Source": "", "Destination": "", "Source contains User": "FALSE",
+                "Source": "", "Destination": "", "src_workloads": "", "dst_workloads": "",
+                "Source contains User": "FALSE",
                 "Destination contains User": "FALSE",
                 "services": "",
                 **{catalog: "" for catalog in report_catalogs},
@@ -126,6 +132,8 @@ def generate_compliance_workbook(
                 "rule_href": rule["rule_href"],
                 "Source": source,
                 "Destination": destination,
+                "src_workloads": rule["src_workloads"],
+                "dst_workloads": rule["dst_workloads"],
                 "Source contains User": str(
                     source_kind == "iplist" and _contains_user_iplist(source)
                 ).upper(),
@@ -326,10 +334,10 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the opposite application's labels or ruleset scope using Microcosmos Module and Environment. Kear Id and other identity columns remain those of the evaluated input application. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "Direction is relative to the evaluated input application. An Extrascope consumer outside the provider scope is outgoing toward that scope; an explicitly selected destination reached from the scope is incoming. Role-only selectors, exclusion-only EXCEPT selectors, and All workloads inherit the ruleset scope. An identified local side determines direction even when the remote appgroup Kear is unknown or ambiguous. Equal local/remote Kears are intra-app; unresolved topologies are undetermined."),
+        ("Direction", "Direction is relative to the evaluated input application. Explicit endpoints take precedence over a different scope. Role-only selectors, exclusion-only EXCEPT selectors, and All workloads inherit the ruleset scope. An identified local side determines incoming/outgoing even with mixed peer selectors or unknown remote Kear. Equal resolved Kears are intra-app; topologies without an identified local side remain undetermined."),
         ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for a managed source and unmanaged destination. A managed destination receives OUTBOUND2APA_DESTINATION_MANAGED, while its row stays incoming. The naming convention never reverses endpoints or replaces the evaluated application's identity."),
         ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
-        ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including label groups and EXCEPT exclusions; other dimensions follow. Groups confirmed in export_labelgroups.csv use <key>group:<name> (for example appgroup:PAYMENTS)."),
+        ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including groups and EXCEPT exclusions. Explicit workloads appear as workload:<name> and remain in src_workloads/dst_workloads columns; a name alone does not identify a Kear. Confirmed groups use <key>group:<name> (for example appgroup:PAYMENTS)."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
         ("Dangerous-port hits", "Observed per-port flows are intersected with the configured To Control, To Eradicate and Admin catalogues. Exposure columns describe allowed rule services; Hit columns describe observed traffic."),
@@ -711,6 +719,7 @@ def _side_relationship(
     """Classify one rule side relative to the application ruleset scope."""
     all_workloads = parse_bool(rule.get(f"{prefix}_all_workloads", ""))
     has_iplist = bool(_iplist_names(rule.get(f"{prefix}_iplists", "")))
+    has_workloads = bool(_parts(rule.get(f"{prefix}_workloads", "")))
     explicit_apps = _side_applications(rule, prefix, group_index or {})
     has_app_group = _has_application_group(rule, prefix, group_index or {})
     has_exclusions = bool(
@@ -722,8 +731,10 @@ def _side_relationship(
     has_local_app = local in explicit_apps
 
     kinds = sum((
-        bool(all_workloads), has_iplist, has_local_app, bool(remote_apps), has_exclusions,
+        bool(all_workloads), has_iplist, has_workloads, has_local_app, bool(remote_apps), has_exclusions,
     ))
+    if has_workloads and kinds > 1:
+        return "ambiguous", remote_apps
     if has_iplist and kinds > 1:
         return "ambiguous", remote_apps
     if all_workloads and remote_apps:
@@ -732,6 +743,8 @@ def _side_relationship(
         return ("app_group" if has_app_group else "ambiguous"), remote_apps
     if has_iplist:
         return "iplist", set()
+    if has_workloads:
+        return "workload", set()
     if remote_apps:
         return "remote_app", remote_apps
     if has_app_group and not explicit_apps:
@@ -834,18 +847,27 @@ def _rule_relationship(
         return {"kear_remote": "", "direction": "undetermined", "rule_category": category,
                 "warning": _join_warnings(warning, "DIRECTION_UNDETERMINED")}
 
-    # Keep the relationship relative to this row's Microcosmos identity. An
-    # Extrascope consumer can be selected through a group outside the provider
-    # scope; role-only providers then refer to that scope, not to the consumer.
+    # Explicit endpoints anchor the row's perspective even when the ruleset
+    # names another application. Implicit role/All workloads peers inherit
+    # that scope; explicit peers retain their own application and environment.
     if input_app and local_apps and input_app not in local_apps:
-        if source_input_match and not destination_input_match and destination_kind == "local":
-            return _relationship_to_apps(
-                "outgoing", local_apps, environment, lookup, local_kear, category,
-            )
-        if destination_input_match and not source_input_match and source_kind == "local":
-            return _relationship_to_apps(
-                "incoming", local_apps, environment, lookup, local_kear, category,
-            )
+        if source_input_match != destination_input_match:
+            other_prefix = "dst" if source_input_match else "src"
+            other_kind = destination_kind if source_input_match else source_kind
+            if other_kind != "empty":
+                other_apps = (
+                    local_apps if other_kind == "local"
+                    else _side_applications(rule, other_prefix, group_index)
+                )
+                other_labels = _expanded_selector_labels(
+                    rule.get(f"{other_prefix}_labels", ""),
+                    rule.get(f"{other_prefix}_label_groups", ""), group_index,
+                )
+                other_environment = next(iter(other_labels.get("env", set())), environment)
+                return _relationship_to_endpoint(
+                    "outgoing" if source_input_match else "incoming",
+                    other_kind, other_apps, other_environment, lookup, local_kear, category,
+                )
         return {"kear_remote": "", "direction": "undetermined",
                 "rule_category": category, "warning": "DIRECTION_UNDETERMINED"}
 
@@ -857,18 +879,33 @@ def _rule_relationship(
                 "rule_category": category, "warning": ""}
 
     remote_apps: set[str] = set()
-    if source_kind in {"remote_app", "app_group", "iplist"} and destination_kind == "local":
-        direction, remote_apps = "incoming", source_apps
-    elif source_kind == "local" and destination_kind in {"remote_app", "app_group", "iplist"}:
-        direction, remote_apps = "outgoing", destination_apps
+    remote_kinds = {"remote_app", "app_group", "iplist", "workload", "ambiguous"}
+    if source_kind in remote_kinds and destination_kind == "local":
+        direction, remote_kind, remote_apps = "incoming", source_kind, source_apps
+    elif source_kind == "local" and destination_kind in remote_kinds:
+        direction, remote_kind, remote_apps = "outgoing", destination_kind, destination_apps
     else:
         return {"kear_remote": "", "direction": "undetermined",
                 "rule_category": category, "warning": "DIRECTION_UNDETERMINED"}
 
-    result = _relationship_to_apps(
-        direction, remote_apps, environment, lookup, local_kear, category,
+    return _relationship_to_endpoint(
+        direction, remote_kind, remote_apps, environment, lookup, local_kear, category,
     )
-    if not remote_apps and "app_group" in (source_kind, destination_kind):
+
+
+def _relationship_to_endpoint(
+    direction: str, kind: str, applications: set[str], environment: str,
+    lookup: Optional[Mapping[str, Mapping[str, set[str]]]],
+    local_kear: str, category: str,
+) -> Dict[str, str]:
+    """Separate a known flow direction from incomplete peer identification."""
+    if kind == "ambiguous":
+        return {"kear_remote": "", "direction": direction,
+                "rule_category": category, "warning": "REMOTE_KEAR_AMBIGUOUS"}
+    result = _relationship_to_apps(
+        direction, applications, environment, lookup, local_kear, category,
+    )
+    if not applications and kind in {"app_group", "workload"}:
         result["warning"] = _join_warnings(result["warning"], "REMOTE_KEAR_UNAVAILABLE")
     return result
 
@@ -1158,7 +1195,15 @@ def _factor_side(
     ]
     label_selectors.extend(f"EXCEPT({value})" for value in excluded)
     selectors.extend(_ordered_selectors(label_selectors))
-    kind = "all_workloads" if all_workloads else "iplist" if iplists else "labels" if selectors else ""
+    workloads = _parts(rule.get(f"{prefix}_workloads", ""))
+    selectors.extend(
+        name if name.casefold().startswith("workload:") else f"workload:{name}"
+        for name in workloads
+    )
+    kind = (
+        "all_workloads" if all_workloads else "iplist" if iplists
+        else "labels" if label_selectors else "workload" if workloads else ""
+    )
     return "; ".join(dict.fromkeys(selectors)), kind
 
 

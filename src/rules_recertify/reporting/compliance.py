@@ -35,6 +35,8 @@ MICROCOSMOS_COLUMNS = (
 )
 MICROCOSMOS_REQUIRED_COLUMNS = MICROCOSMOS_COLUMNS[:-1]
 KEAR_NOT_ONBOARDED = "KEAR_NOT_ONBOARDED_IN_MICROCOSMOS"
+MANAGED_APP_PREFIXES = ("apm_",)
+UNMANAGED_APP_PREFIXES = ("apu_", "apa_")
 
 
 def generate_compliance_workbook(
@@ -334,7 +336,7 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the opposite application's labels or ruleset scope using Microcosmos Module and Environment. Kear Id and other identity columns remain those of the evaluated input application. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "Direction follows the identified local endpoint, by app label or an unambiguous match to the row's Kear: Source is outgoing, Destination incoming; equal peer Kears are intra-app. Role-only selectors, exclusion-only EXCEPT selectors and All workloads inherit scope. Mixed selectors or an unknown remote Kear do not hide a known direction; without an identified local side it stays undetermined."),
+        ("Direction", "Source local means outgoing; Destination local means incoming; equal resolved peer Kears mean intra-app. Role-only selectors, exclusion-only EXCEPT selectors and All workloads inherit scope. For a verified APU_/APA_ scope, a single missing APM_ module can supply direction by label convention, flagged DIRECTION_FROM_MANAGED_APP_LABEL without assigning it a Kear. Otherwise unidentified local sides stay undetermined."),
         ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for a managed source and unmanaged destination. A managed destination receives OUTBOUND2APA_DESTINATION_MANAGED, while its row stays incoming. The naming convention never reverses endpoints or replaces the evaluated application's identity."),
         ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
         ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including groups and EXCEPT exclusions. Explicit workloads appear as workload:<name> and remain in src_workloads/dst_workloads columns; a name alone does not identify a Kear. Confirmed groups use <key>group:<name> (for example appgroup:PAYMENTS)."),
@@ -789,6 +791,76 @@ def _side_has_local_kear(
     return True
 
 
+def _managed_label_fallback(
+    rule: Mapping[str, str], input_row: Mapping[str, str],
+    lookup: Optional[Mapping[str, Mapping[str, set[str]]]],
+    group_index: Mapping[str, Mapping[str, object]], category: str,
+) -> Optional[Dict[str, str]]:
+    """Infer flow direction, without assigning a Kear to an unregistered APM label."""
+    if lookup is None:
+        return None
+    app = _get_case_insensitive(input_row, "app").strip().casefold()
+    kear = _get_case_insensitive(input_row, "Kear Id").strip()
+    scope = _expanded_selector_labels(rule.get("ruleset_scope", ""), "", group_index)
+    if (
+        not app.startswith(UNMANAGED_APP_PREFIXES) or not kear
+        or scope.get("app", set()) != {app} or len(scope.get("env", set())) > 1
+    ):
+        return None
+    environment = next(iter(scope.get("env", set())), str(input_row.get(
+        "__compliance_env", _get_case_insensitive(input_row, "Environment"),
+    )).strip())
+    scope_kears = lookup.get(_module_from_app(app).casefold(), {}).get(environment.casefold(), set())
+    if kear.casefold() not in {value.casefold() for value in scope_kears}:
+        return None
+
+    managed_sides = []
+    for prefix in ("src", "dst"):
+        applications = _side_applications(rule, prefix, group_index)
+        if len(applications) != 1:
+            continue
+        peer = next(iter(applications))
+        if (
+            not peer.startswith(MANAGED_APP_PREFIXES)
+            or _has_application_group(rule, prefix, group_index)
+            or _iplist_names(rule.get(f"{prefix}_iplists", ""))
+            or _parts(rule.get(f"{prefix}_workloads", ""))
+            or parse_bool(rule.get(f"{prefix}_all_workloads", ""))
+        ):
+            continue
+        labels = _expanded_selector_labels(
+            rule.get(f"{prefix}_labels", ""), "", group_index,
+        )
+        module = _module_from_app(peer).casefold()
+        if module and module not in lookup and len(labels.get("env", set())) <= 1:
+            managed_sides.append(prefix)
+    if len(managed_sides) != 1:
+        return None
+    managed_prefix = managed_sides[0]
+    other_prefix = "dst" if managed_prefix == "src" else "src"
+    other_apps = _side_applications(rule, other_prefix, group_index)
+    if any(not peer.startswith(UNMANAGED_APP_PREFIXES) for peer in other_apps):
+        return None
+    other_kind, _ = _side_relationship(rule, other_prefix, app, group_index)
+    if other_kind in {"empty", "local"}:
+        return None
+    other_labels = _expanded_selector_labels(
+        rule.get(f"{other_prefix}_labels", ""),
+        rule.get(f"{other_prefix}_label_groups", ""), group_index,
+    )
+    if len(other_labels.get("env", set())) > 1:
+        return None
+    other_environment = next(iter(other_labels.get("env", set())), environment)
+    # Infer only direction: the scope's Kear does not establish the absent
+    # managed module's identity or justify collapsing the result to intra-app.
+    result = _relationship_to_endpoint(
+        "outgoing" if managed_prefix == "src" else "incoming",
+        other_kind, other_apps, other_environment, lookup, "", category,
+    )
+    result["warning"] = _join_warnings("DIRECTION_FROM_MANAGED_APP_LABEL", result["warning"])
+    return result
+
+
 def _rule_relationship(
     rule: Mapping[str, str], input_row: Mapping[str, str],
     lookup: Optional[Mapping[str, Mapping[str, set[str]]]],
@@ -925,6 +997,9 @@ def _rule_relationship(
     elif source_kind == "local" and destination_kind in remote_kinds:
         direction, remote_kind, remote_apps = "outgoing", destination_kind, destination_apps
     else:
+        inferred = _managed_label_fallback(rule, input_row, lookup, group_index, category)
+        if inferred is not None:
+            return inferred
         return {"kear_remote": "", "direction": "undetermined",
                 "rule_category": category, "warning": "DIRECTION_UNDETERMINED"}
 

@@ -451,6 +451,22 @@ exclues d'un sélecteur ne sont pas sélectionnées par ce sélecteur ; avec
 aux applications du scope. Un Kear distant absent ou ambigu reste signalé,
 sans choisir arbitrairement un identifiant.
 
+Les labels de `ruleset_scope`, `Source` et `Destination` sont affichés dans
+l'ordre `role:<rôle>; app:<application>; env:<environnement>`. Les groupes
+(`rolegroup`, `appgroup`, `envgroup`) et les exclusions `EXCEPT(...)` suivent
+le même ordre ; les autres dimensions sont conservées après celles-ci.
+Lorsqu'un côté local est identifié, un `appgroup` distant ne rend pas la
+direction indéterminée : le flux est `outgoing` depuis la Source locale ou
+`incoming` vers la Destination locale. Un groupe distant inconnu ou contenant
+plusieurs applications conserve son avertissement de résolution de Kear.
+
+Pour une règle sans scope dont le nom contient `OUTBOUND2APA`, la direction
+reflète les extrémités réelles, même si elles ne respectent pas la convention
+managed en Source et unmanaged en Destination. Une application managed en
+Destination garde donc une ligne `incoming` et reçoit l'avertissement
+`OUTBOUND2APA_DESTINATION_MANAGED`. Si les deux applications sont managed,
+chacune conserve son identité Microcosmos et sa propre perspective de la règle.
+
 Le classeur professionnel commence par une feuille `Summary` en anglais qui
 documente les règles de calcul et présente les KPI. Elle est suivie, dans
 l'ordre, de `Business Rules` (`business_rule` et `strategic_rule`), `Infra Rules`

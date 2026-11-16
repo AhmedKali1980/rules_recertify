@@ -170,6 +170,7 @@ class ComplianceCounterpartyTest(unittest.TestCase):
                         arcos = by_module[self.arcos["Module"]]
                         self.assertEqual(arcos["Direction"], "outgoing")
                         self.assertEqual(arcos["Kear Remote"], self.taskit["Kear Id"])
-                        self.assertEqual(arcos["ruleset_scope"], self.rule["ruleset_scope"])
+                        self.assertEqual(arcos["ruleset_scope"],
+                                         f"app:{self.taskit['app']}; env:PRD")
                         self.assertEqual(arcos["Global Consumer in use"], "FALSE")
                         self.assertIsNone(arcos["Warning"])

@@ -65,12 +65,6 @@ def generate_compliance_workbook(
     }
 
     rows: List[Dict[str, object]] = []
-    input_rows_by_app: Dict[str, List[Mapping[str, str]]] = {}
-    for candidate in input_rows:
-        candidate_app = _get_case_insensitive(candidate, "app").strip().casefold()
-        if candidate_app:
-            input_rows_by_app.setdefault(candidate_app, []).append(candidate)
-    emitted_outbound: set[Tuple[str, str]] = set()
     for input_row in input_rows:
         app = _get_case_insensitive(input_row, "app").strip()
         env = str(input_row.get("__compliance_env", _get_case_insensitive(input_row, "env"))).strip()
@@ -107,38 +101,19 @@ def generate_compliance_workbook(
             })
             continue
         for rule in matched:
-            effective_input = input_row
-            outbound_source = _outbound2apa_source_app(rule, group_index)
-            if outbound_source:
-                outbound_key = (rule.get("rule_href", ""), outbound_source.casefold())
-                if outbound_key in emitted_outbound:
-                    continue
-                source_rows = input_rows_by_app.get(outbound_source.casefold(), [])
-                if source_rows:
-                    effective_input = _preferred_input_row(source_rows, env)
-                emitted_outbound.add(outbound_key)
-            effective_app = _get_case_insensitive(effective_input, "app").strip()
-            effective_programs = _programs_for_app(effective_app, groups)
-            effective_input_values = {
-                column: effective_input.get(column, "") for column in primary_columns
-            }
-            effective_extra_values = {
-                column: effective_input.get(column, "")
-                for column in input_columns if column not in primary_columns
-            }
             source, source_kind = _factor_side(rule, "src", group_index)
             destination, destination_kind = _factor_side(rule, "dst", group_index)
             expanded_services = _expand_services(rule["services"], services)
             enrichment = _rule_relationship(
-                rule, effective_input, microcosmos_lookup if microcosmos_input else None,
+                rule, input_row, microcosmos_lookup if microcosmos_input else None,
                 group_index,
             )
             usage = _usage_columns(
                 usage_by_rule.get(rule["rule_href"]), report_catalogs,
             )
             rows.append({
-                **_with_rule_enrichment_columns(effective_input_values, enrichment),
-                "Program (KPI)": effective_programs,
+                **_with_rule_enrichment_columns(input_values, enrichment),
+                "Program (KPI)": programs,
                 "Match status": "MATCHED",
                 "Warning": _join_warnings(_extrascope_warning(rule), enrichment["warning"]),
                 "Global Consumer in use": str(_global_consumer_in_use(rule)).upper(),
@@ -166,7 +141,7 @@ def generate_compliance_workbook(
                     "Intra-zone" if _ruleset_identity(rule) in intra_zone_rulesets else ""
                 ),
                 **usage,
-                **effective_extra_values,
+                **extra_values,
             })
 
     from openpyxl import Workbook
@@ -351,10 +326,10 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the opposite application's labels or ruleset scope using Microcosmos Module and Environment. Kear Id and other identity columns remain those of the evaluated input application. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "Direction is relative to the evaluated input application. An Extrascope consumer selected outside the provider scope is outgoing toward that scope; an explicitly selected destination reached from the scope is incoming. Role-only selectors, exclusion-only EXCEPT selectors, and All workloads inherit the ruleset scope. Equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules stay aligned to their single explicit source app."),
-        ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for an unmanaged destination. If its destination explicitly selects a managed application, the rule remains in Business Rules but receives OUTBOUND2APA_DESTINATION_MANAGED."),
+        ("Direction", "Direction is relative to the evaluated input application. An Extrascope consumer outside the provider scope is outgoing toward that scope; an explicitly selected destination reached from the scope is incoming. Role-only selectors, exclusion-only EXCEPT selectors, and All workloads inherit the ruleset scope. An identified local side determines direction even when the remote appgroup Kear is unknown or ambiguous. Equal local/remote Kears are intra-app; unresolved topologies are undetermined."),
+        ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for a managed source and unmanaged destination. A managed destination receives OUTBOUND2APA_DESTINATION_MANAGED, while its row stays incoming. The naming convention never reverses endpoints or replaces the evaluated application's identity."),
         ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
-        ("Label groups & exclusions", "Label groups confirmed in export_labelgroups.csv are rendered in the existing scope, Source, and Destination columns as <key>group:<name> (for example appgroup:PAYMENTS). Excluded labels and groups are rendered as EXCEPT(<selector>) within the remaining ruleset scope."),
+        ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including label groups and EXCEPT exclusions; other dimensions follow. Groups confirmed in export_labelgroups.csv use <key>group:<name> (for example appgroup:PAYMENTS)."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
         ("Dangerous-port hits", "Observed per-port flows are intersected with the configured To Control, To Eradicate and Admin catalogues. Exposure columns describe allowed rule services; Hit columns describe observed traffic."),
@@ -690,38 +665,6 @@ def _resolve_remote_kear(
     return "", "REMOTE_KEAR_AMBIGUOUS"
 
 
-def _outbound2apa_source_app(
-    rule: Mapping[str, str],
-    group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
-) -> str:
-    """Return the single local source app for an unscoped OUTBOUND2APA rule."""
-    if "OUTBOUND2APA" not in rule.get("ruleset_name", "").upper():
-        return ""
-    scope_apps = _expanded_selector_labels(
-        rule.get("ruleset_scope", ""), "", group_index or {},
-    ).get("app", set())
-    if scope_apps:
-        return ""
-    source_apps = _expanded_selector_labels(
-        rule.get("src_labels", ""), rule.get("src_label_groups", ""),
-        group_index or {},
-    ).get("app", set())
-    return next(iter(source_apps)) if len(source_apps) == 1 else ""
-
-
-def _preferred_input_row(
-    rows: Sequence[Mapping[str, str]], environment: str,
-) -> Mapping[str, str]:
-    """Prefer the source application's row in the rule's environment."""
-    wanted = environment.casefold()
-    exact = [
-        row for row in rows
-        if str(row.get("__compliance_env", _get_case_insensitive(row, "env")))
-        .strip().casefold() == wanted
-    ]
-    return exact[0] if exact else rows[0]
-
-
 def _side_applications(
     rule: Mapping[str, str], prefix: str,
     group_index: Mapping[str, Mapping[str, object]],
@@ -745,6 +688,22 @@ def _side_applications(
     return applications
 
 
+def _has_application_group(
+    rule: Mapping[str, str], prefix: str,
+    group_index: Mapping[str, Mapping[str, object]],
+) -> bool:
+    labels = _format_ruleset_scope(rule.get(f"{prefix}_labels", ""), group_index)
+    if _labels(labels).get("appgroup"):
+        return True
+    for reference in _parts(rule.get(f"{prefix}_label_groups", "")):
+        name = _clean_label_group_reference(reference)
+        if str(group_index.get(name.casefold(), {}).get("key", "")).casefold() == "app":
+            return True
+        if re.match(r"^(?:appgroup|app)\s*:", reference, flags=re.I):
+            return True
+    return False
+
+
 def _side_relationship(
     rule: Mapping[str, str], prefix: str, local_app: str,
     group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
@@ -753,6 +712,7 @@ def _side_relationship(
     all_workloads = parse_bool(rule.get(f"{prefix}_all_workloads", ""))
     has_iplist = bool(_iplist_names(rule.get(f"{prefix}_iplists", "")))
     explicit_apps = _side_applications(rule, prefix, group_index or {})
+    has_app_group = _has_application_group(rule, prefix, group_index or {})
     has_exclusions = bool(
         _parts(rule.get(f"{prefix}_labels_exclusions", ""))
         or _parts(rule.get(f"{prefix}_label_groups_exclusions", ""))
@@ -769,11 +729,13 @@ def _side_relationship(
     if all_workloads and remote_apps:
         return "ambiguous", remote_apps
     if has_local_app and remote_apps:
-        return "ambiguous", remote_apps
+        return ("app_group" if has_app_group else "ambiguous"), remote_apps
     if has_iplist:
         return "iplist", set()
     if remote_apps:
         return "remote_app", remote_apps
+    if has_app_group and not explicit_apps:
+        return "app_group", set()
     if all_workloads or has_local_app or any(
         rule.get(f"{prefix}_{field}", "").strip()
         for field in ("labels", "label_groups", "labels_exclusions", "label_groups_exclusions")
@@ -839,27 +801,38 @@ def _rule_relationship(
         return {"kear_remote": "", "direction": "incoming",
                 "rule_category": category, "warning": ""}
 
-    # OUTBOUND2APA is a tactical, unscoped construct. Its single explicit
-    # source application is always local, even when the rule was initially
-    # discovered through a managed destination application.
-    outbound_source = _outbound2apa_source_app(rule, group_index)
-    if outbound_source and input_app == outbound_source.casefold():
-        destination_labels = _expanded_selector_labels(
-            rule.get("dst_labels", ""), rule.get("dst_label_groups", ""), group_index,
-        )
-        destination_apps = destination_labels.get("app", set())
+    # The naming convention describes intended usage; direction follows the
+    # actual selected endpoint, including managed OUTBOUND2APA destinations.
+    if (
+        not rule.get("ruleset_scope", "").strip()
+        and "OUTBOUND2APA" in rule.get("ruleset_name", "").upper()
+    ):
+        destination_apps = _side_applications(rule, "dst", group_index)
         warning = "OUTBOUND2APA_DESTINATION_MANAGED" if destination_apps else ""
-        remote_kear = ""
-        if len(destination_apps) == 1 and lookup is not None:
-            destination_environment = next(
-                iter(destination_labels.get("env", set())), environment,
+        if source_input_match != destination_input_match:
+            other_prefix = "dst" if source_input_match else "src"
+            other_apps = _side_applications(rule, other_prefix, group_index)
+            other_labels = _expanded_selector_labels(
+                rule.get(f"{other_prefix}_labels", ""),
+                rule.get(f"{other_prefix}_label_groups", ""), group_index,
             )
-            remote_kear, remote_warning = _resolve_remote_kear(
-                next(iter(destination_apps)), destination_environment, lookup,
+            other_environment = next(iter(other_labels.get("env", set())), environment)
+            result = _relationship_to_apps(
+                "outgoing" if source_input_match else "incoming",
+                other_apps, other_environment, lookup, local_kear, category,
             )
-            warning = _join_warnings(warning, remote_warning)
-        return {"kear_remote": remote_kear, "direction": "outgoing",
-                "rule_category": category, "warning": warning}
+            if not other_apps and _has_application_group(rule, other_prefix, group_index):
+                result["warning"] = _join_warnings(result["warning"], "REMOTE_KEAR_UNAVAILABLE")
+            result["warning"] = _join_warnings(warning, result["warning"])
+            return result
+        if (
+            source_input_match and destination_input_match
+            and _side_applications(rule, "src", group_index) == destination_apps == {input_app}
+        ):
+            return {"kear_remote": local_kear, "direction": "intra-app",
+                    "rule_category": category, "warning": warning}
+        return {"kear_remote": "", "direction": "undetermined", "rule_category": category,
+                "warning": _join_warnings(warning, "DIRECTION_UNDETERMINED")}
 
     # Keep the relationship relative to this row's Microcosmos identity. An
     # Extrascope consumer can be selected through a group outside the provider
@@ -884,17 +857,20 @@ def _rule_relationship(
                 "rule_category": category, "warning": ""}
 
     remote_apps: set[str] = set()
-    if source_kind in {"remote_app", "iplist"} and destination_kind == "local":
+    if source_kind in {"remote_app", "app_group", "iplist"} and destination_kind == "local":
         direction, remote_apps = "incoming", source_apps
-    elif source_kind == "local" and destination_kind in {"remote_app", "iplist"}:
+    elif source_kind == "local" and destination_kind in {"remote_app", "app_group", "iplist"}:
         direction, remote_apps = "outgoing", destination_apps
     else:
         return {"kear_remote": "", "direction": "undetermined",
                 "rule_category": category, "warning": "DIRECTION_UNDETERMINED"}
 
-    return _relationship_to_apps(
+    result = _relationship_to_apps(
         direction, remote_apps, environment, lookup, local_kear, category,
     )
+    if not remote_apps and "app_group" in (source_kind, destination_kind):
+        result["warning"] = _join_warnings(result["warning"], "REMOTE_KEAR_UNAVAILABLE")
+    return result
 
 
 def _relationship_to_apps(
@@ -1096,7 +1072,21 @@ def _format_ruleset_scope(
             output.append(f"{selector_key}group:{group['name']}")
         else:
             output.append(component)
-    return ";".join(output)
+    return "; ".join(_ordered_selectors(output))
+
+
+def _ordered_selectors(selectors: Sequence[str]) -> List[str]:
+    """Keep values intact while ordering label families, including exclusions."""
+    def order(selector: str) -> int:
+        value = selector.strip()
+        if value.startswith("EXCEPT(") and value.endswith(")"):
+            value = value[7:-1]
+        key = value.partition(":")[0].strip().casefold()
+        if key.endswith("group"):
+            key = key[:-5]
+        return {"role": 0, "app": 1, "env": 2, "loc": 3}.get(key, 4)
+
+    return sorted(dict.fromkeys(selectors), key=order)
 
 
 def _rule_matches_scope(
@@ -1154,9 +1144,8 @@ def _factor_side(
     if iplists:
         selectors.append(iplists)
     labels = rule.get(f"{prefix}_labels", "").strip()
-    if labels:
-        selectors.append(_format_ruleset_scope(labels, group_index))
-    selectors.extend(_display_label_groups(
+    label_selectors = _parts(_format_ruleset_scope(labels, group_index))
+    label_selectors.extend(_display_label_groups(
         rule.get(f"{prefix}_label_groups", ""), group_index,
     ))
     excluded = [
@@ -1167,7 +1156,8 @@ def _factor_side(
             rule.get(f"{prefix}_label_groups_exclusions", ""), group_index,
         ),
     ]
-    selectors.extend(f"EXCEPT({value})" for value in excluded)
+    label_selectors.extend(f"EXCEPT({value})" for value in excluded)
+    selectors.extend(_ordered_selectors(label_selectors))
     kind = "all_workloads" if all_workloads else "iplist" if iplists else "labels" if selectors else ""
     return "; ".join(dict.fromkeys(selectors)), kind
 
@@ -1176,9 +1166,10 @@ def _ruleset_scope_context(
     scope: object,
     group_index: Optional[Mapping[str, Mapping[str, object]]] = None,
 ) -> str:
-    """Render app/env labels from a ruleset scope in a stable readable order."""
+    """Render scope labels in role/app/env order without losing other dimensions."""
     values: Dict[str, List[str]] = {
-        "app": [], "appgroup": [], "env": [], "envgroup": [],
+        "role": [], "rolegroup": [], "app": [], "appgroup": [],
+        "env": [], "envgroup": [], "loc": [], "locgroup": [],
     }
     formatted_scope = _format_ruleset_scope(scope, group_index or {})
     for component in re.split(r"[;\n]", formatted_scope):
@@ -1189,7 +1180,7 @@ def _ruleset_scope_context(
             values[normalized_key].append(value)
     return "; ".join(
         f"{key}:{', '.join(values[key])}"
-        for key in ("app", "appgroup", "env", "envgroup") if values[key]
+        for key in values if values[key]
     )
 
 

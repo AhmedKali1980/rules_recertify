@@ -299,8 +299,8 @@ class ComplianceTest(unittest.TestCase):
                     self.assertEqual(local[f"/rules/{name}"]["Kear Remote"], "K-LOCAL")
                 self.assertIn("EXCEPT(role:OLD)", local["/rules/labels"]["Source"])
                 self.assertIn("EXCEPT(rolegroup:OLD_ROLES)", local["/rules/groups"]["Source"])
-                self.assertEqual(local["/rules/ambiguous"]["Direction"], "undetermined")
-                self.assertIn("DIRECTION_UNDETERMINED", local["/rules/ambiguous"]["Warning"])
+                self.assertEqual(local["/rules/ambiguous"]["Direction"], "incoming")
+                self.assertIn("REMOTE_KEAR_AMBIGUOUS", local["/rules/ambiguous"]["Warning"])
 
     def test_group_name_is_not_treated_as_a_remote_application(self):
         groups = _label_group_index([

@@ -334,7 +334,7 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the opposite application's labels or ruleset scope using Microcosmos Module and Environment. Kear Id and other identity columns remain those of the evaluated input application. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "Direction is relative to the evaluated input application. Explicit endpoints take precedence over a different scope. Role-only selectors, exclusion-only EXCEPT selectors, and All workloads inherit the ruleset scope. An identified local side determines incoming/outgoing even with mixed peer selectors or unknown remote Kear. Equal resolved Kears are intra-app; topologies without an identified local side remain undetermined."),
+        ("Direction", "Direction follows the identified local endpoint, by app label or an unambiguous match to the row's Kear: Source is outgoing, Destination incoming; equal peer Kears are intra-app. Role-only selectors, exclusion-only EXCEPT selectors and All workloads inherit scope. Mixed selectors or an unknown remote Kear do not hide a known direction; without an identified local side it stays undetermined."),
         ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for a managed source and unmanaged destination. A managed destination receives OUTBOUND2APA_DESTINATION_MANAGED, while its row stays incoming. The naming convention never reverses endpoints or replaces the evaluated application's identity."),
         ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
         ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including groups and EXCEPT exclusions. Explicit workloads appear as workload:<name> and remain in src_workloads/dst_workloads columns; a name alone does not identify a Kear. Confirmed groups use <key>group:<name> (for example appgroup:PAYMENTS)."),
@@ -757,6 +757,38 @@ def _side_relationship(
     return "empty", set()
 
 
+def _side_has_local_kear(
+    rule: Mapping[str, str], prefix: str, local_kear: str, environment: str,
+    lookup: Optional[Mapping[str, Mapping[str, set[str]]]],
+    group_index: Mapping[str, Mapping[str, object]],
+) -> bool:
+    """Recognize app-label aliases only through an unambiguous Microcosmos Kear."""
+    if not local_kear or lookup is None:
+        return False
+    # A known application does not identify every member of a mixed endpoint.
+    if (
+        _iplist_names(rule.get(f"{prefix}_iplists", ""))
+        or _parts(rule.get(f"{prefix}_workloads", ""))
+        or parse_bool(rule.get(f"{prefix}_all_workloads", ""))
+    ):
+        return False
+    applications = _side_applications(rule, prefix, group_index)
+    if not applications:
+        return False
+    labels = _expanded_selector_labels(
+        rule.get(f"{prefix}_labels", ""), rule.get(f"{prefix}_label_groups", ""), group_index,
+    )
+    environments = labels.get("env", set())
+    if len(environments) > 1:
+        return False
+    peer_environment = next(iter(environments), environment)
+    for application in applications:
+        kear, warning = _resolve_remote_kear(application, peer_environment, lookup)
+        if warning or not kear or kear.casefold() != local_kear.casefold():
+            return False
+    return True
+
+
 def _rule_relationship(
     rule: Mapping[str, str], input_row: Mapping[str, str],
     lookup: Optional[Mapping[str, Mapping[str, set[str]]]],
@@ -783,6 +815,14 @@ def _rule_relationship(
     destination_kind, destination_apps = _side_relationship(
         rule, "dst", local_app, group_index,
     )
+    # Distinct app labels (for example AGENTLESS and IAAS modules) can belong
+    # to the same Kear. Use that confirmed identity when neither label side
+    # directly identifies the local application; keep the input row unchanged.
+    if source_kind != "local" and destination_kind != "local":
+        if _side_has_local_kear(rule, "src", local_kear, environment, lookup, group_index):
+            source_kind = "local"
+        if _side_has_local_kear(rule, "dst", local_kear, environment, lookup, group_index):
+            destination_kind = "local"
     category = _rule_category(rule)
 
     source_input_match = input_app in _side_applications(rule, "src", group_index)

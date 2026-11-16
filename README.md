@@ -467,6 +467,14 @@ une autre application, sa ligne est `outgoing` vers l'élément réellement
 présent en Destination ; une application distante explicite prend priorité
 sur une déduction à partir du scope.
 
+En dernier recours, une extrémité applicative peut être reconnue comme locale
+par son Kear Microcosmos, même si son label diffère de celui du scope : toutes
+ses applications doivent se résoudre sans ambiguïté vers le `Kear Id` de la
+ligne. Un tel endpoint en Source donne `outgoing`, en Destination `incoming`.
+Les colonnes d'identité de la ligne restent inchangées. Une correspondance
+absente ou ambiguë, ou une extrémité mêlant applications et IP Lists/workloads
+explicites, ne suffit pas à établir cette identité locale.
+
 Les sélecteurs `src_workloads` et `dst_workloads` sont conservés dans deux
 colonnes dédiées et affichés comme `workload:<nom>` dans `Source` et
 `Destination`, en complément des labels, groupes et IP Lists. Leurs noms

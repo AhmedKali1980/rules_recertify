@@ -1,7 +1,11 @@
 import csv
 import importlib.util
+import json
+import os
+import subprocess
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 
@@ -14,6 +18,7 @@ from rules_recertify.reporting.compliance import (
     _microcosmos_kear_lookup, _programs_for_app, _resolve_remote_kear,
     _outbound2apa_source_app, _preferred_input_row,
     _rule_category, _rule_matches_scope, _rule_relationship, _ruleset_scope_context,
+    _side_relationship,
     _partition_compliance_rows, _usage_columns, _with_rule_enrichment_columns,
     _write_compliance_sheet,
     _write_summary_sheet,
@@ -87,6 +92,14 @@ class ComplianceTest(unittest.TestCase):
         self.assertIn("BusinessRules", workbook["Business Rules"].tables)
         self.assertEqual(workbook["Business Rules"]["A1"].border.left.style, "thin")
         self.assertEqual(workbook["Business Rules"]["A2"].border.right.style, "thin")
+        explanations = {
+            row[0]: row[3] for row in workbook["Summary"].iter_rows(
+                min_row=15, max_row=24, max_col=4, values_only=True,
+            )
+        }
+        self.assertIn("LUIGI_*", explanations["Rule Category"])
+        self.assertIn("exclusion-only EXCEPT", explanations["Direction"])
+        self.assertIn("OUTBOUND2APA_DESTINATION_MANAGED", explanations["OUTBOUND2APA validation"])
 
     def test_compliance_rows_are_partitioned_into_three_exclusive_tabs(self):
         rows = [
@@ -186,6 +199,110 @@ class ComplianceTest(unittest.TestCase):
             self.assertTrue(_factor_side(rule, prefix)[0])
             result = _rule_relationship(rule, {"app": "A", "Kear Id": "K-A"}, None)
             self.assertEqual(result["direction"], "intra-app")
+
+    def test_iplist_with_exclusions_has_ambiguous_relationship_on_either_side(self):
+        for prefix in ("src", "dst"):
+            for field in ("labels_exclusions", "label_groups_exclusions"):
+                for value in ("", " ;\n ", "role:OLD"):
+                    with self.subTest(prefix=prefix, field=field, value=value):
+                        rule = {f"{prefix}_iplists": "EXT_NET", f"{prefix}_{field}": value}
+                        expected = "ambiguous" if value == "role:OLD" else "iplist"
+                        self.assertEqual(
+                            _side_relationship(rule, prefix, "A"), (expected, set()),
+                        )
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl required")
+    def test_deployed_compliance_cli_generates_microcosmos_workbook_with_exclusions(self):
+        from openpyxl import Workbook, load_workbook
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            snapshot = root / "raw" / "snapshot"
+            snapshot.mkdir(parents=True)
+            base = dict.fromkeys(RULE_FIELDS, "")
+            base.update(ruleset_name="APP", ruleset_scope="app:APM_REGION_LOCAL;env:PRD",
+                        rule_type="allow", rule_enabled="true", services="443 TCP")
+            rules = [
+                dict(base, rule_href="/rules/remote", src_labels="app:APM_REGION_LOCAL",
+                     dst_labels="app:APM_REGION_REMOTE;env:PRD"),
+                dict(base, rule_href="/rules/labels", src_labels="role:WEB",
+                     src_labels_exclusions="role:OLD", dst_labels="role:DB",
+                     dst_labels_exclusions="role:OLD"),
+                dict(base, rule_href="/rules/groups", src_label_groups_exclusions="OLD_ROLES",
+                     dst_all_workloads="true"),
+                dict(base, rule_href="/rules/ambiguous", src_iplists="EXT_NET",
+                     src_labels_exclusions="role:OLD", dst_labels="role:DB"),
+            ]
+            for name, fields, rows in (
+                ("rules_inventory.csv", RULE_FIELDS, rules),
+                ("export_labelgroups.csv", LABEL_GROUP_FIELDS, [
+                    {"name": "OLD_ROLES", "key": "role", "member_labels": "role:OLD"},
+                ]),
+                ("labels.csv", ("key", "value"), [
+                    {"key": "app", "value": "APM_REGION_LOCAL"},
+                    {"key": "app", "value": "APM_REGION_REMOTE"},
+                    {"key": "env", "value": "PRD"},
+                ]),
+            ):
+                with (snapshot / name).open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerows(rows)
+            source = root / "microcosmos.xlsx"
+            book = Workbook()
+            sheet = book.active
+            sheet.append(["Kear Id", "Application Name", "Module", "Account", "Account Leader",
+                          "Microsegmentation Solution", "Environment", "Entity", "Program"])
+            sheet.append([""] * 9)
+            for module in ("LOCAL", "REMOTE"):
+                sheet.append([f"K-{module}", module, module, "Account", "Owner",
+                              "Illumio", "PRD", "Server", "MIO"])
+            book.save(source)
+            book.close()
+            config = root / "config.json"
+            config.write_text(json.dumps({
+                "pce": "offline-test", "raw_dir": str(root / "raw"),
+                "state_db": str(root / "state.sqlite"), "log_dir": str(root / "logs"),
+                "output_dir": str(root), "smtp_enabled": False,
+            }), encoding="utf-8")
+            env_file = root / ".env"
+            env_file.touch(mode=0o600)
+            environment = dict(os.environ)
+            for name in ("PCE", "STATE_DB", "WORKLOADER_DIR", "WORKLOADER_CONFIG_FILE"):
+                environment.pop(name, None)
+            target = root / "deployment"
+            environment.update({
+                "RULES_RECERTIFY_HOME": str(target),
+                "RULES_RECERTIFY_ALLOW_NONSTANDARD_HOME": "1",
+            })
+            installed = subprocess.run([
+                "bash", str(Path("scripts/install-prod.sh").resolve()),
+            ], cwd=root, env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+            launcher = target / "scripts" / "rules-recertify"
+            output = root / "compliance.xlsx"
+            result = subprocess.run([
+                str(launcher), "--config", str(config), "--env-file", str(env_file),
+                "compliance-report", "--input", str(source), "--out", str(output),
+            ], cwd=root, env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(str(output), result.stdout)
+            with closing(load_workbook(output, read_only=True)) as report:
+                self.assertEqual(report.sheetnames, [
+                    "Summary", "Business Rules", "Infra Rules", "Data Quality",
+                ])
+                values = list(report["Business Rules"].values)
+                rows = [dict(zip(values[0], row)) for row in values[1:]]
+                local = {row["rule_href"]: row for row in rows if row["Kear Id"] == "K-LOCAL"}
+                self.assertEqual(set(local), {rule["rule_href"] for rule in rules})
+                self.assertEqual(local["/rules/remote"]["Kear Remote"], "K-REMOTE")
+                self.assertEqual(local["/rules/remote"]["Direction"], "outgoing")
+                for name in ("labels", "groups"):
+                    self.assertEqual(local[f"/rules/{name}"]["Direction"], "intra-app")
+                    self.assertEqual(local[f"/rules/{name}"]["Kear Remote"], "K-LOCAL")
+                self.assertIn("EXCEPT(role:OLD)", local["/rules/labels"]["Source"])
+                self.assertIn("EXCEPT(rolegroup:OLD_ROLES)", local["/rules/groups"]["Source"])
+                self.assertEqual(local["/rules/ambiguous"]["Direction"], "undetermined")
+                self.assertIn("DIRECTION_UNDETERMINED", local["/rules/ambiguous"]["Warning"])
 
     def test_group_name_is_not_treated_as_a_remote_application(self):
         groups = _label_group_index([

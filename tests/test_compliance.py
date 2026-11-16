@@ -16,7 +16,6 @@ from rules_recertify.reporting.compliance import (
     _has_intra_zone_iplist, _is_microcosmos_headers,
     _load_scope_input, _module_from_app, _prepare_microcosmos_input,
     _microcosmos_kear_lookup, _programs_for_app, _resolve_remote_kear,
-    _outbound2apa_source_app, _preferred_input_row,
     _rule_category, _rule_matches_scope, _rule_relationship, _ruleset_scope_context,
     _side_relationship,
     _partition_compliance_rows, _usage_columns, _with_rule_enrichment_columns,
@@ -150,7 +149,7 @@ class ComplianceTest(unittest.TestCase):
             ("All workloads (app:APP_A; env:PRD); U_USERS; app:A", "all_workloads"),
         )
         self.assertEqual(_factor_side(iplist, "dst"), ("NZ3_APP; app:A", "iplist"))
-        self.assertEqual(_factor_side(labels, "src"), ("app:A;env:PRD", "labels"))
+        self.assertEqual(_factor_side(labels, "src"), ("app:A; env:PRD", "labels"))
 
     def test_factorization_renders_verified_groups_and_all_except_selectors(self):
         groups = _label_group_index([
@@ -164,8 +163,7 @@ class ComplianceTest(unittest.TestCase):
             "src_label_groups_exclusions": "ROLE_BUNDLE",
         }
         self.assertEqual(_factor_side(rule, "src", groups), (
-            "env:PRD; appgroup:APP_BUNDLE; EXCEPT(role:LEGACY); "
-            "EXCEPT(rolegroup:ROLE_BUNDLE)",
+            "EXCEPT(role:LEGACY); EXCEPT(rolegroup:ROLE_BUNDLE); appgroup:APP_BUNDLE; env:PRD",
             "labels",
         ))
 
@@ -185,7 +183,7 @@ class ComplianceTest(unittest.TestCase):
             }
             display, kind = _factor_side(rule, prefix, groups)
             self.assertIn("NETWORK", display)
-            self.assertIn("appgroup:APPS;role:WEB", display)
+            self.assertLess(display.index("role:WEB"), display.index("appgroup:APPS"))
             self.assertIn("EXCEPT(role:OLD)", display)
             self.assertIn("EXCEPT(appgroup:APPS)", display)
             self.assertNotIn("app:APPS", display)
@@ -368,7 +366,7 @@ class ComplianceTest(unittest.TestCase):
         }
         self.assertEqual(
             _format_ruleset_scope(rule["ruleset_scope"], groups),
-            "appgroup:PAYMENTS_APPS;env:PRD",
+            "appgroup:PAYMENTS_APPS; env:PRD",
         )
         self.assertTrue(_rule_matches_scope(rule, "PAYMENTS", "PRD", groups))
         self.assertFalse(_rule_matches_scope(rule, "OTHER", "PRD", groups))
@@ -673,7 +671,7 @@ class ComplianceTest(unittest.TestCase):
         )
         self.assertEqual(unrelated["direction"], "undetermined")
 
-    def test_outbound2apa_managed_destination_stays_aligned_to_source(self):
+    def test_outbound2apa_managed_destination_has_its_own_incoming_perspective(self):
         rule = {
             "ruleset_name": "APM_GBTO_CG.NG.OIB-OUTBOUND2APA-PROD-RS",
             "rule_type": "allow", "ruleset_scope": "",
@@ -696,13 +694,14 @@ class ComplianceTest(unittest.TestCase):
             {**destination, "Module": "PTF"},
         ])
 
-        self.assertEqual(
-            _outbound2apa_source_app(rule), "apm_gbto_cg.ng.oib",
-        )
-        self.assertIs(_preferred_input_row([source], "PRD"), source)
         result = _rule_relationship(rule, source, lookup)
         self.assertEqual(result, {
             "kear_remote": "K-DESTINATION", "direction": "outgoing",
+            "rule_category": "business_rule",
+            "warning": "OUTBOUND2APA_DESTINATION_MANAGED",
+        })
+        self.assertEqual(_rule_relationship(rule, destination, lookup), {
+            "kear_remote": "K-SOURCE", "direction": "incoming",
             "rule_category": "business_rule",
             "warning": "OUTBOUND2APA_DESTINATION_MANAGED",
         })

@@ -688,5 +688,5 @@ def _bool_int(value: object) -> Optional[int]:
 
 
 def _side_text(row: Mapping[str, object], prefix: str) -> str:
-    fields = ("all_workloads", "labels", "labels_exclusions", "iplists", "workloads")
+    fields = ("all_workloads", "labels", "labels_exclusions", "label_groups", "label_groups_exclusions", "iplists", "workloads")
     return "\n".join(f"{name}={row.get(prefix + '_' + name)}" for name in fields if row.get(prefix + "_" + name))

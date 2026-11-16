@@ -1,3 +1,4 @@
+import csv
 import importlib.util
 import tempfile
 import unittest
@@ -5,7 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from rules_recertify.reporting.compliance import (
-    KEAR_NOT_ONBOARDED, RULE_FIELDS,
+    KEAR_NOT_ONBOARDED, RULE_FIELDS, LABEL_GROUP_FIELDS, generate_compliance_workbook,
     _contains_user_iplist, _extrascope_warning, _factor_side, _global_consumer_in_use,
     _format_ruleset_scope, _label_group_index,
     _has_intra_zone_iplist, _is_microcosmos_headers,
@@ -133,9 +134,9 @@ class ComplianceTest(unittest.TestCase):
         }
         self.assertEqual(
             _factor_side(all_workloads, "src"),
-            ("All workloads (app:APP_A; env:PRD)", "all_workloads"),
+            ("All workloads (app:APP_A; env:PRD); U_USERS; app:A", "all_workloads"),
         )
-        self.assertEqual(_factor_side(iplist, "dst"), ("NZ3_APP", "iplist"))
+        self.assertEqual(_factor_side(iplist, "dst"), ("NZ3_APP; app:A", "iplist"))
         self.assertEqual(_factor_side(labels, "src"), ("app:A;env:PRD", "labels"))
 
     def test_factorization_renders_verified_groups_and_all_except_selectors(self):
@@ -150,10 +151,92 @@ class ComplianceTest(unittest.TestCase):
             "src_label_groups_exclusions": "ROLE_BUNDLE",
         }
         self.assertEqual(_factor_side(rule, "src", groups), (
-            "env:PRD; appgroup:APP_BUNDLE; ALL EXCEPT(role:LEGACY); "
-            "ALL EXCEPT(rolegroup:ROLE_BUNDLE)",
+            "env:PRD; appgroup:APP_BUNDLE; EXCEPT(role:LEGACY); "
+            "EXCEPT(rolegroup:ROLE_BUNDLE)",
             "labels",
         ))
+
+    def test_both_sides_keep_all_selector_columns_and_canonical_groups(self):
+        groups = _label_group_index([
+            {"name": "APPS", "key": "app", "member_labels": "app:A;app:B"},
+        ])
+        for prefix in ("src", "dst"):
+            rule = {
+                "ruleset_scope": "app:A;env:PRD",
+                f"{prefix}_all_workloads": "true",
+                f"{prefix}_iplists": "NETWORK",
+                f"{prefix}_labels": "app:APPS;role:WEB",
+                f"{prefix}_label_groups": "appgroup:APPS",
+                f"{prefix}_labels_exclusions": "role:OLD",
+                f"{prefix}_label_groups_exclusions": "app:APPS",
+            }
+            display, kind = _factor_side(rule, prefix, groups)
+            self.assertIn("NETWORK", display)
+            self.assertIn("appgroup:APPS;role:WEB", display)
+            self.assertIn("EXCEPT(role:OLD)", display)
+            self.assertIn("EXCEPT(appgroup:APPS)", display)
+            self.assertNotIn("app:APPS", display)
+            self.assertEqual(kind, "all_workloads")
+
+    def test_exclusions_only_sides_remain_local_to_scope(self):
+        for prefix in ("src", "dst"):
+            rule = {"ruleset_scope": "app:A;env:PRD",
+                    "src_labels_exclusions": "role:OLD",
+                    "dst_label_groups_exclusions": "RETIRED"}
+            self.assertTrue(_factor_side(rule, prefix)[0])
+            result = _rule_relationship(rule, {"app": "A", "Kear Id": "K-A"}, None)
+            self.assertEqual(result["direction"], "intra-app")
+
+    def test_group_name_is_not_treated_as_a_remote_application(self):
+        groups = _label_group_index([
+            {"name": "APPS", "key": "app", "member_labels": "app:A;app:B"},
+        ])
+        rule = {"ruleset_scope": "app:A;env:PRD",
+                "src_labels": "app:APPS", "src_labels_exclusions": "app:B",
+                "dst_labels": "app:A"}
+        self.assertEqual(_rule_relationship(
+            rule, {"app": "A", "Kear Id": "K-A"}, None, groups,
+        )["direction"], "intra-app")
+        self.assertFalse(_rule_matches_scope(rule, "APPS", "PRD", groups))
+
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl required")
+    def test_generated_workbook_preserves_both_sides_and_exclusions(self):
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            snapshot = root / "snapshot"
+            snapshot.mkdir()
+            rule = dict.fromkeys(RULE_FIELDS, "")
+            rule.update(ruleset_name="APP", ruleset_scope="app:A;env:PRD",
+                        rule_type="allow", rule_href="/rules/1",
+                        src_labels="role:WEB", src_labels_exclusions="role:OLD",
+                        src_label_groups="APPS", src_label_groups_exclusions="OLD_APPS",
+                        dst_labels="env:PRD", dst_labels_exclusions="role:RETIRED",
+                        dst_label_groups="APPS", dst_label_groups_exclusions="OLD_APPS",
+                        services="TCP/443")
+            for name, fields, rows in (
+                ("rules_inventory.csv", RULE_FIELDS, [rule]),
+                ("export_labelgroups.csv", LABEL_GROUP_FIELDS, [
+                    {"name": "APPS", "key": "app", "member_labels": "app:A"},
+                    {"name": "OLD_APPS", "key": "app", "member_labels": "app:B"},
+                ]),
+                ("labels.csv", ("key", "value"), [{"key": "app", "value": "A"}]),
+            ):
+                with (snapshot / name).open("w", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerows(rows)
+            output = generate_compliance_workbook(root, root / "compliance.xlsx", ())
+            book = load_workbook(output)
+            sheet = book["Business Rules"]
+            values = dict(zip(next(sheet.values), list(sheet.values)[1]))
+            for side in ("Source", "Destination"):
+                self.assertIn("appgroup:APPS", values[side])
+                self.assertIn("EXCEPT(appgroup:OLD_APPS)", values[side])
+                self.assertNotIn("app:APPS", values[side])
+            self.assertIn("EXCEPT(role:OLD)", values["Source"])
+            self.assertIn("EXCEPT(role:RETIRED)", values["Destination"])
+            book.close()
 
     def test_scope_label_group_is_rendered_and_matches_expanded_members(self):
         groups = _label_group_index([{
@@ -405,7 +488,7 @@ class ComplianceTest(unittest.TestCase):
         )
         self.assertEqual(
             _factor_side(exclusions_only, "src"),
-            ("ALL EXCEPT(role:FRONTEND)", "labels"),
+            ("EXCEPT(role:FRONTEND)", "labels"),
         )
 
         incoming = dict(base, src_labels="", src_iplists="EXT_NET")

@@ -447,7 +447,12 @@ résolu est affiché comme `KEAR_NOT_ONBOARDED_IN_MICROCOSMOS` plutôt que vide.
 Les Label Groups confirmés par `export_labelgroups.csv` restent dans les colonnes
 existantes : par exemple `appgroup:PAYMENTS` dans `ruleset_scope`, `Source` ou
 `Destination`. Les exclusions de labels et de Label Groups sont rendues sous la
-forme `ALL EXCEPT(<selector>)`, sans ajouter de colonne au rapport.
+forme `EXCEPT(<selector>)`, sans ajouter de colonne au rapport. Tous les sélecteurs
+Source/Destination sont conservés, y compris lorsque des labels ou groupes
+coexistent avec `All workloads` ou des IP Lists. Un côté ne contenant que des
+exclusions reste rattaché au scope pour le calcul de direction ; les exclusions
+ne désignent pas une application distante. Les groupes applicatifs confirmés
+sont notés `appgroup:<nom>` dans les sélecteurs inclus comme exclus.
 Lorsqu'une règle scopée par un `appgroup` est découverte grâce à une application
 explicite en Source et que la Destination vaut `All workloads`, la direction est
 calculée relativement à l'application qui a déclenché le match et vaut

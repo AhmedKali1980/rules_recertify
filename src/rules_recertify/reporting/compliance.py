@@ -351,9 +351,8 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the explicit remote app label using Microcosmos Module and Environment. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "The ruleset_scope app is normally local. When an app-group-scoped rule is discovered through an explicit app on one side and All workloads on the other, direction is relative to that matched input app (source = outgoing, destination = incoming). Otherwise role-only selectors, exclusion-only EXCEPT selectors, and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules are always aligned to their single explicit source app and classified as outgoing."),
-        ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for an unmanaged destination. If its destination explicitly selects a managed application, the rule remains in Business Rules but receives OUTBOUND2APA_DESTINATION_MANAGED."),
-        ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
+        ("Direction", "The ruleset_scope app is normally local. When an app-group-scoped rule is discovered through an explicit app on one side and All workloads on the other, direction is relative to that matched input app (source = outgoing, destination = incoming). Otherwise role-only selectors and All workloads inherit the local scope. Remote → local is incoming; local → remote is outgoing; equal local/remote Kears are intra-app; ambiguous topologies are undetermined. Unscoped OUTBOUND2APA rules whose source explicitly selects the input app are outgoing."),
+        ("Rule Category", "BOUQUETS_* and GLOBAL_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
         ("Label groups & exclusions", "Label groups confirmed in export_labelgroups.csv are rendered in the existing scope, Source, and Destination columns as <key>group:<name> (for example appgroup:PAYMENTS). Excluded labels and groups are rendered as EXCEPT(<selector>) within the remaining ruleset scope."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
@@ -738,10 +737,6 @@ def _side_relationship(
         rule.get(f"{prefix}_label_groups_exclusions", ""), group_index or {},
     ).get("app", set())
     explicit_apps = explicit_apps - excluded_apps
-    has_exclusions = bool(
-        _parts(rule.get(f"{prefix}_labels_exclusions", ""))
-        or _parts(rule.get(f"{prefix}_label_groups_exclusions", ""))
-    )
     local = local_app.casefold()
     remote_apps = {app for app in explicit_apps if app != local}
     has_local_app = local in explicit_apps

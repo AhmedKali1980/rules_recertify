@@ -809,7 +809,7 @@ shared by environments is accepted only when all candidates have the same
 Kear. IP Lists are extrascope but do not imply a Kear. `Direction` is
 `incoming`, `outgoing`, or `intra-app`; unresolvable topologies are explicitly
 `undetermined`. Equal local and remote Kears are classified as `intra-app`.
-Rulesets beginning with `BOUQUETS_` or `GLOBAL_` are `infra_rule`; otherwise a
+Rulesets beginning with `BOUQUETS_`, `GLOBAL_`, or `LUIGI_` are `infra_rule`; otherwise a
 deny rule or a rule using a `ZNOT_` IP List is `strategic_rule`, and remaining
 rules are `business_rule`.
 
@@ -831,6 +831,9 @@ application and its destination is `All workloads`, direction is evaluated
 relative to the application that caused the match and is `outgoing`. The
 symmetrical case—explicit destination application and source `All workloads`—is
 `incoming`.
+An exclusion-only side such as `ALL EXCEPT(role:FRONTEND)` inherits the ruleset
+scope. A rule whose source and destination are both exclusion-only selectors is
+therefore classified as `intra-app`.
 
 The command initializes and reads the configured recertification SQLite
 database. `rule_href` links each inventory rule to its completed usage windows

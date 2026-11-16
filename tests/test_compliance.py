@@ -12,6 +12,7 @@ from rules_recertify.reporting.compliance import (
     _has_intra_zone_iplist, _is_microcosmos_headers,
     _load_scope_input, _module_from_app, _prepare_microcosmos_input,
     _microcosmos_kear_lookup, _programs_for_app, _resolve_remote_kear,
+    _outbound2apa_source_app, _preferred_input_row,
     _rule_category, _rule_matches_scope, _rule_relationship, _ruleset_scope_context,
     _partition_compliance_rows, _usage_columns, _with_rule_enrichment_columns,
     _write_compliance_sheet,
@@ -287,7 +288,7 @@ class ComplianceTest(unittest.TestCase):
             {}, groups,
         ), {
             "kear_remote": "", "direction": "outgoing",
-            "rule_category": "business_rule", "warning": "",
+            "rule_category": "infra_rule", "warning": "",
         })
 
     def test_all_workloads_scope_context_is_ordered_and_deduplicated(self):
@@ -473,6 +474,23 @@ class ComplianceTest(unittest.TestCase):
         local = _rule_relationship(base, {"Kear Id": "K-LOCAL"}, {})
         self.assertEqual((local["kear_remote"], local["direction"]), ("K-LOCAL", "intra-app"))
 
+        exclusions_only = dict(
+            base, src_labels="", dst_labels="",
+            src_labels_exclusions="role:FRONTEND",
+            dst_labels_exclusions="role:FRONTEND",
+        )
+        exclusions_result = _rule_relationship(
+            exclusions_only, {"Kear Id": "K-LOCAL"}, {},
+        )
+        self.assertEqual(
+            (exclusions_result["kear_remote"], exclusions_result["direction"]),
+            ("K-LOCAL", "intra-app"),
+        )
+        self.assertEqual(
+            _factor_side(exclusions_only, "src"),
+            ("EXCEPT(role:FRONTEND)", "labels"),
+        )
+
         incoming = dict(base, src_labels="", src_iplists="EXT_NET")
         self.assertEqual(_rule_relationship(incoming, {"Kear Id": "K-LOCAL"}, {})["direction"], "incoming")
         outgoing = dict(base, dst_labels="", dst_all_workloads="true", src_iplists="")
@@ -488,6 +506,10 @@ class ComplianceTest(unittest.TestCase):
         self.assertEqual(_rule_category({
             "ruleset_name": "GLOBAL_BASE", "rule_type": "deny",
             "src_iplists": "ZNOT_ADMIN", "dst_iplists": "",
+        }), "infra_rule")
+        self.assertEqual(_rule_category({
+            "ruleset_name": "luigi_application_rules", "rule_type": "allow",
+            "src_iplists": "", "dst_iplists": "",
         }), "infra_rule")
         self.assertEqual(_rule_category({
             "ruleset_name": "APP_RULESET", "rule_type": "deny",
@@ -533,6 +555,40 @@ class ComplianceTest(unittest.TestCase):
             rule, {"app": "OTHER_APP", "Kear Id": "K-OTHER"}, {},
         )
         self.assertEqual(unrelated["direction"], "undetermined")
+
+    def test_outbound2apa_managed_destination_stays_aligned_to_source(self):
+        rule = {
+            "ruleset_name": "APM_GBTO_CG.NG.OIB-OUTBOUND2APA-PROD-RS",
+            "rule_type": "allow", "ruleset_scope": "",
+            "src_all_workloads": "false", "src_iplists": "",
+            "src_labels": "role:BATCH;app:APM_GBTO_CG.NG.OIB;env:PRD",
+            "src_label_groups": "", "dst_all_workloads": "false",
+            "dst_iplists": "", "dst_labels": "app:APM_GCR_PTF;env:PRD",
+            "dst_label_groups": "",
+        }
+        source = {
+            "app": "APM_GBTO_CG.NG.OIB", "Kear Id": "K-SOURCE",
+            "Environment": "PRD", "__compliance_env": "PRD",
+        }
+        destination = {
+            "app": "APM_GCR_PTF", "Kear Id": "K-DESTINATION",
+            "Environment": "PRD", "__compliance_env": "PRD",
+        }
+        lookup = _microcosmos_kear_lookup([
+            {**source, "Module": "CG.NG.OIB"},
+            {**destination, "Module": "PTF"},
+        ])
+
+        self.assertEqual(
+            _outbound2apa_source_app(rule), "apm_gbto_cg.ng.oib",
+        )
+        self.assertIs(_preferred_input_row([source], "PRD"), source)
+        result = _rule_relationship(rule, source, lookup)
+        self.assertEqual(result, {
+            "kear_remote": "K-DESTINATION", "direction": "outgoing",
+            "rule_category": "business_rule",
+            "warning": "OUTBOUND2APA_DESTINATION_MANAGED",
+        })
 
 
 if __name__ == "__main__":

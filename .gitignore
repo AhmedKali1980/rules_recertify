@@ -8,6 +8,7 @@ __pycache__/
 var/raw/*
 var/state/*
 var/.shared-group
+var/.shared-owner
 var/output/*
 var/logs/*
 !var/**/.gitkeep

@@ -1121,13 +1121,17 @@ and deploy the reviewed release as the administrator:
 
 ```bash
 cd /path/to/reviewed/rules_recertify
-sudo RULES_RECERTIFY_OWNER=illumio-mco \
+sudo RULES_RECERTIFY_OWNER=root \
   RULES_RECERTIFY_SHARED_GROUP=gitusers ./scripts/install-prod.sh
 ```
 
-Replace `illumio-mco` with the existing service account. The group must already
-exist. Users must have `gitusers` in the output of `id`; newly added members
-need a new login session. The installer:
+No service account is required for interactive reports: each operator uses
+their own login. `root` can own the existing installation so access no longer
+depends on a departing user. A designated service account is also supported
+by explicitly setting `RULES_RECERTIFY_OWNER`. The group must already exist,
+and the Linux `acl` package must provide `getfacl` and `setfacl`. Users must
+have `gitusers` in the output of `id`; newly added members need a new login
+session. The installer:
 
 - assigns the installed application, configuration and `var` tree to the group
   and grants the read/traverse access needed to run the application;
@@ -1140,7 +1144,13 @@ need a new login session. The installer:
 - preserves existing `.env` values and group write permission, granting group
   read access if needed; a newly created `.env` uses `0640`;
 - saves the group in `var/.shared-group`, which survives upgrades. Subsequent
-  installs reuse this group unless `RULES_RECERTIFY_SHARED_GROUP` is supplied.
+  installs reuse this group unless `RULES_RECERTIFY_SHARED_GROUP` is supplied;
+- saves the installation owner in `var/.shared-owner` and reuses it unless
+  `RULES_RECERTIFY_OWNER` is supplied, avoiding ownership reverting to the
+  operator running a later deployment;
+- grants an explicit group ACL and default group ACLs on writable runtime
+  directories. This also handles a writable ACL mask hiding a read-only
+  owning-group entry. Existing unrelated ACL entries are retained.
 
 With this marker present, `./scripts/rules-recertify` applies `umask 0007`.
 The collection wrappers and status check apply it before creating their lock.

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${RULES_RECERTIFY_HOME:-/DATA/mco/illumio-mco/rules_recertify}"
-OWNER="${RULES_RECERTIFY_OWNER:-$(id -un)}"
+OWNER="${RULES_RECERTIFY_OWNER:-}"
 GROUP="${RULES_RECERTIFY_GROUP:-$(id -gn)}"
 SHARED_GROUP="${RULES_RECERTIFY_SHARED_GROUP:-}"
 PYTHON_BIN="${RULES_RECERTIFY_PYTHON:-python3}"
@@ -15,10 +15,12 @@ if [[ "$TARGET" != /DATA/mco/illumio-mco/rules_recertify && "${RULES_RECERTIFY_A
   exit 64
 fi
 
-if [[ -L "$TARGET/var/.shared-group" ]]; then
-  printf '%s\n' 'Refusing a symlink for var/.shared-group.' >&2
-  exit 64
-fi
+for marker in "$TARGET/var/.shared-group" "$TARGET/var/.shared-owner"; do
+  if [[ -L "$marker" ]]; then
+    printf 'Refusing a symlink for %s.\n' "$marker" >&2
+    exit 64
+  fi
+done
 if [[ -z "$SHARED_GROUP" && -f "$TARGET/var/.shared-group" ]]; then
   IFS= read -r SHARED_GROUP < "$TARGET/var/.shared-group" || true
 fi
@@ -28,6 +30,24 @@ if [[ -n "$SHARED_GROUP" ]]; then
     exit 64
   fi
   GROUP="$SHARED_GROUP"
+  if [[ -z "$OWNER" && -f "$TARGET/var/.shared-owner" ]]; then
+    IFS= read -r OWNER < "$TARGET/var/.shared-owner" || true
+  fi
+  for utility in getfacl setfacl; do
+    if ! command -v "$utility" >/dev/null; then
+      printf 'Shared access requires %s (Linux acl package).\n' "$utility" >&2
+      exit 64
+    fi
+  done
+fi
+OWNER="${OWNER:-$(id -un)}"
+if [[ -n "$SHARED_GROUP" ]] && ! getent passwd "$OWNER" >/dev/null; then
+  printf 'Unknown installation owner: %s\n' "$OWNER" >&2
+  exit 64
+fi
+if [[ -n "$SHARED_GROUP" && $(id -u) -ne 0 && $(id -u "$OWNER") -ne $(id -u) ]]; then
+  printf 'Run the installer as root to assign installation ownership to %s.\n' "$OWNER" >&2
+  exit 64
 fi
 
 if [[ ! -s "$RELEASE_ID_FILE" ]]; then
@@ -110,8 +130,9 @@ else
 fi
 
 if [[ -n "$SHARED_GROUP" ]]; then
-  # Repair only missing group rights; already-shared files may belong to
-  # another operator, so do not chmod/chgrp them unnecessarily.
+  # ACL masks appear as group mode bits in ls/stat. Also grant the named
+  # group entry so an existing read-only owning-group ACL cannot hide behind
+  # a writable mask. Keep unrelated entries and their current mask limits.
   share_read_access() {
     local directory="$1"
     [[ -d "$directory" ]] || return 0
@@ -119,27 +140,40 @@ if [[ -n "$SHARED_GROUP" ]]; then
     find "$directory" -type d ! -perm -0050 -exec chmod g+rx {} +
     find "$directory" -type f ! -perm -0040 -exec chmod g+r {} +
     find "$directory" -type f -perm /0111 ! -perm -0010 -exec chmod g+x {} +
+    find "$directory" \( -type d -o -type f \) -exec setfacl -n -m "g:$GROUP:rX" -- {} +
   }
   find "$TARGET" -maxdepth 0 ! -group "$GROUP" -exec chgrp "$GROUP" {} +
-  for directory in "$TARGET/src" "$TARGET/scripts" "$TARGET/config" "$TARGET/.venv" "$TARGET/var"; do
+  setfacl -n -m "g:$GROUP:rx" -- "$TARGET"
+  for directory in "$TARGET/src" "$TARGET/scripts" "$TARGET/config" "$TARGET/.venv" "$TARGET/workloader" "$TARGET/var"; do
     share_read_access "$directory"
   done
-  find "$TARGET/.env" ! -group "$GROUP" -exec chgrp "$GROUP" {} +
-  find "$TARGET/.env" ! -perm -0040 -exec chmod g+r {} +
+  find "$TARGET" -maxdepth 1 -type f ! -group "$GROUP" -exec chgrp "$GROUP" {} +
+  find "$TARGET" -maxdepth 1 -type f ! -perm -0040 -exec chmod g+r {} +
+  find "$TARGET" -maxdepth 1 -type f -exec setfacl -n -m "g:$GROUP:r" -- {} +
+  if [[ $(stat -c '%a' "$TARGET/.env") =~ [2367][0-7]$ ]]; then
+    setfacl -n -m "g:$GROUP:rw" -- "$TARGET/.env"
+  fi
   install -d -m 2750 "$TARGET/var"
   for directory in "$TARGET/var/state" "$TARGET/var/output" "$TARGET/var/logs"; do
     find "$directory" -type d ! -perm -2070 -exec chmod g+rwx,g+s {} +
     find "$directory" -type f ! -perm -0060 -exec chmod g+rw {} +
+    find "$directory" \( -type d -o -type f \) -exec setfacl -n -m "g:$GROUP:rwX" -- {} +
+    find "$directory" -type d -exec setfacl -m \
+      "d:u::rwx,d:g::rwx,d:g:$GROUP:rwx,d:m::rwx,d:o::---" -- {} +
   done
   # New collection runs can be created by the group; published snapshots
   # and existing raw references retain their read-only group policy.
   install -d -m 2770 "$TARGET/var/raw" "$TARGET/var/raw/archives"
+  setfacl -n -m "g:$GROUP:rwx" -- "$TARGET/var/raw" "$TARGET/var/raw/archives"
+  setfacl -m "d:u::rwx,d:g::rwx,d:g:$GROUP:rwx,d:m::rwx,d:o::---" \
+    -- "$TARGET/var/raw" "$TARGET/var/raw/archives"
   printf '%s\n' "$GROUP" > "$TARGET/var/.shared-group"
-  chmod 0640 "$TARGET/var/.shared-group"
+  printf '%s\n' "$OWNER" > "$TARGET/var/.shared-owner"
+  chmod 0640 "$TARGET/var/.shared-group" "$TARGET/var/.shared-owner"
   if [[ $(id -u) -eq 0 ]]; then
-    chown "$OWNER:$GROUP" "$TARGET/var/.shared-group"
+    chown "$OWNER:$GROUP" "$TARGET/var/.shared-group" "$TARGET/var/.shared-owner"
   fi
-  printf 'Shared runtime access enabled for group %s\n' "$GROUP"
+  printf 'Shared runtime access enabled for group %s; installation owner %s\n' "$GROUP" "$OWNER"
 fi
 
 printf 'Rules Recertify installed in %s\n' "$TARGET"

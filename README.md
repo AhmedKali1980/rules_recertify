@@ -66,19 +66,23 @@ in WAL mode, and the application also writes logs and report files. To enable
 shared execution for an existing Linux group, deploy as the administrator:
 
 ```bash
-sudo RULES_RECERTIFY_OWNER=illumio-mco \
+sudo RULES_RECERTIFY_OWNER=root \
   RULES_RECERTIFY_SHARED_GROUP=gitusers ./scripts/install-prod.sh
 ```
 
-Replace `illumio-mco` with the existing service account. This shares the
-installed `var` tree, records the group in `var/.shared-group`, and reuses it
-on upgrades. The supplied launcher applies `umask 0007` in this mode; state,
+Each group member can run reports with their own login; a service account is
+not required. `root` owns the existing installation, removing dependence on
+the former operator. The installer records the group and owner in
+`var/.shared-group` and `var/.shared-owner` and reuses them on upgrades.
+Linux ACL tools (`getfacl`, `setfacl`) are required for shared deployment.
+The supplied launcher applies `umask 0007` in this mode; state,
 logs and outputs use setgid group-writable directories. New SQLite files are
 created group-writable, including WAL/SHM. Existing `.env` values and group
 write permission are retained; a private file gains group read access.
 Published snapshots and existing raw exports gain group read access.
 Custom runtime paths outside the installed `var` tree need equivalent
-permissions configured separately. See the integration guide for checks.
+permissions configured separately. See the integration guide for checks and
+[the French handover procedure](docs/partage-gitusers.md).
 
 ## Import des workloads et IP Lists
 

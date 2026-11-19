@@ -15,12 +15,10 @@ class ConfigurationError(ValueError):
 
 
 def load_dotenv(path: Optional[Path]) -> Dict[str, str]:
-    """Parse dotenv without shell evaluation and add missing values to environ."""
+    """Read an OS-readable dotenv without chmod, shell evaluation or env overrides."""
     loaded: Dict[str, str] = {}
     if path is None or not path.exists():
         return loaded
-    if path.stat().st_mode & 0o077:
-        raise ConfigurationError(f"Dotenv file permissions must be 0600: {path}")
     for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):

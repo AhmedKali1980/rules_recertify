@@ -39,6 +39,11 @@ chmod 600 .env
 ./scripts/rules-recertify --config config/local.json --env-file .env test-email
 ```
 
+The application does not enforce or change `.env` permissions. The `0600`
+example is for private access; for a shared file, use `chgrp gitusers .env`
+and `chmod 640 .env` (`0660` if the group also needs write access). Each user
+must have operating-system read access to the file.
+
 Before the first PCE connection, verify in `config/local.json`:
 
 - `pce`, `workloader_dir`, and `workloader_config_file`;

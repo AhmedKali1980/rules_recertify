@@ -49,6 +49,18 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 See the integration guide before contacting a PCE or enabling cron.
 
+The application does not enforce or change `.env` permissions; operating-system
+permissions and ACLs determine who can read it. `0600` above is a private-file
+example. For shared group access, choose the group and permissions explicitly:
+
+```bash
+chgrp gitusers .env
+chmod 640 .env
+```
+
+Use `0660` if that group also needs to edit the file. Existing `.env` contents
+and permissions are preserved by `install-prod.sh` during upgrades.
+
 ## Import des workloads et IP Lists
 
 La commande quotidienne `collect-policy` importe les référentiels et l'inventaire

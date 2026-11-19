@@ -1,5 +1,6 @@
 import json, os, tempfile, unittest
 from pathlib import Path
+from unittest.mock import patch
 from rules_recertify.config import ConfigurationError, load_dotenv, load_settings
 
 class ConfigTest(unittest.TestCase):
@@ -26,6 +27,31 @@ class ConfigTest(unittest.TestCase):
             p=Path(directory)/".env"; p.write_text("SAFE=$(touch /tmp/must-not-exist)\n"); p.chmod(0o600)
             loaded=load_dotenv(p)
             self.assertEqual(loaded["SAFE"], "$(touch /tmp/must-not-exist)")
+    def test_dotenv_accepts_readable_modes_and_preserves_permissions_and_environment(self):
+        key = "RULES_RECERTIFY_DOTENV_PERMISSION_TEST"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env"
+            path.write_text(f"{key}=from-file\n", encoding="utf-8")
+            with patch.dict(os.environ, {key: "already-set"}):
+                for mode in (0o600, 0o640, 0o660, 0o644):
+                    with self.subTest(mode=oct(mode)):
+                        path.chmod(mode)
+                        self.assertEqual(load_dotenv(path), {key: "from-file"})
+                        self.assertEqual(path.stat().st_mode & 0o777, mode)
+                        self.assertEqual(os.environ[key], "already-set")
+
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0,
+                     "requires unprivileged POSIX file access")
+    def test_dotenv_keeps_os_read_access_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env"
+            path.write_text("EXAMPLE=not-a-secret\n", encoding="utf-8")
+            path.chmod(0o000)
+            try:
+                with self.assertRaises(PermissionError):
+                    load_dotenv(path)
+            finally:
+                path.chmod(0o600)
     def test_rate_limit_retry_delay_is_at_least_ten_minutes(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/"c.json"

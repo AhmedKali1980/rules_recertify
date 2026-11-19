@@ -185,7 +185,7 @@ class CliTest(unittest.TestCase):
             env_file = root / ".env"
             config.write_text(json.dumps({"pce": "p", "smtp_enabled": True}))
             env_file.write_text("SMTP_HOST=mail.internal\nSMTP_TO=ops@example.test\n")
-            env_file.chmod(0o600)
+            env_file.chmod(0o640)
             output = io.StringIO()
             with patch("rules_recertify.cli.send_summary", return_value=True) as sender:
                 with contextlib.redirect_stdout(output):

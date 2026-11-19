@@ -401,9 +401,12 @@ coverage for the claimed lookback.
 - Alerts: email, with potential reuse of `smtp_utils.py` after source review.
 - PCE/Workloader credentials: `.env` file.
 
-The `.env` path is configurable, excluded from Git, permissioned `0600`, never
-logged, and loaded without `source`/shell evaluation. Startup validation reports
-missing variable names but never values.
+The `.env` path is configurable, excluded from Git, never logged, and loaded
+without `source`/shell evaluation. Access is controlled by operating-system
+permissions and ACLs; the application neither enforces a file mode nor changes
+it. The installer uses `0600` for a new file and preserves existing permissions
+on upgrade. Shared group access can use `0640` (read) or `0660` (read/write).
+Startup validation reports missing variable names but never values.
 
 SMTP settings are also stored in `.env`. Send exactly one summary email at the end
 of each scheduled collection batch, whether it succeeds, partially succeeds, or

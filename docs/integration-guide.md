@@ -62,7 +62,9 @@ The installer creates the standard root and `var/state`, `var/raw`, `var/output`
 and `var/logs` with mode `0750`. On a first install it creates
 `config/local.json` from the production example and `.env` with mode `0600`.
 During an upgrade it preserves `.env`, `config/local.json`, `.venv`, and the entire
-`var` tree. It does not install RPMs, credentials, cron, or Python wheels.
+`var` tree, including the chosen permissions on an existing `.env`. The runtime
+does not require `0600`; shared access is described below. The installer does
+not install RPMs, credentials, cron, or Python wheels.
 Before replacing application files, it compiles the complete Python source tree
 and runs `bash -n` over every operational shell script. An indentation, syntax,
 or merge error therefore aborts deployment before the working production code is
@@ -172,12 +174,23 @@ Use `.env` primarily for optional SMTP secrets. Runtime paths and the normal PCE
 selection belong in `config/local.json` and `pce.yaml`. The parser never
 evaluates shell syntax. Do not run `source .env`; do not commit it.
 
+The application does not enforce or change `.env` file modes. The `0600`
+example above is for private access. To share it with the `gitusers` group:
+
+```bash
+chgrp gitusers .env
+chmod 640 .env
+```
+
+Use `0660` if the group also needs write access. Operating-system permissions
+and ACLs still determine whether each user can read the file; these modes are
+preserved during upgrades.
+
 To enable completion notifications, set `"smtp_enabled": true` in
 `config/local.json`, configure `SMTP_HOST`, `SMTP_TO`, and any relay-specific
 TLS or authentication values in `.env`, then test delivery independently:
 
 ```bash
-chmod 600 .env
 ./scripts/rules-recertify \
   --config config/local.json \
   --env-file .env \
@@ -1087,9 +1100,10 @@ python3.9 -c 'import sqlite3; print(sqlite3.sqlite_version)'
 ```
 
 The runtime owner needs read/execute access to application files and read/write
-access to every `var` directory. Keep `.env` at `0600`. Review SELinux labels and
-mount options with the RHEL administrators because the repository does not change
-SELinux policy.
+access to every `var` directory. Each runtime user needs read access to `.env`
+(for example via group mode `0640`); the application does not force `0600`.
+Review SELinux labels and mount options with the RHEL administrators because
+the repository does not change SELinux policy.
 
 For an application upgrade, take a SQLite backup, stop/disable the cron launch,
 deploy from the new reviewed checkout with `install-prod.sh`, run the offline test

@@ -76,6 +76,7 @@ if [[ ! -e "$TARGET/config/local.json" ]]; then
   install -m 0640 "$TARGET/config/production.example.json" "$TARGET/config/local.json"
 fi
 if [[ ! -e "$TARGET/.env" ]]; then
+  # Private default on first install; existing file modes are preserved above.
   install -m 0600 "$TARGET/.env.example" "$TARGET/.env"
 fi
 

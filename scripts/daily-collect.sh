@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 printf '%s\n' 'WARNING: daily-collect.sh is the transitional combined collector; production must use the dedicated wrappers.' >&2
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "$ROOT/var/.shared-group" ]]; then
+  umask 0007
+fi
 CONFIG="${RULES_RECERTIFY_CONFIG:-${ROOT}/config/local.json}"
 VENV="${RULES_RECERTIFY_VENV:-${ROOT}/.venv}"
 LOCK="${RULES_RECERTIFY_LOCK:-${ROOT}/var/state/collect.lock}"

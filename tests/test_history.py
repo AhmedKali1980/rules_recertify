@@ -1,4 +1,4 @@
-import json, tempfile, unittest
+import json, os, sqlite3, tempfile, unittest
 from datetime import date
 from pathlib import Path
 from rules_recertify.history.database import (
@@ -8,6 +8,24 @@ from rules_recertify.history.database import (
 from rules_recertify.history.metrics import summarize_usage
 
 class HistoryTest(unittest.TestCase):
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0,
+                     "requires unprivileged POSIX file access")
+    def test_readonly_database_error_identifies_database_and_wal_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "shared.sqlite"
+            connection = sqlite3.connect(str(path))
+            connection.execute("CREATE TABLE example(value TEXT)")
+            connection.close()
+            path.chmod(0o440)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "SQLite cannot write") as error:
+                    Database(path).connect()
+                self.assertIn(str(path), str(error.exception))
+                self.assertIn(directory, str(error.exception))
+                self.assertIn("-wal/-shm", str(error.exception))
+            finally:
+                path.chmod(0o600)
+
     def test_compliance_usage_aggregates_completed_windows_and_ports(self):
         with tempfile.TemporaryDirectory() as directory:
             db = Database(Path(directory) / "db.sqlite")

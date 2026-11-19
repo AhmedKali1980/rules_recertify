@@ -61,6 +61,25 @@ chmod 640 .env
 Use `0660` if that group also needs to edit the file. Existing `.env` contents
 and permissions are preserved by `install-prod.sh` during upgrades.
 
+Sharing `.env` alone is not enough to run reports: SQLite opens the database
+in WAL mode, and the application also writes logs and report files. To enable
+shared execution for an existing Linux group, deploy as the administrator:
+
+```bash
+sudo RULES_RECERTIFY_OWNER=illumio-mco \
+  RULES_RECERTIFY_SHARED_GROUP=gitusers ./scripts/install-prod.sh
+```
+
+Replace `illumio-mco` with the existing service account. This shares the
+installed `var` tree, records the group in `var/.shared-group`, and reuses it
+on upgrades. The supplied launcher applies `umask 0007` in this mode; state,
+logs and outputs use setgid group-writable directories. New SQLite files are
+created group-writable, including WAL/SHM. Existing `.env` values and group
+write permission are retained; a private file gains group read access.
+Published snapshots and existing raw exports gain group read access.
+Custom runtime paths outside the installed `var` tree need equivalent
+permissions configured separately. See the integration guide for checks.
+
 ## Import des workloads et IP Lists
 
 La commande quotidienne `collect-policy` importe les référentiels et l'inventaire

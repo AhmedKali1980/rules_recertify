@@ -58,13 +58,14 @@ sudo RULES_RECERTIFY_OWNER=illumio-mco \
 cd /DATA/mco/illumio-mco/rules_recertify
 ```
 
-The installer creates the standard root and `var/state`, `var/raw`, `var/output`,
-and `var/logs` with mode `0750`. On a first install it creates
+By default, the installer creates the standard root and `var/state`, `var/raw`,
+`var/output`, and `var/logs` with mode `0750`. On a first install it creates
 `config/local.json` from the production example and `.env` with mode `0600`.
 During an upgrade it preserves `.env`, `config/local.json`, `.venv`, and the entire
 `var` tree, including the chosen permissions on an existing `.env`. The runtime
-does not require `0600`; shared access is described below. The installer does
-not install RPMs, credentials, cron, or Python wheels.
+does not require `0600`. The optional shared-group installation described in
+section 10 grants group access to existing files and creates a new `.env` as
+`0640`. The installer does not install RPMs, credentials, cron, or Python wheels.
 Before replacing application files, it compiles the complete Python source tree
 and runs `bash -n` over every operational shell script. An indentation, syntax,
 or merge error therefore aborts deployment before the working production code is
@@ -184,7 +185,9 @@ chmod 640 .env
 
 Use `0660` if the group also needs write access. Operating-system permissions
 and ACLs still determine whether each user can read the file; these modes are
-preserved during upgrades.
+preserved during upgrades. Shared program execution also needs write access to
+SQLite, its directory and WAL/SHM files, logs and outputs; follow section 10
+to configure those paths together.
 
 To enable completion notifications, set `"smtp_enabled": true` in
 `config/local.json`, configure `SMTP_HOST`, `SMTP_TO`, and any relay-specific
@@ -1104,6 +1107,65 @@ access to every `var` directory. Each runtime user needs read access to `.env`
 (for example via group mode `0640`); the application does not force `0600`.
 Review SELinux labels and mount options with the RHEL administrators because
 the repository does not change SELinux policy.
+
+### Shared runtime access (`gitusers`)
+
+Changing only `.env` permissions does not grant write access to SQLite. Even
+`report-batch` initializes the database and enables WAL mode. A
+`SQLite cannot write` or `attempt to write a readonly database` error therefore
+requires checking the database file, its parent directory and existing
+`-wal`/`-shm` files, as well as the logs and output directories.
+
+To enable shared execution, stop scheduled and interactive application runs
+and deploy the reviewed release as the administrator:
+
+```bash
+cd /path/to/reviewed/rules_recertify
+sudo RULES_RECERTIFY_OWNER=illumio-mco \
+  RULES_RECERTIFY_SHARED_GROUP=gitusers ./scripts/install-prod.sh
+```
+
+Replace `illumio-mco` with the existing service account. The group must already
+exist. Users must have `gitusers` in the output of `id`; newly added members
+need a new login session. The installer:
+
+- assigns the installed application, configuration and `var` tree to the group
+  and grants the read/traverse access needed to run the application;
+- grants group write access to existing state, log and output files, including
+  SQLite WAL/SHM files, without replacing their contents;
+- gives state, log and output directories group write access and the setgid bit
+  (normally `2770`), so new files inherit the group;
+- makes the raw and archive roots `2770` for new collections, while granting
+  existing raw exports and published snapshots group read access;
+- preserves existing `.env` values and group write permission, granting group
+  read access if needed; a newly created `.env` uses `0640`;
+- saves the group in `var/.shared-group`, which survives upgrades. Subsequent
+  installs reuse this group unless `RULES_RECERTIFY_SHARED_GROUP` is supplied.
+
+With this marker present, `./scripts/rules-recertify` applies `umask 0007`.
+The collection wrappers and status check apply it before creating their lock.
+New SQLite databases in group-writable setgid directories are created as
+`0660` under that mask, and SQLite uses their mode for WAL/SHM. New logs and
+reports also retain group write access. Invoke the supplied launcher to apply
+the shared umask; direct Python invocations retain the caller's umask.
+
+These repairs cover the installed `var` tree. If `state_db`, `log_dir`,
+`output_dir` or `raw_dir` points elsewhere, configure the corresponding group,
+directory permissions and existing files at those paths separately.
+
+After deployment, check the actual configured paths as each operator:
+
+```bash
+cd /DATA/mco/illumio-mco/rules_recertify
+id
+stat -c '%U:%G %a %n' .env var var/state var/output var/logs
+find var/state -maxdepth 1 -type f -exec stat -c '%U:%G %a %n' {} +
+./scripts/rules-recertify --config config/local.json --env-file .env init-db
+```
+
+The installer must run as the file owner or administrator when repairing
+existing private files. Do not remove SQLite WAL/SHM files to work around
+permissions: they can contain committed data.
 
 For an application upgrade, take a SQLite backup, stop/disable the cron launch,
 deploy from the new reviewed checkout with `install-prod.sh`, run the offline test

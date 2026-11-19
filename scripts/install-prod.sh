@@ -5,6 +5,7 @@ SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${RULES_RECERTIFY_HOME:-/DATA/mco/illumio-mco/rules_recertify}"
 OWNER="${RULES_RECERTIFY_OWNER:-$(id -un)}"
 GROUP="${RULES_RECERTIFY_GROUP:-$(id -gn)}"
+SHARED_GROUP="${RULES_RECERTIFY_SHARED_GROUP:-}"
 PYTHON_BIN="${RULES_RECERTIFY_PYTHON:-python3}"
 RELEASE_ID_FILE="$SOURCE/config/release-id"
 
@@ -12,6 +13,21 @@ if [[ "$TARGET" != /DATA/mco/illumio-mco/rules_recertify && "${RULES_RECERTIFY_A
   printf 'Refusing non-standard target: %s\n' "$TARGET" >&2
   printf '%s\n' 'A non-standard path additionally requires RULES_RECERTIFY_ALLOW_NONSTANDARD_HOME=1.' >&2
   exit 64
+fi
+
+if [[ -L "$TARGET/var/.shared-group" ]]; then
+  printf '%s\n' 'Refusing a symlink for var/.shared-group.' >&2
+  exit 64
+fi
+if [[ -z "$SHARED_GROUP" && -f "$TARGET/var/.shared-group" ]]; then
+  IFS= read -r SHARED_GROUP < "$TARGET/var/.shared-group" || true
+fi
+if [[ -n "$SHARED_GROUP" ]]; then
+  if ! getent group "$SHARED_GROUP" >/dev/null; then
+    printf 'Unknown shared runtime group: %s\n' "$SHARED_GROUP" >&2
+    exit 64
+  fi
+  GROUP="$SHARED_GROUP"
 fi
 
 if [[ ! -s "$RELEASE_ID_FILE" ]]; then
@@ -76,8 +92,10 @@ if [[ ! -e "$TARGET/config/local.json" ]]; then
   install -m 0640 "$TARGET/config/production.example.json" "$TARGET/config/local.json"
 fi
 if [[ ! -e "$TARGET/.env" ]]; then
-  # Private default on first install; existing file modes are preserved above.
-  install -m 0600 "$TARGET/.env.example" "$TARGET/.env"
+  # Private by default; shared installations grant group read access.
+  ENV_MODE=0600
+  if [[ -n "$SHARED_GROUP" ]]; then ENV_MODE=0640; fi
+  install -m "$ENV_MODE" "$TARGET/.env.example" "$TARGET/.env"
 fi
 
 if grep -q '^STATE_DB=var/state/rules_recertify\.sqlite$' "$TARGET/.env"; then
@@ -89,6 +107,39 @@ if [[ $(id -u) -eq 0 ]]; then
   chown -R "$OWNER:$GROUP" "$TARGET"
 else
   printf 'Not running as root; ownership remains %s:%s.\n' "$(id -un)" "$(id -gn)"
+fi
+
+if [[ -n "$SHARED_GROUP" ]]; then
+  # Repair only missing group rights; already-shared files may belong to
+  # another operator, so do not chmod/chgrp them unnecessarily.
+  share_read_access() {
+    local directory="$1"
+    [[ -d "$directory" ]] || return 0
+    find "$directory" ! -type l ! -group "$GROUP" -exec chgrp "$GROUP" {} +
+    find "$directory" -type d ! -perm -0050 -exec chmod g+rx {} +
+    find "$directory" -type f ! -perm -0040 -exec chmod g+r {} +
+    find "$directory" -type f -perm /0111 ! -perm -0010 -exec chmod g+x {} +
+  }
+  find "$TARGET" -maxdepth 0 ! -group "$GROUP" -exec chgrp "$GROUP" {} +
+  for directory in "$TARGET/src" "$TARGET/scripts" "$TARGET/config" "$TARGET/.venv" "$TARGET/var"; do
+    share_read_access "$directory"
+  done
+  find "$TARGET/.env" ! -group "$GROUP" -exec chgrp "$GROUP" {} +
+  find "$TARGET/.env" ! -perm -0040 -exec chmod g+r {} +
+  install -d -m 2750 "$TARGET/var"
+  for directory in "$TARGET/var/state" "$TARGET/var/output" "$TARGET/var/logs"; do
+    find "$directory" -type d ! -perm -2070 -exec chmod g+rwx,g+s {} +
+    find "$directory" -type f ! -perm -0060 -exec chmod g+rw {} +
+  done
+  # New collection runs can be created by the group; published snapshots
+  # and existing raw references retain their read-only group policy.
+  install -d -m 2770 "$TARGET/var/raw" "$TARGET/var/raw/archives"
+  printf '%s\n' "$GROUP" > "$TARGET/var/.shared-group"
+  chmod 0640 "$TARGET/var/.shared-group"
+  if [[ $(id -u) -eq 0 ]]; then
+    chown "$OWNER:$GROUP" "$TARGET/var/.shared-group"
+  fi
+  printf 'Shared runtime access enabled for group %s\n' "$GROUP"
 fi
 
 printf 'Rules Recertify installed in %s\n' "$TARGET"

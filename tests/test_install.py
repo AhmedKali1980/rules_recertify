@@ -21,6 +21,7 @@ class ProductionInstallerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "rules_recertify"
             environment = dict(os.environ)
+            environment.pop("RULES_RECERTIFY_SHARED_GROUP", None)
             environment.update({
                 "RULES_RECERTIFY_HOME": str(target),
                 "RULES_RECERTIFY_ALLOW_NONSTANDARD_HOME": "1",

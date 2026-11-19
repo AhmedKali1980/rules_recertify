@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "$ROOT/var/.shared-group" ]]; then
+  umask 0007
+fi
 CONFIG="${RULES_RECERTIFY_CONFIG:-${ROOT}/config/local.json}"
 ENV_FILE="${RULES_RECERTIFY_ENV_FILE:-${ROOT}/.env}"
 LOCK="${RULES_RECERTIFY_LOCK:-${ROOT}/var/state/collect.lock}"

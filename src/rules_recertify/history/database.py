@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import sqlite3
+import stat
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -154,10 +156,32 @@ class Database:
 
     def connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        directory_mode = self.path.parent.stat().st_mode
+        if directory_mode & stat.S_ISGID and directory_mode & stat.S_IWGRP:
+            # SQLite otherwise creates a new database as 0644 (0640 under
+            # umask 0007), then copies that mode to its WAL/SHM files.
+            # An explicit group-writable setgid directory opts into sharing.
+            try:
+                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o660)
+            except FileExistsError:
+                pass
+            else:
+                os.close(descriptor)
         connection = sqlite3.connect(str(self.path))
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA journal_mode=WAL")
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError as exc:
+            connection.close()
+            if "readonly" in str(exc).lower().replace("-", ""):
+                path = self.path.absolute()
+                raise RuntimeError(
+                    f"SQLite cannot write to {path}. Check write access to this file, "
+                    f"its directory {path.parent}, and existing -wal/-shm files "
+                    "(group permissions, ACLs and filesystem mount mode)."
+                ) from exc
+            raise
         return connection
 
     def initialize(self) -> None:

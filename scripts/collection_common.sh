@@ -11,6 +11,9 @@ CLI="${RULES_RECERTIFY_CLI:-${ROOT}/scripts/rules-recertify}"
 
 rr_prepare() {
   cd "$ROOT"
+  if [[ -f "$ROOT/var/.shared-group" ]]; then
+    umask 0007
+  fi
   export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
   if [[ -x "${VENV}/bin/python" ]]; then
     export PATH="${VENV}/bin:${PATH}"

@@ -140,7 +140,7 @@ def generate_compliance_workbook(
                 "Destination contains User": str(
                     destination_kind == "iplist" and _contains_user_iplist(destination)
                 ).upper(),
-                "services": rule["services"],
+                "services": _expand_services(rule["services"], services, expand_all_services=False),
                 **{
                     catalog: dangerous_ports(expanded_services, [catalog])
                     for catalog in report_catalogs

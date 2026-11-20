@@ -490,6 +490,15 @@ non utilisées, y compris leurs cellules d'entête fusionnées ou vides. Le rapp
 consolide Source/Destination, les programmes
 `KPI_PROGRAM_*`, les IP Lists utilisateur et intra-zone, et une colonne par
 catalogue configuré dans `dangerous_port_lists`.
+La colonne `services` développe les services nommés depuis
+`var/raw/snapshot/export_services.csv`, en conservant leur nom suivi de leur
+définition : par exemple `ALL-BUT-ERADICATE (22 TCP;135 UDP)`.
+`All Services` garde son libellé. Les ports explicites sont conservés et un
+service absent du référentiel reste affiché avec son nom d'origine. La résolution
+utilise le snapshot publié en priorité, puis le dernier export raw horodaté
+disponible. Les calculs de ports à risque gardent leur expansion complète,
+y compris pour `All Services`. Cet affichage reste disponible avec
+`--custom-headers` lorsque `services` est sélectionnée.
 Un sélecteur `All workloads` est enrichi avec le contexte du `ruleset_scope`,
 par exemple `All workloads (app:PAYMENTS; env:PRD)`. La colonne dédiée
 `Global Consumer in use` reste normalement à `FALSE`. Elle devient `TRUE`, avec

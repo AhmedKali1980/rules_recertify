@@ -235,7 +235,7 @@ def _load_report_workloads(connection: object, raw_dir: Optional[Path]) -> Tuple
 
 
 def _load_report_services(raw_dir: Optional[Path]) -> Tuple[Dict[str, Tuple[str, str]], str]:
-    """Load compressed services from the newest timestamped raw run."""
+    """Prefer published snapshot services, then the newest timestamped raw run."""
     if raw_dir:
         candidates = _raw_reference_candidates(raw_dir, "export_services.csv")
         if candidates:
@@ -520,11 +520,14 @@ def _count_ports(services: str) -> int:
 
 def _expand_services(
     services: str, service_catalog: Optional[Mapping[str, Tuple[str, str]]] = None,
+    *, expand_all_services: bool = True,
 ) -> str:
     """Expand All Services and named compressed PCE services.
 
     Explicit definitions remain untouched. Named services are rendered with
     their canonical name followed by their compressed port definition.
+    Display-only callers can preserve the All Services label without changing
+    the full expansion used by port counts and exposure calculations.
     """
     catalog = service_catalog or {}
     expanded_items: List[str] = []
@@ -533,7 +536,10 @@ def _expand_services(
         if not item:
             continue
         if item.casefold() == "all services":
-            expanded_items.extend(("0-65535 TCP", "0-65535 UDP"))
+            if expand_all_services:
+                expanded_items.extend(("0-65535 TCP", "0-65535 UDP"))
+            else:
+                expanded_items.append(item)
             continue
         resolved = catalog.get(item.casefold())
         if resolved:

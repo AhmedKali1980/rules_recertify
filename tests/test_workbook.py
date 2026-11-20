@@ -443,6 +443,17 @@ class WorkbookExpansionTest(unittest.TestCase):
         )
         self.assertEqual(_count_ports(expanded), 5)
 
+    def test_named_services_can_expand_while_preserving_all_services_display(self):
+        catalog = {
+            "all-but-eradicate": ("ALL-BUT-ERADICATE", "22 TCP;135 UDP"),
+            "empty-svc": ("EMPTY-SVC", ""),
+            "all services": ("WRONG", "1 TCP"),
+        }
+        original = "all-but-eradicate;All Services\n53 UDP;UNKNOWN;empty-svc"
+        self.assertEqual(_expand_services(original, catalog, expand_all_services=False),
+                         "ALL-BUT-ERADICATE (22 TCP;135 UDP);All Services;53 UDP;UNKNOWN;EMPTY-SVC")
+        self.assertIn("0-65535 TCP;0-65535 UDP", _expand_services(original, catalog))
+
     def test_service_reference_uses_newest_timestamped_raw_run(self):
         with tempfile.TemporaryDirectory() as directory:
             raw = Path(directory)

@@ -849,6 +849,14 @@ The workbook includes `KPI_PROGRAM_*` membership from
 flags for `U_` and `USR_`; one finding column for each configured
 `dangerous_port_lists` catalogue after expansion through `export_services.csv`;
 and ruleset-wide `Intra-zone` classification for `NZ3_` or `ZNOT_NZ3` IP Lists.
+The `services` column resolves named services from
+`var/raw/snapshot/export_services.csv` and displays the canonical name followed
+by its port definition, for example `ALL-BUT-ERADICATE (22 TCP;135 UDP)`.
+`All Services` keeps its label; explicit ports and unresolved service names
+remain visible. The published snapshot takes precedence over timestamped raw
+exports, which remain the fallback. Exposure calculations still use the full
+expansion, including all TCP/UDP ports for `All Services`. The same display
+applies when `services` is enabled in a `--custom-headers` profile.
 An `All workloads` selector includes the application and environment context
 from `ruleset_scope`, for example `All workloads (app:PAYMENTS; env:PRD)`.
 The dedicated `Global Consumer in use` column is normally `FALSE`. It becomes

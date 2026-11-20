@@ -802,6 +802,48 @@ Matching is anchored to exact label values within
   --out var/output/compliance.xlsx
 ```
 
+To restrict the displayed columns, explicitly select an INI visibility profile:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --input /data/microcosmos.xlsx \
+  --custom-headers config/headers.conf --out var/output/compliance-custom.xlsx
+```
+
+The existing full report remains the default when `--custom-headers` is omitted;
+no visibility profile is read automatically. Use any explicit path, such as
+`--custom-headers config/headers2.conf`, to select another profile. The supplied
+`config/headers.conf` enables all standard columns. To customize it, use exact
+report column names as section names:
+
+```ini
+[Source]
+visibility = true
+
+[Destination]
+visibility = true
+
+[Direction]
+visibility = false
+```
+
+Only columns explicitly set to `visibility = true` appear in `Business Rules`,
+`Infra Rules`, and `Data Quality`, retaining the normal report column order.
+Unlisted columns are hidden, including extra input metadata; add a section such
+as `[Owner]` when that column is present in the input and should be included.
+Optional Microcosmos identity columns and `env` are skipped when unavailable for
+the selected input. Other unknown names, missing/invalid visibility settings,
+duplicate sections/options, unreadable files, or a selection with no available
+visible columns fail with a clear error before replacing an existing output.
+Files use UTF-8; a Windows UTF-8 BOM and CRLF line endings are supported.
+
+Filtering applies only when writing the detail sheets. Matching, direction,
+Kear resolution, usage metrics, partitioning and all Summary values/charts are
+computed from the complete rows. The production installer creates
+`config/headers.conf` on first installation and preserves local edits during
+upgrades. Profile files do not grant write access to protected configuration
+directories; users may keep alternate profiles at any readable path.
+
 The workbook includes `KPI_PROGRAM_*` membership from
 `export_labelgroups.csv`; factorized Source/Destination values; user IP List
 flags for `U_` and `USR_`; one finding column for each configured

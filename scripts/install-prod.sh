@@ -73,6 +73,7 @@ tar \
   --exclude='.env' \
   --exclude='.venv' \
   --exclude='config/local.json' \
+  --exclude='config/headers.conf' \
   --exclude='var' \
   --exclude='*.sqlite' \
   --exclude='*.sqlite-*' \
@@ -110,6 +111,9 @@ chmod 0755 "$TARGET/scripts/install-prod.sh" \
 
 if [[ ! -e "$TARGET/config/local.json" ]]; then
   install -m 0640 "$TARGET/config/production.example.json" "$TARGET/config/local.json"
+fi
+if [[ ! -e "$TARGET/config/headers.conf" ]]; then
+  install -m 0640 "$SOURCE/config/headers.conf" "$TARGET/config/headers.conf"
 fi
 if [[ ! -e "$TARGET/.env" ]]; then
   # Private by default; shared installations grant group read access.

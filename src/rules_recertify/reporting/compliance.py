@@ -1,6 +1,7 @@
 """Generate rule-compliance workbooks from the materialized policy snapshot."""
 from __future__ import annotations
 
+import configparser
 import csv
 import importlib.util
 import re
@@ -40,6 +41,7 @@ KEAR_NOT_ONBOARDED = "KEAR_NOT_ONBOARDED_IN_MICROCOSMOS"
 def generate_compliance_workbook(
     raw_dir: Path, output: Path, dangerous_port_lists: Sequence[str],
     input_path: Optional[Path] = None, database: Optional[Database] = None,
+    custom_headers_path: Optional[Path] = None,
 ) -> Path:
     """Evaluate matching snapshot rules for optional app/environment input rows."""
     if importlib.util.find_spec("openpyxl") is None:
@@ -150,12 +152,15 @@ def generate_compliance_workbook(
                 **extra_values,
             })
 
+    headers = list(rows[0]) if rows else ["Match status"]
+    if custom_headers_path is not None:
+        headers = _select_custom_headers(custom_headers_path, headers)
+
     from openpyxl import Workbook
     workbook = Workbook()
     workbook.remove(workbook.active)
     _write_summary_sheet(workbook, rows, report_catalogs)
     business_rows, infra_rows, data_quality_rows = _partition_compliance_rows(rows)
-    headers = list(rows[0]) if rows else ["Match status"]
     _write_compliance_sheet(
         workbook, business_rows, "Business Rules", "BusinessRules", headers,
     )
@@ -170,6 +175,37 @@ def generate_compliance_workbook(
     workbook.save(temporary)
     temporary.replace(output)
     return output
+
+
+def _select_custom_headers(path: Path, available: Sequence[str]) -> List[str]:
+    """Select displayed columns without changing the underlying report rows."""
+    configuration = configparser.ConfigParser(interpolation=None)
+    try:
+        with path.open(encoding="utf-8-sig") as handle:
+            configuration.read_file(handle)
+    except (OSError, UnicodeError, configparser.Error) as exc:
+        raise ValueError(f"Cannot read custom headers file {path}: {exc}") from exc
+    if configuration.defaults():
+        raise ValueError(f"Custom headers file {path} must not contain DEFAULT settings")
+
+    # Identity columns vary between native Microcosmos input, app/env CSVs
+    # and snapshot-only reports. A shared profile may declare all of them.
+    known = set(available) | set(MICROCOSMOS_COLUMNS) | {"env"}
+    visibility: Dict[str, bool] = {}
+    for header in configuration.sections():
+        if header not in known:
+            raise ValueError(f"Unknown report column [{header}] in custom headers file {path}")
+        if set(configuration[header]) != {"visibility"}:
+            raise ValueError(f"Column [{header}] in {path} requires only visibility = true or false")
+        value = configuration[header]["visibility"].strip().casefold()
+        if value not in {"true", "false"}:
+            raise ValueError(f"Invalid visibility for [{header}] in {path}: expected true or false")
+        visibility[header] = value == "true"
+
+    selected = [header for header in available if visibility.get(header, False)]
+    if not selected:
+        raise ValueError(f"No visible columns are available for this report in custom headers file {path}")
+    return selected
 
 
 def _empty_usage_columns(catalogs: Sequence[str]) -> Dict[str, object]:

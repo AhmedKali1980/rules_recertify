@@ -441,6 +441,42 @@ La commande suivante évalue toutes les applications du snapshot courant :
   compliance-report --out var/output/compliance.xlsx
 ```
 
+Sans option supplémentaire, toutes les colonnes habituelles sont conservées.
+Pour choisir les colonnes affichées, passer explicitement un profil INI :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --custom-headers config/headers.conf \
+  --out var/output/compliance-custom.xlsx
+```
+
+Chaque section reprend exactement un nom de colonne du rapport :
+
+```ini
+[Source]
+visibility = true
+
+[Destination]
+visibility = true
+
+[Direction]
+visibility = false
+```
+
+Seules les colonnes déclarées avec `visibility = true` apparaissent dans les
+trois feuilles de détail, dans leur ordre habituel. Les calculs, la répartition
+des règles et le Summary restent complets, même si leurs colonnes sont masquées.
+Le fichier fourni déclare toutes les colonnes standard comme visibles ; ajouter
+une section pour conserver une colonne supplémentaire du fichier d'entrée.
+Les colonnes d'identité Microcosmos et `env` absentes de l'entrée sont ignorées.
+Un nom inconnu, une visibilité invalide ou une sélection sans colonne disponible
+produit une erreur sans remplacer le fichier de sortie existant.
+
+Le profil n'est jamais lu sans `--custom-headers`. Un autre chemin, par exemple
+`--custom-headers config/headers2.conf`, permet de choisir un autre profil.
+L'installateur crée `config/headers.conf` à la première installation et conserve
+sa personnalisation lors des mises à jour.
+
 `--input <csv-ou-xlsx>` permet de limiter le rapport à une colonne `app` et à
 une colonne `env` optionnelle, tout en recopiant toutes les colonnes d'entrée
 dans le résultat. Un XLSX Microcosmos peut alternativement fournir ses colonnes

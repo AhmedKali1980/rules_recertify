@@ -62,7 +62,7 @@ class ComplianceHeadersTest(unittest.TestCase):
                            "[Direction]\nvisibility=false\n[Owner]\nvisibility=true\n")
         filtered = self.generate(profile)
         with closing(load_workbook(baseline)) as full, closing(load_workbook(filtered)) as report:
-            self.assertEqual(report.sheetnames, full.sheetnames)
+            self.assertEqual(report.sheetnames, [*full.sheetnames, "Report Configuration"])
             self.assertEqual(list(report["Summary"].values), list(full["Summary"].values))
             self.assertEqual(report["Summary"]["A6"].value, 3)
             self.assertEqual(report["Summary"]["D6"].value, 2)
@@ -97,7 +97,7 @@ class ComplianceHeadersTest(unittest.TestCase):
                 generate_compliance_workbook(self.raw, self.output, (), input_path,
                                              custom_headers_path=Path("config/headers.conf"))
                 with closing(load_workbook(baseline)) as full, closing(load_workbook(self.output)) as report:
-                    self.assertEqual(report.sheetnames, full.sheetnames)
+                    self.assertEqual(report.sheetnames, [*full.sheetnames, "Report Configuration"])
                     for name in full.sheetnames:
                         self.assertEqual(list(report[name].values), list(full[name].values))
 
@@ -192,3 +192,69 @@ class ComplianceHeadersTest(unittest.TestCase):
         self.assertIn("Cannot read custom headers file", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
         self.assertEqual(self.output.read_bytes(), original)
+
+    def test_sheet_selection_omits_disabled_tabs_and_audits_actual_visibility(self):
+        profile = self.root / "headers.conf"
+        profile.write_text("[Source]\nvisibility=true\n[Direction]\nvisibility=false\n"
+                           "[Entity]\nvisibility=true\n[sheet:Summary]\nvisibility=false\n"
+                           "[sheet:Infra Rules]\nvisibility=false\n")
+        self.generate(profile)
+        with closing(load_workbook(self.output)) as report:
+            self.assertEqual(report.sheetnames, ["Business Rules", "Data Quality", "Report Configuration"])
+            for sheet in report:
+                self.assertEqual(sheet.sheet_state, "visible")
+            values = list(report["Report Configuration"].values)
+            rows = {(row[0], row[1]): dict(zip(values[0], row)) for row in values[1:]}
+            self.assertTrue(rows[("Column", "Source")]["Displayed"])
+            self.assertFalse(rows[("Column", "Direction")]["Displayed"])
+            self.assertFalse(rows[("Column", "Owner")]["Configured visibility"])
+            self.assertEqual(rows[("Column", "Owner")]["Reason"], "Not configured")
+            self.assertTrue(rows[("Column", "Entity")]["Configured visibility"])
+            self.assertFalse(rows[("Column", "Entity")]["Available"])
+            self.assertFalse(rows[("Column", "Entity")]["Displayed"])
+            self.assertFalse(rows[("Sheet", "Summary")]["Displayed"])
+            self.assertFalse(rows[("Sheet", "Infra Rules")]["Displayed"])
+            self.assertTrue(rows[("Sheet", "Business Rules")]["Displayed"])
+            self.assertTrue(rows[("Sheet", "Report Configuration")]["Displayed"])
+
+    def test_audit_can_be_disabled_or_be_the_only_sheet(self):
+        profile = self.root / "headers.conf"
+        profile.write_text("[Source]\nvisibility=true\n[sheet:Report Configuration]\nvisibility=false\n")
+        self.generate(profile)
+        with closing(load_workbook(self.output)) as report:
+            self.assertEqual(report.sheetnames, ["Summary", "Business Rules", "Infra Rules", "Data Quality"])
+        profile.write_text("[Source]\nvisibility=true\n" + "".join(
+            f"[sheet:{name}]\nvisibility=false\n"
+            for name in ("Summary", "Business Rules", "Infra Rules", "Data Quality")
+        ))
+        self.generate(profile)
+        with closing(load_workbook(self.output)) as report:
+            self.assertEqual(report.sheetnames, ["Report Configuration"])
+            values = list(report.active.values)
+            rows = {(row[0], row[1]): dict(zip(values[0], row)) for row in values[1:]}
+            self.assertFalse(rows[("Column", "Source")]["Displayed"])
+            self.assertEqual(rows[("Column", "Source")]["Reason"], "No detail sheet enabled")
+        # No visible columns are needed for a summary/audit-only report.
+        profile.write_text("".join(f"[sheet:{name}]\nvisibility=false\n"
+                                   for name in ("Business Rules", "Infra Rules", "Data Quality")))
+        self.generate(profile)
+        with closing(load_workbook(self.output)) as report:
+            self.assertEqual(report.sheetnames, ["Summary", "Report Configuration"])
+            self.assertEqual(report["Summary"]["A6"].value, 3)
+
+    def test_invalid_sheet_settings_preserve_existing_output(self):
+        profile = self.root / "headers.conf"
+        for sections, message in (
+            ("[sheet:Summry]\nvisibility=true\n", "Unknown report sheet"),
+            ("[sheet:Summary]\nvisibility=yes\n", "expected true or false"),
+            ("[sheet:Summary]\nvisible=true\n", "requires only visibility"),
+            ("".join(f"[sheet:{name}]\nvisibility=false\n" for name in
+                     ("Summary", "Business Rules", "Infra Rules", "Data Quality", "Report Configuration")),
+             "No visible sheets"),
+        ):
+            with self.subTest(profile=sections):
+                profile.write_text("[Source]\nvisibility=true\n" + sections)
+                self.output.write_bytes(b"preserved")
+                with self.assertRaisesRegex(ValueError, message):
+                    self.generate(profile)
+                self.assertEqual(self.output.read_bytes(), b"preserved")

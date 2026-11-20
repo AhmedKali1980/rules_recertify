@@ -844,6 +844,66 @@ computed from the complete rows. The production installer creates
 upgrades. Profile files do not grant write access to protected configuration
 directories; users may keep alternate profiles at any readable path.
 
+Sheet visibility is configured in the same profile using the `sheet:` namespace:
+
+```ini
+[sheet:Summary]
+visibility = false
+
+[sheet:Infra Rules]
+visibility = false
+
+[sheet:Report Configuration]
+visibility = true
+```
+
+Supported sheet names are `Summary`, `Business Rules`, `Infra Rules`,
+`Data Quality` and `Report Configuration`. Unlisted sheets default to visible,
+so existing column-only profiles remain usable. Disabled sheets are omitted
+entirely, rather than stored as hidden worksheets. At least one sheet must be
+visible. Detail sheets require at least one enabled available column; a
+summary/audit-only report does not.
+
+`Report Configuration` is added only in `--custom-headers` mode. It lists
+configured column/sheet visibility, availability, effective display and the
+reason for any omission. Columns absent from the selected input or unlisted in
+the profile are identified. The audit sheet itself defaults to visible and can
+be disabled explicitly. The default report without `--custom-headers` still has
+exactly its four existing sheets and does not read this configuration.
+
+To generate a ZIP with one workbook per Entity/Kear ID pair, combine the options:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --input /data/microcosmos.xlsx \
+  --custom-headers config/headers.conf --split-by-kear-id
+```
+
+Splitting is independent of custom visibility: omit `--custom-headers` for full
+workbooks without the configuration audit. The archive defaults to
+`<output_dir>/compliance_<UTC timestamp>.zip`, normally under `var/output`.
+With `--out`, supply an explicit `.zip` path. Archive members are named
+`<Entity>/compliance_<Kear ID>_<timestamp>.xlsx`, using the same timestamp.
+Modules and environments belonging to the same Entity/Kear ID are combined;
+the same Kear ID in multiple Entities generates a separate workbook in each
+Entity directory, following the batch-report grouping convention.
+
+Provide a Microcosmos XLSX or an app-based CSV/XLSX containing `Kear Id`.
+Missing/blank Entity values use `UNSPECIFIED`. Rows with no Kear ID are skipped
+with a warning; no empty archive is published when all IDs are missing. Data
+Quality rows with a Kear ID are retained even if no rule matches. Grouping uses
+unfiltered identities, so hiding Kear Id or Entity does not prevent splitting.
+Matching and remote-Kear lookup use the entire input before grouping; each
+workbook's Summary is then computed from its own group, including any rows on
+disabled detail sheets. All members use the selected visibility profile.
+
+Path components are sanitized and case-insensitive filename collisions are
+rejected. Workbooks and ZIP are staged inside the output filesystem and the
+archive is atomically replaced only after all reports succeed. Failures clean
+temporary staging and preserve an existing archive. Shared installations retain
+group ownership/write access on the resulting ZIP through the existing runtime
+permissions and launcher umask.
+
 The workbook includes `KPI_PROGRAM_*` membership from
 `export_labelgroups.csv`; factorized Source/Destination values; user IP List
 flags for `U_` and `USR_`; one finding column for each configured

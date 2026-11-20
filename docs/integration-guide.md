@@ -842,6 +842,10 @@ Label Groups verified against `export_labelgroups.csv` stay in the existing
 `<key>group:<name>` notation, such as `appgroup:PAYMENTS`. Excluded labels and
 Label Groups are rendered as `ALL EXCEPT(<selector>)`; no additional selector
 columns are introduced.
+Explicit `src_workloads` and `dst_workloads` selectors remain part of the
+calculations and appear as `workload:<name>` in `Source` and `Destination`.
+They do not create dedicated output columns; older snapshots without these
+optional input fields remain supported.
 When an app-group-scoped rule is discovered through an explicit source
 application and its destination is `All workloads`, direction is evaluated
 relative to the application that caused the match and is `outgoing`. The

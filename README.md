@@ -510,9 +510,9 @@ Les colonnes d'identité de la ligne restent inchangées. Une correspondance
 absente ou ambiguë, ou une extrémité mêlant applications et IP Lists/workloads
 explicites, ne suffit pas à établir cette identité locale.
 
-Les sélecteurs `src_workloads` et `dst_workloads` sont conservés dans deux
-colonnes dédiées et affichés comme `workload:<nom>` dans `Source` et
-`Destination`, en complément des labels, groupes et IP Lists. Leurs noms
+Les sélecteurs `src_workloads` et `dst_workloads` restent pris en compte dans
+les calculs et sont affichés comme `workload:<nom>` uniquement dans `Source`
+et `Destination`, en complément des labels, groupes et IP Lists. Leurs noms
 seuls ne permettent pas de déduire un Kear : sa résolution reste signalée
 comme indisponible lorsqu'aucune application distante n'est identifiée.
 Ces champs restent facultatifs pour lire les exports plus anciens.

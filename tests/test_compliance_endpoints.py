@@ -91,7 +91,7 @@ class ComplianceEndpointTest(unittest.TestCase):
                                  (direction, "", "REMOTE_KEAR_UNAVAILABLE"))
 
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl required")
-    def test_report_includes_workload_columns_and_accepts_older_exports(self):
+    def test_report_keeps_workloads_in_source_destination_and_accepts_older_exports(self):
         from openpyxl import load_workbook
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -124,13 +124,12 @@ class ComplianceEndpointTest(unittest.TestCase):
                         self.assertEqual(rows[self.dhcp_rule["rule_href"]]["Direction"], "incoming")
                         self.assertEqual(rows[self.safir_rule["rule_href"]]["Direction"], "outgoing")
                         workload = rows["/rules/workload"]
-                        self.assertIn("src_workloads", values[0])
-                        self.assertIn("dst_workloads", values[0])
+                        self.assertNotIn("src_workloads", values[0])
+                        self.assertNotIn("dst_workloads", values[0])
+                        self.assertIn(f"role:DB.OCP; app:{self.safir}; env:PRD", workload["Source"])
                         if include_workloads:
-                            self.assertEqual(workload["src_workloads"], "source-host")
-                            self.assertEqual(workload["dst_workloads"], "destination-host")
                             self.assertIn("workload:source-host", workload["Source"])
                             self.assertEqual(workload["Destination"], "workload:destination-host")
                         else:
-                            self.assertIsNone(workload["src_workloads"])
-                            self.assertIsNone(workload["dst_workloads"])
+                            self.assertNotIn("workload:", workload["Source"])
+                            self.assertIsNone(workload["Destination"])

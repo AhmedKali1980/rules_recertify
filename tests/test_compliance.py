@@ -353,6 +353,69 @@ class ComplianceTest(unittest.TestCase):
             self.assertIn("EXCEPT(role:RETIRED)", values["Destination"])
             book.close()
 
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl required")
+    def test_workloads_remain_in_historical_columns_without_duplicate_columns(self):
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            snapshot = root / "snapshot"
+            snapshot.mkdir()
+            base = dict.fromkeys(RULE_FIELDS, "")
+            base.update(ruleset_name="APP", ruleset_scope="app:A;env:PRD",
+                        rule_type="allow", rule_enabled="true", services="443 TCP")
+            rules = [
+                dict(base, rule_href="/rules/incoming", src_workloads="client-01;client-02",
+                     dst_labels="role:DB"),
+                dict(base, rule_href="/rules/outgoing", ruleset_name="BOUQUETS_APP",
+                     src_labels="role:WEB", dst_workloads="database-01"),
+                dict(base, rule_href="/rules/both-workloads", src_workloads="client-01",
+                     dst_workloads="database-01"),
+            ]
+            for name, fields, values in (
+                ("rules_inventory.csv", RULE_FIELDS, rules),
+                ("export_labelgroups.csv", LABEL_GROUP_FIELDS, []),
+            ):
+                with (snapshot / name).open("w", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerows(values)
+            source = root / "applications.csv"
+            source.write_text("app,env,Owner\nA,PRD,Team A\nUNKNOWN,PRD,Team B\n")
+            output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source)
+            with closing(load_workbook(output)) as report:
+                rows = {}
+                for name in ("Business Rules", "Infra Rules", "Data Quality"):
+                    values = list(report[name].values)
+                    headers = values[0]
+                    self.assertNotIn("src_workloads", headers)
+                    self.assertNotIn("dst_workloads", headers)
+                    self.assertIn("Source", headers)
+                    self.assertIn("Destination", headers)
+                    self.assertIn("Owner", headers)
+                    for values_row in values[1:]:
+                        row = dict(zip(headers, values_row))
+                        rows[row["rule_href"] or "unmatched"] = row
+                incoming = rows["/rules/incoming"]
+                self.assertEqual(incoming["Source"], "workload:client-01; workload:client-02")
+                self.assertEqual(incoming["Destination"], "role:DB")
+                self.assertEqual(incoming["Direction"], "incoming")
+                outgoing = rows["/rules/outgoing"]
+                self.assertEqual(outgoing["Source"], "role:WEB")
+                self.assertEqual(outgoing["Destination"], "workload:database-01")
+                self.assertEqual(outgoing["Direction"], "outgoing")
+                self.assertEqual(outgoing["Rule Category"], "infra_rule")
+                for row in (incoming, outgoing):
+                    self.assertEqual(row["Kear Remote"], KEAR_NOT_ONBOARDED)
+                    self.assertEqual(row["Warning"], "REMOTE_KEAR_UNAVAILABLE")
+                    self.assertEqual(row["Owner"], "Team A")
+                both = rows["/rules/both-workloads"]
+                self.assertEqual(both["Source"], "workload:client-01")
+                self.assertEqual(both["Destination"], "workload:database-01")
+                self.assertEqual(both["Direction"], "undetermined")
+                self.assertEqual(rows["unmatched"]["Match status"], "NO_MATCH")
+                self.assertIsNone(rows["unmatched"]["Source"])
+                self.assertIsNone(rows["unmatched"]["Destination"])
+
     def test_scope_label_group_is_rendered_and_matches_expanded_members(self):
         groups = _label_group_index([{
             "name": "PAYMENTS_APPS", "key": "app",

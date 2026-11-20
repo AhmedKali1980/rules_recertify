@@ -96,7 +96,7 @@ def generate_compliance_workbook(
                     "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
                     "rule_description", "rule_enabled", "rule_href",
                 )},
-                "Source": "", "Destination": "", "src_workloads": "", "dst_workloads": "",
+                "Source": "", "Destination": "",
                 "Source contains User": "FALSE",
                 "Destination contains User": "FALSE",
                 "services": "",
@@ -132,8 +132,6 @@ def generate_compliance_workbook(
                 "rule_href": rule["rule_href"],
                 "Source": source,
                 "Destination": destination,
-                "src_workloads": rule["src_workloads"],
-                "dst_workloads": rule["dst_workloads"],
                 "Source contains User": str(
                     source_kind == "iplist" and _contains_user_iplist(source)
                 ).upper(),
@@ -337,7 +335,7 @@ def _write_summary_sheet(
         ("Direction", "Direction follows the identified local endpoint, by app label or an unambiguous match to the row's Kear: Source is outgoing, Destination incoming; equal peer Kears are intra-app. Role-only selectors, exclusion-only EXCEPT selectors and All workloads inherit scope. Mixed selectors or an unknown remote Kear do not hide a known direction; without an identified local side it stays undetermined."),
         ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for a managed source and unmanaged destination. A managed destination receives OUTBOUND2APA_DESTINATION_MANAGED, while its row stays incoming. The naming convention never reverses endpoints or replaces the evaluated application's identity."),
         ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
-        ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including groups and EXCEPT exclusions. Explicit workloads appear as workload:<name> and remain in src_workloads/dst_workloads columns; a name alone does not identify a Kear. Confirmed groups use <key>group:<name> (for example appgroup:PAYMENTS)."),
+        ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including groups and EXCEPT exclusions. Explicit workloads appear as workload:<name> in Source and Destination; a name alone does not identify a Kear. Confirmed groups use <key>group:<name> (for example appgroup:PAYMENTS)."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
         ("Dangerous-port hits", "Observed per-port flows are intersected with the configured To Control, To Eradicate and Admin catalogues. Exposure columns describe allowed rule services; Hit columns describe observed traffic."),

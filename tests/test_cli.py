@@ -109,6 +109,7 @@ class CliTest(unittest.TestCase):
         self.assertIsNone(defaults.input)
         self.assertIsNone(defaults.out)
         self.assertIsNone(defaults.custom_headers)
+        self.assertFalse(defaults.split_by_kear_id)
         self.assertEqual(supplied.input, Path("scopes.csv"))
         self.assertEqual(supplied.out, Path("compliance.xlsx"))
 
@@ -117,6 +118,12 @@ class CliTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 supplied = parser().parse_args(["compliance-report", "--custom-headers", filename])
                 self.assertEqual(supplied.custom_headers, Path(filename))
+
+    def test_compliance_report_accepts_split_option_with_or_without_custom_headers(self):
+        for profile in ([], ["--custom-headers", "config/headers.conf"]):
+            args = parser().parse_args(["compliance-report", "--input", "microcosmos.xlsx",
+                                        "--split-by-kear-id", *profile])
+            self.assertTrue(args.split_by_kear_id)
 
     def test_iplist_search_accepts_input_and_output(self):
         args = parser().parse_args([

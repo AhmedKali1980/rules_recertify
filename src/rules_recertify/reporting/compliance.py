@@ -1,18 +1,22 @@
 """Generate rule-compliance workbooks from the materialized policy snapshot."""
 from __future__ import annotations
 
-import configparser
 import csv
 import importlib.util
+import logging
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from ..history.database import Database
 from ..workloader.csvio import parse_bool, read_rows
 from .dangerous_ports import PORT_CATALOGS, _catalog_interval, dangerous_ports
+from .compliance_layout import CONFIGURATION_SHEET, ComplianceLayout, load_compliance_layout
+from .microcosmos import _safe_component
 from .workbook import _expand_services, _load_report_services
 
 
@@ -36,16 +40,23 @@ MICROCOSMOS_COLUMNS = (
 )
 MICROCOSMOS_REQUIRED_COLUMNS = MICROCOSMOS_COLUMNS[:-1]
 KEAR_NOT_ONBOARDED = "KEAR_NOT_ONBOARDED_IN_MICROCOSMOS"
+LOG = logging.getLogger(__name__)
 
 
 def generate_compliance_workbook(
     raw_dir: Path, output: Path, dangerous_port_lists: Sequence[str],
     input_path: Optional[Path] = None, database: Optional[Database] = None,
     custom_headers_path: Optional[Path] = None,
+    split_by_kear_id: bool = False, timestamp: Optional[str] = None,
 ) -> Path:
     """Evaluate matching snapshot rules for optional app/environment input rows."""
     if importlib.util.find_spec("openpyxl") is None:
         raise RuntimeError("openpyxl is required for compliance report generation")
+    if split_by_kear_id:
+        if input_path is None:
+            raise ValueError("--split-by-kear-id requires --input with a Kear Id column")
+        if output.suffix.casefold() != ".zip":
+            raise ValueError("--split-by-kear-id requires a .zip output path")
     snapshot = raw_dir / "snapshot"
     required = [snapshot / "rules_inventory.csv", snapshot / "export_labelgroups.csv"]
     if input_path is None:
@@ -54,6 +65,8 @@ def generate_compliance_workbook(
     if missing:
         raise ValueError("compliance snapshot file is missing or empty: " + ", ".join(missing))
     input_rows, input_columns = _load_scope_input(input_path, snapshot / "labels.csv")
+    if split_by_kear_id and not any(name.casefold() == "kear id" for name in input_columns):
+        raise ValueError("--split-by-kear-id requires input with a Kear Id column")
     microcosmos_input = "Program (MIO)" in input_columns
     microcosmos_lookup = _microcosmos_kear_lookup(input_rows) if microcosmos_input else {}
     rules = [
@@ -153,59 +166,89 @@ def generate_compliance_workbook(
             })
 
     headers = list(rows[0]) if rows else ["Match status"]
-    if custom_headers_path is not None:
-        headers = _select_custom_headers(custom_headers_path, headers)
+    layout = (
+        load_compliance_layout(custom_headers_path, headers, (*MICROCOSMOS_COLUMNS, "env"))
+        if custom_headers_path is not None else None
+    )
+    if split_by_kear_id:
+        return _write_split_compliance_archive(rows, headers, report_catalogs, output, layout, timestamp)
+    return _write_compliance_workbook(rows, headers, report_catalogs, output, layout)
 
+
+def _write_compliance_workbook(
+    rows: Sequence[Mapping[str, object]], headers: Sequence[str], catalogs: Sequence[str],
+    output: Path, layout: Optional[ComplianceLayout] = None,
+) -> Path:
     from openpyxl import Workbook
     workbook = Workbook()
     workbook.remove(workbook.active)
-    _write_summary_sheet(workbook, rows, report_catalogs)
+    visible = layout.sheet_visible if layout is not None else lambda name: True
+    selected_headers = layout.headers if layout is not None else headers
+    if visible("Summary"):
+        _write_summary_sheet(workbook, rows, catalogs)
     business_rows, infra_rows, data_quality_rows = _partition_compliance_rows(rows)
-    _write_compliance_sheet(
-        workbook, business_rows, "Business Rules", "BusinessRules", headers,
-    )
-    _write_compliance_sheet(
-        workbook, infra_rows, "Infra Rules", "InfraRules", headers,
-    )
-    _write_compliance_sheet(
-        workbook, data_quality_rows, "Data Quality", "DataQuality", headers,
-    )
+    for sheet, table, data in (
+        ("Business Rules", "BusinessRules", business_rows),
+        ("Infra Rules", "InfraRules", infra_rows),
+        ("Data Quality", "DataQuality", data_quality_rows),
+    ):
+        if visible(sheet):
+            _write_compliance_sheet(workbook, data, sheet, table, selected_headers)
+    if layout is not None and visible(CONFIGURATION_SHEET):
+        _write_compliance_sheet(workbook, layout.configuration_rows(), CONFIGURATION_SHEET, "ReportConfiguration")
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
-    workbook.save(temporary)
-    temporary.replace(output)
+    try:
+        workbook.save(temporary)
+        temporary.replace(output)
+    finally:
+        workbook.close()
+        temporary.unlink(missing_ok=True)
     return output
 
 
-def _select_custom_headers(path: Path, available: Sequence[str]) -> List[str]:
-    """Select displayed columns without changing the underlying report rows."""
-    configuration = configparser.ConfigParser(interpolation=None)
-    try:
-        with path.open(encoding="utf-8-sig") as handle:
-            configuration.read_file(handle)
-    except (OSError, UnicodeError, configparser.Error) as exc:
-        raise ValueError(f"Cannot read custom headers file {path}: {exc}") from exc
-    if configuration.defaults():
-        raise ValueError(f"Custom headers file {path} must not contain DEFAULT settings")
+def _write_split_compliance_archive(
+    rows: Sequence[Mapping[str, object]], headers: Sequence[str], catalogs: Sequence[str],
+    output: Path, layout: Optional[ComplianceLayout], timestamp: Optional[str],
+) -> Path:
+    stamp = timestamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if not re.fullmatch(r"\d{8}T\d{6}Z", stamp):
+        raise ValueError("Invalid compliance report timestamp; expected YYYYMMDDTHHMMSSZ")
+    groups: Dict[Tuple[str, str], List[Mapping[str, object]]] = defaultdict(list)
+    skipped = 0
+    for row in rows:
+        kear = _get_case_insensitive(row, "Kear Id").strip()
+        if not kear:
+            skipped += 1
+            continue
+        entity = _get_case_insensitive(row, "Entity").strip() or "UNSPECIFIED"
+        groups[(entity, kear)].append(row)
+    if skipped:
+        LOG.warning("Skipped %s compliance report rows without Kear Id", skipped)
+    if not groups:
+        raise ValueError("No non-empty Kear Id is available for --split-by-kear-id")
 
-    # Identity columns vary between native Microcosmos input, app/env CSVs
-    # and snapshot-only reports. A shared profile may declare all of them.
-    known = set(available) | set(MICROCOSMOS_COLUMNS) | {"env"}
-    visibility: Dict[str, bool] = {}
-    for header in configuration.sections():
-        if header not in known:
-            raise ValueError(f"Unknown report column [{header}] in custom headers file {path}")
-        if set(configuration[header]) != {"visibility"}:
-            raise ValueError(f"Column [{header}] in {path} requires only visibility = true or false")
-        value = configuration[header]["visibility"].strip().casefold()
-        if value not in {"true", "false"}:
-            raise ValueError(f"Invalid visibility for [{header}] in {path}: expected true or false")
-        visibility[header] = value == "true"
-
-    selected = [header for header in available if visibility.get(header, False)]
-    if not selected:
-        raise ValueError(f"No visible columns are available for this report in custom headers file {path}")
-    return selected
+    members = []
+    names = set()
+    for (entity, kear), data in sorted(groups.items()):
+        member = Path(_safe_component(entity)) / f"compliance_{_safe_component(kear)}_{stamp}.xlsx"
+        key = member.as_posix().casefold()
+        if key in names:
+            raise ValueError(f"Split report filenames collide after sanitization: {member}")
+        names.add(key)
+        members.append((member, data))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Stage complete workbooks and ZIP in the output filesystem, inheriting
+    # its shared group; publish only after every member is successfully written.
+    with TemporaryDirectory(prefix=".compliance-", dir=output.parent) as directory:
+        staging = Path(directory)
+        temporary = staging / "reports.zip"
+        with ZipFile(temporary, "w", compression=ZIP_DEFLATED) as archive:
+            for member, data in members:
+                target = _write_compliance_workbook(data, headers, catalogs, staging / "workbooks" / member, layout)
+                archive.write(target, arcname=member.as_posix())
+        temporary.replace(output)
+    return output
 
 
 def _empty_usage_columns(catalogs: Sequence[str]) -> Dict[str, object]:

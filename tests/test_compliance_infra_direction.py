@@ -99,6 +99,15 @@ class InfraAppgroupDirectionTest(unittest.TestCase):
         result = _rule_relationship(rule, self.row, {}, groups)
         self.assertEqual((result["direction"], result["kear_remote"]), ("intra-app", "K-LOCAL"))
 
+    def test_infra_outbound2apa_retains_managed_destination_warning(self):
+        rule = {**self.base, "ruleset_scope": "", "ruleset_name": "GLOBAL_OUTBOUND2APA",
+                "src_label_groups": "LOCAL_APPS", "dst_labels": "app:APM_REGION_REMOTE"}
+        result = _rule_relationship(rule, self.row, {"remote": {"prd": {"K-REMOTE"}}}, self.groups)
+        self.assertEqual(result, {
+            "direction": "outgoing", "kear_remote": "K-REMOTE", "rule_category": "infra_rule",
+            "warning": "OUTBOUND2APA_DESTINATION_MANAGED",
+        })
+
     def test_business_and_strategic_rules_keep_application_based_direction(self):
         for rule_type in ("allow", "deny"):
             rule = {**self.base, "ruleset_name": "APPLICATION", "rule_type": rule_type,

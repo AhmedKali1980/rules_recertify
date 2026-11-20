@@ -886,6 +886,12 @@ def _rule_relationship(
             # The convention determines Direction independently of whether
             # the opposite application's Kear happens to equal the row's.
             result["direction"] = direction
+            if (
+                not rule.get("ruleset_scope", "").strip()
+                and "OUTBOUND2APA" in rule.get("ruleset_name", "").upper()
+                and _side_applications(rule, "dst", group_index)
+            ):
+                result["warning"] = _join_warnings("OUTBOUND2APA_DESTINATION_MANAGED", result["warning"])
             return result
 
     source_input_match = input_app in _side_applications(rule, "src", group_index)

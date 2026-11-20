@@ -368,7 +368,7 @@ def _write_summary_sheet(
     box("A14:M14", "CALCULATION RULES & INTERPRETATION", navy, white, 11, True)
     explanations = [
         ("Kear Remote", "Resolved from the opposite application's labels or ruleset scope using Microcosmos Module and Environment. Kear Id and other identity columns remain those of the evaluated input application. A unique Kear shared across environments is accepted. Missing or ambiguous mappings are marked KEAR_NOT_ONBOARDED_IN_MICROCOSMOS."),
-        ("Direction", "Direction follows the identified local endpoint, by app label or an unambiguous match to the row's Kear: Source is outgoing, Destination incoming; equal peer Kears are intra-app. Role-only selectors, exclusion-only EXCEPT selectors and All workloads inherit scope. Mixed selectors or an unknown remote Kear do not hide a known direction; without an identified local side it stays undetermined."),
+        ("Direction", "For infra_rule, one explicit appgroup identifies the local side: Source outgoing, Destination incoming. Otherwise direction follows the identified local app/Kear, with equal peer Kears intra-app. Role-only, exclusion-only EXCEPT selectors and All workloads inherit scope. Unknown remote Kears do not hide a known direction; without a local side it stays undetermined."),
         ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for a managed source and unmanaged destination. A managed destination receives OUTBOUND2APA_DESTINATION_MANAGED, while its row stays incoming. The naming convention never reverses endpoints or replaces the evaluated application's identity."),
         ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
         ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including groups and EXCEPT exclusions. Explicit workloads appear as workload:<name> in Source and Destination; a name alone does not identify a Kear. Confirmed groups use <key>group:<name> (for example appgroup:PAYMENTS)."),
@@ -858,6 +858,41 @@ def _rule_relationship(
         if _side_has_local_kear(rule, "dst", local_kear, environment, lookup, group_index):
             destination_kind = "local"
     category = _rule_category(rule)
+
+    if category == "infra_rule":
+        source_group = _has_application_group(rule, "src", group_index)
+        destination_group = _has_application_group(rule, "dst", group_index)
+        if source_group != destination_group:
+            # Infrastructure convention: the sole explicit application-group
+            # side is local, even without a usable application ruleset scope.
+            remote_prefix = "dst" if source_group else "src"
+            direction = "outgoing" if source_group else "incoming"
+            remote_kind = destination_kind if source_group else source_kind
+            remote_apps = _side_applications(rule, remote_prefix, group_index)
+            remote_labels = _expanded_selector_labels(
+                rule.get(f"{remote_prefix}_labels", ""),
+                rule.get(f"{remote_prefix}_label_groups", ""), group_index,
+            )
+            remote_environments = remote_labels.get("env", set())
+            remote_environment = (
+                next(iter(remote_environments)) if len(remote_environments) == 1
+                else "" if remote_environments
+                else environment or _get_case_insensitive(input_row, "env").strip()
+            )
+            result = _relationship_to_endpoint(
+                direction, remote_kind, remote_apps, remote_environment,
+                lookup, local_kear, category,
+            )
+            # The convention determines Direction independently of whether
+            # the opposite application's Kear happens to equal the row's.
+            result["direction"] = direction
+            if (
+                not rule.get("ruleset_scope", "").strip()
+                and "OUTBOUND2APA" in rule.get("ruleset_name", "").upper()
+                and _side_applications(rule, "dst", group_index)
+            ):
+                result["warning"] = _join_warnings("OUTBOUND2APA_DESTINATION_MANAGED", result["warning"])
+            return result
 
     source_input_match = input_app in _side_applications(rule, "src", group_index)
     destination_input_match = input_app in _side_applications(rule, "dst", group_index)

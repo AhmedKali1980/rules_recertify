@@ -874,10 +874,27 @@ module and environment. An exact environment is preferred, while a module
 shared by environments is accepted only when all candidates have the same
 Kear. IP Lists are extrascope but do not imply a Kear. `Direction` is
 `incoming`, `outgoing`, or `intra-app`; unresolvable topologies are explicitly
-`undetermined`. Equal local and remote Kears are classified as `intra-app`.
+`undetermined`. Application-based resolution classifies equal local and remote
+Kears as `intra-app`, subject to the infrastructure convention below.
 Rulesets beginning with `BOUQUETS_`, `GLOBAL_`, or `LUIGI_` are `infra_rule`; otherwise a
 deny rule or a rule using a `ZNOT_` IP List is `strategic_rule`, and remaining
 rules are `business_rule`.
+
+For an `infra_rule`, an explicit included application group on exactly one side
+identifies that side as local: source `appgroup` means `outgoing`, destination
+`appgroup` means `incoming`. This direction convention takes precedence over
+application-based inference, including an equal peer Kear, and does not require
+a resolvable application scope. The opposite peer supplies `Kear Remote`, while
+the evaluated row's identity remains unchanged. Missing or ambiguous remote
+Kears do not hide the known direction. An explicit remote environment is used
+when unique; multiple environments are not resolved arbitrarily.
+
+Recognize typed `appgroup` references and groups identified as `key=app` in
+`export_labelgroups.csv`, including groups written in the label columns. Groups
+present only in scope/exclusions and role/environment groups do not trigger
+this convention. With application groups on both sides, retain the existing
+resolution, which may remain `undetermined`. Business and strategic rules
+continue to use the existing application-based logic.
 
 The workbook opens on a corporate-formatted `Summary` dashboard that documents
 every calculated field and presents report, ownership, classification, and

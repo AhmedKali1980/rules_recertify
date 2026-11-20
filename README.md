@@ -547,6 +547,18 @@ une autre application, sa ligne est `outgoing` vers l'élément réellement
 présent en Destination ; une application distante explicite prend priorité
 sur une déduction à partir du scope.
 
+Pour les `infra_rule` (rulesets `BOUQUETS_*`, `GLOBAL_*` et `LUIGI_*`), un
+`appgroup` inclus explicitement sur un seul côté identifie ce côté comme local :
+en Source, `Direction=outgoing` ; en Destination, `Direction=incoming`.
+Cette convention est prioritaire pour la direction, même sans scope applicatif
+résolvable ou lorsque les Kears des deux côtés sont identiques. Le `Kear Remote`
+est recherché sur l'autre côté, sans modifier l'identité de la ligne ; un Kear
+absent ou ambigu ne bloque pas cette direction. Un groupe doit être explicitement
+typé `appgroup` ou reconnu comme groupe applicatif dans `export_labelgroups.csv`.
+Les groupes présents uniquement dans le scope ou les exclusions ne déclenchent
+pas cette convention. Avec des `appgroup` des deux côtés, la résolution existante
+reste utilisée. Les règles business et stratégiques gardent leur logique actuelle.
+
 En dernier recours, une extrémité applicative peut être reconnue comme locale
 par son Kear Microcosmos, même si son label diffère de celui du scope : toutes
 ses applications doivent se résoudre sans ambiguïté vers le `Kear Id` de la

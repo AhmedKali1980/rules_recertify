@@ -145,8 +145,12 @@ def parser() -> argparse.ArgumentParser:
                             help=("Optional CSV/XLSX containing app and optional env columns, "
                                   "or a Microcosmos XLSX containing Module and Environment"))
     compliance.add_argument("--out", type=Path,
-                            help=("Professional XLSX with Summary, Compliance and Metadata sheets "
+                            help=("XLSX with Summary, Business Rules, Infra Rules and Data Quality sheets "
                                   "(default: output_dir/compliance_<timestamp>.xlsx)"))
+    compliance.add_argument(
+        "--custom-headers", type=Path,
+        help="INI visibility profile; only columns with visibility = true are displayed",
+    )
     bouquets = commands.add_parser(
         "bouquets-report", help="Export BOUQUETS_* infrastructure rulesets and dictionaries",
     )
@@ -374,6 +378,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             print(generate_compliance_workbook(
                 Path(settings.raw_dir), target, settings.dangerous_port_lists, args.input, db,
+                custom_headers_path=args.custom_headers,
             ))
             return 0
         if args.command == "bouquets-report":

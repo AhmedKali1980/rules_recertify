@@ -1,6 +1,7 @@
 """Generate rule-compliance workbooks from the materialized policy snapshot."""
 from __future__ import annotations
 
+import configparser
 import csv
 import importlib.util
 import re
@@ -40,6 +41,7 @@ KEAR_NOT_ONBOARDED = "KEAR_NOT_ONBOARDED_IN_MICROCOSMOS"
 def generate_compliance_workbook(
     raw_dir: Path, output: Path, dangerous_port_lists: Sequence[str],
     input_path: Optional[Path] = None, database: Optional[Database] = None,
+    custom_headers_path: Optional[Path] = None,
 ) -> Path:
     """Evaluate matching snapshot rules for optional app/environment input rows."""
     if importlib.util.find_spec("openpyxl") is None:
@@ -96,7 +98,7 @@ def generate_compliance_workbook(
                     "ruleset_name", "ruleset_scope", "ruleset_enabled", "rule_type",
                     "rule_description", "rule_enabled", "rule_href",
                 )},
-                "Source": "", "Destination": "", "src_workloads": "", "dst_workloads": "",
+                "Source": "", "Destination": "",
                 "Source contains User": "FALSE",
                 "Destination contains User": "FALSE",
                 "services": "",
@@ -132,15 +134,13 @@ def generate_compliance_workbook(
                 "rule_href": rule["rule_href"],
                 "Source": source,
                 "Destination": destination,
-                "src_workloads": rule["src_workloads"],
-                "dst_workloads": rule["dst_workloads"],
                 "Source contains User": str(
                     source_kind == "iplist" and _contains_user_iplist(source)
                 ).upper(),
                 "Destination contains User": str(
                     destination_kind == "iplist" and _contains_user_iplist(destination)
                 ).upper(),
-                "services": rule["services"],
+                "services": _expand_services(rule["services"], services, expand_all_services=False),
                 **{
                     catalog: dangerous_ports(expanded_services, [catalog])
                     for catalog in report_catalogs
@@ -152,12 +152,15 @@ def generate_compliance_workbook(
                 **extra_values,
             })
 
+    headers = list(rows[0]) if rows else ["Match status"]
+    if custom_headers_path is not None:
+        headers = _select_custom_headers(custom_headers_path, headers)
+
     from openpyxl import Workbook
     workbook = Workbook()
     workbook.remove(workbook.active)
     _write_summary_sheet(workbook, rows, report_catalogs)
     business_rows, infra_rows, data_quality_rows = _partition_compliance_rows(rows)
-    headers = list(rows[0]) if rows else ["Match status"]
     _write_compliance_sheet(
         workbook, business_rows, "Business Rules", "BusinessRules", headers,
     )
@@ -172,6 +175,37 @@ def generate_compliance_workbook(
     workbook.save(temporary)
     temporary.replace(output)
     return output
+
+
+def _select_custom_headers(path: Path, available: Sequence[str]) -> List[str]:
+    """Select displayed columns without changing the underlying report rows."""
+    configuration = configparser.ConfigParser(interpolation=None)
+    try:
+        with path.open(encoding="utf-8-sig") as handle:
+            configuration.read_file(handle)
+    except (OSError, UnicodeError, configparser.Error) as exc:
+        raise ValueError(f"Cannot read custom headers file {path}: {exc}") from exc
+    if configuration.defaults():
+        raise ValueError(f"Custom headers file {path} must not contain DEFAULT settings")
+
+    # Identity columns vary between native Microcosmos input, app/env CSVs
+    # and snapshot-only reports. A shared profile may declare all of them.
+    known = set(available) | set(MICROCOSMOS_COLUMNS) | {"env"}
+    visibility: Dict[str, bool] = {}
+    for header in configuration.sections():
+        if header not in known:
+            raise ValueError(f"Unknown report column [{header}] in custom headers file {path}")
+        if set(configuration[header]) != {"visibility"}:
+            raise ValueError(f"Column [{header}] in {path} requires only visibility = true or false")
+        value = configuration[header]["visibility"].strip().casefold()
+        if value not in {"true", "false"}:
+            raise ValueError(f"Invalid visibility for [{header}] in {path}: expected true or false")
+        visibility[header] = value == "true"
+
+    selected = [header for header in available if visibility.get(header, False)]
+    if not selected:
+        raise ValueError(f"No visible columns are available for this report in custom headers file {path}")
+    return selected
 
 
 def _empty_usage_columns(catalogs: Sequence[str]) -> Dict[str, object]:
@@ -337,7 +371,7 @@ def _write_summary_sheet(
         ("Direction", "Direction follows the identified local endpoint, by app label or an unambiguous match to the row's Kear: Source is outgoing, Destination incoming; equal peer Kears are intra-app. Role-only selectors, exclusion-only EXCEPT selectors and All workloads inherit scope. Mixed selectors or an unknown remote Kear do not hide a known direction; without an identified local side it stays undetermined."),
         ("OUTBOUND2APA validation", "OUTBOUND2APA is intended for a managed source and unmanaged destination. A managed destination receives OUTBOUND2APA_DESTINATION_MANAGED, while its row stays incoming. The naming convention never reverses endpoints or replaces the evaluated application's identity."),
         ("Rule Category", "BOUQUETS_*, GLOBAL_*, and LUIGI_* rulesets are infra_rule. Other deny rules, rules using a ZNOT_* IP List, or descriptions beginning with [+srule] or [+drule] are strategic_rule. Remaining rules are business_rule."),
-        ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including groups and EXCEPT exclusions. Explicit workloads appear as workload:<name> and remain in src_workloads/dst_workloads columns; a name alone does not identify a Kear. Confirmed groups use <key>group:<name> (for example appgroup:PAYMENTS)."),
+        ("Label groups & exclusions", "Scope, Source and Destination display labels in role, app, env order, including groups and EXCEPT exclusions. Explicit workloads appear as workload:<name> in Source and Destination; a name alone does not identify a Kear. Confirmed groups use <key>group:<name> (for example appgroup:PAYMENTS)."),
         ("Usage Status", "HIT means at least one completed usage window has flows; NO_HIT means completed observations exist with zero flows; NO_DATA means no completed usage window is stored for the rule href."),
         ("Last Hit", "Latest end date of a completed usage window with at least one flow. Days Since Last Hit is calculated in UTC on report generation."),
         ("Dangerous-port hits", "Observed per-port flows are intersected with the configured To Control, To Eradicate and Admin catalogues. Exposure columns describe allowed rule services; Hit columns describe observed traffic."),

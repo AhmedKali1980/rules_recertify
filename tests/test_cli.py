@@ -108,8 +108,15 @@ class CliTest(unittest.TestCase):
         ])
         self.assertIsNone(defaults.input)
         self.assertIsNone(defaults.out)
+        self.assertIsNone(defaults.custom_headers)
         self.assertEqual(supplied.input, Path("scopes.csv"))
         self.assertEqual(supplied.out, Path("compliance.xlsx"))
+
+    def test_compliance_report_accepts_explicit_custom_headers_paths(self):
+        for filename in ("config/headers.conf", "profiles/headers2.conf"):
+            with self.subTest(filename=filename):
+                supplied = parser().parse_args(["compliance-report", "--custom-headers", filename])
+                self.assertEqual(supplied.custom_headers, Path(filename))
 
     def test_iplist_search_accepts_input_and_output(self):
         args = parser().parse_args([

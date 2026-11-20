@@ -802,11 +802,61 @@ Matching is anchored to exact label values within
   --out var/output/compliance.xlsx
 ```
 
+To restrict the displayed columns, explicitly select an INI visibility profile:
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --input /data/microcosmos.xlsx \
+  --custom-headers config/headers.conf --out var/output/compliance-custom.xlsx
+```
+
+The existing full report remains the default when `--custom-headers` is omitted;
+no visibility profile is read automatically. Use any explicit path, such as
+`--custom-headers config/headers2.conf`, to select another profile. The supplied
+`config/headers.conf` enables all standard columns. To customize it, use exact
+report column names as section names:
+
+```ini
+[Source]
+visibility = true
+
+[Destination]
+visibility = true
+
+[Direction]
+visibility = false
+```
+
+Only columns explicitly set to `visibility = true` appear in `Business Rules`,
+`Infra Rules`, and `Data Quality`, retaining the normal report column order.
+Unlisted columns are hidden, including extra input metadata; add a section such
+as `[Owner]` when that column is present in the input and should be included.
+Optional Microcosmos identity columns and `env` are skipped when unavailable for
+the selected input. Other unknown names, missing/invalid visibility settings,
+duplicate sections/options, unreadable files, or a selection with no available
+visible columns fail with a clear error before replacing an existing output.
+Files use UTF-8; a Windows UTF-8 BOM and CRLF line endings are supported.
+
+Filtering applies only when writing the detail sheets. Matching, direction,
+Kear resolution, usage metrics, partitioning and all Summary values/charts are
+computed from the complete rows. The production installer creates
+`config/headers.conf` on first installation and preserves local edits during
+upgrades. Profile files do not grant write access to protected configuration
+directories; users may keep alternate profiles at any readable path.
+
 The workbook includes `KPI_PROGRAM_*` membership from
 `export_labelgroups.csv`; factorized Source/Destination values; user IP List
 flags for `U_` and `USR_`; one finding column for each configured
 `dangerous_port_lists` catalogue after expansion through `export_services.csv`;
 and ruleset-wide `Intra-zone` classification for `NZ3_` or `ZNOT_NZ3` IP Lists.
+The `services` column resolves named services from
+`var/raw/snapshot/export_services.csv` and displays the canonical name followed
+by its port definition, for example `ALL-BUT-ERADICATE (22 TCP;135 UDP)`.
+`All Services` keeps its label; explicit ports and unresolved service names
+remain visible. The published snapshot takes precedence over timestamped raw
+exports, which remain the fallback. Exposure calculations still use the full
+expansion, including all TCP/UDP ports for `All Services`. The same display
+applies when `services` is enabled in a `--custom-headers` profile.
 An `All workloads` selector includes the application and environment context
 from `ruleset_scope`, for example `All workloads (app:PAYMENTS; env:PRD)`.
 The dedicated `Global Consumer in use` column is normally `FALSE`. It becomes
@@ -842,6 +892,10 @@ Label Groups verified against `export_labelgroups.csv` stay in the existing
 `<key>group:<name>` notation, such as `appgroup:PAYMENTS`. Excluded labels and
 Label Groups are rendered as `ALL EXCEPT(<selector>)`; no additional selector
 columns are introduced.
+Explicit `src_workloads` and `dst_workloads` selectors remain part of the
+calculations and appear as `workload:<name>` in `Source` and `Destination`.
+They do not create dedicated output columns; older snapshots without these
+optional input fields remain supported.
 When an app-group-scoped rule is discovered through an explicit source
 application and its destination is `All workloads`, direction is evaluated
 relative to the application that caused the match and is `outgoing`. The

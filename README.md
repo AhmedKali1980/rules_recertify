@@ -441,6 +441,42 @@ La commande suivante évalue toutes les applications du snapshot courant :
   compliance-report --out var/output/compliance.xlsx
 ```
 
+Sans option supplémentaire, toutes les colonnes habituelles sont conservées.
+Pour choisir les colonnes affichées, passer explicitement un profil INI :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --custom-headers config/headers.conf \
+  --out var/output/compliance-custom.xlsx
+```
+
+Chaque section reprend exactement un nom de colonne du rapport :
+
+```ini
+[Source]
+visibility = true
+
+[Destination]
+visibility = true
+
+[Direction]
+visibility = false
+```
+
+Seules les colonnes déclarées avec `visibility = true` apparaissent dans les
+trois feuilles de détail, dans leur ordre habituel. Les calculs, la répartition
+des règles et le Summary restent complets, même si leurs colonnes sont masquées.
+Le fichier fourni déclare toutes les colonnes standard comme visibles ; ajouter
+une section pour conserver une colonne supplémentaire du fichier d'entrée.
+Les colonnes d'identité Microcosmos et `env` absentes de l'entrée sont ignorées.
+Un nom inconnu, une visibilité invalide ou une sélection sans colonne disponible
+produit une erreur sans remplacer le fichier de sortie existant.
+
+Le profil n'est jamais lu sans `--custom-headers`. Un autre chemin, par exemple
+`--custom-headers config/headers2.conf`, permet de choisir un autre profil.
+L'installateur crée `config/headers.conf` à la première installation et conserve
+sa personnalisation lors des mises à jour.
+
 `--input <csv-ou-xlsx>` permet de limiter le rapport à une colonne `app` et à
 une colonne `env` optionnelle, tout en recopiant toutes les colonnes d'entrée
 dans le résultat. Un XLSX Microcosmos peut alternativement fournir ses colonnes
@@ -454,6 +490,15 @@ non utilisées, y compris leurs cellules d'entête fusionnées ou vides. Le rapp
 consolide Source/Destination, les programmes
 `KPI_PROGRAM_*`, les IP Lists utilisateur et intra-zone, et une colonne par
 catalogue configuré dans `dangerous_port_lists`.
+La colonne `services` développe les services nommés depuis
+`var/raw/snapshot/export_services.csv`, en conservant leur nom suivi de leur
+définition : par exemple `ALL-BUT-ERADICATE (22 TCP;135 UDP)`.
+`All Services` garde son libellé. Les ports explicites sont conservés et un
+service absent du référentiel reste affiché avec son nom d'origine. La résolution
+utilise le snapshot publié en priorité, puis le dernier export raw horodaté
+disponible. Les calculs de ports à risque gardent leur expansion complète,
+y compris pour `All Services`. Cet affichage reste disponible avec
+`--custom-headers` lorsque `services` est sélectionnée.
 Un sélecteur `All workloads` est enrichi avec le contexte du `ruleset_scope`,
 par exemple `All workloads (app:PAYMENTS; env:PRD)`. La colonne dédiée
 `Global Consumer in use` reste normalement à `FALSE`. Elle devient `TRUE`, avec
@@ -510,9 +555,9 @@ Les colonnes d'identité de la ligne restent inchangées. Une correspondance
 absente ou ambiguë, ou une extrémité mêlant applications et IP Lists/workloads
 explicites, ne suffit pas à établir cette identité locale.
 
-Les sélecteurs `src_workloads` et `dst_workloads` sont conservés dans deux
-colonnes dédiées et affichés comme `workload:<nom>` dans `Source` et
-`Destination`, en complément des labels, groupes et IP Lists. Leurs noms
+Les sélecteurs `src_workloads` et `dst_workloads` restent pris en compte dans
+les calculs et sont affichés comme `workload:<nom>` uniquement dans `Source`
+et `Destination`, en complément des labels, groupes et IP Lists. Leurs noms
 seuls ne permettent pas de déduire un Kear : sa résolution reste signalée
 comme indisponible lorsqu'aucune application distante n'est identifiée.
 Ces champs restent facultatifs pour lire les exports plus anciens.

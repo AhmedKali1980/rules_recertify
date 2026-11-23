@@ -145,11 +145,15 @@ def parser() -> argparse.ArgumentParser:
                             help=("Optional CSV/XLSX containing app and optional env columns, "
                                   "or a Microcosmos XLSX containing Module and Environment"))
     compliance.add_argument("--out", type=Path,
-                            help=("XLSX with Summary, Business Rules, Infra Rules and Data Quality sheets "
-                                  "(default: output_dir/compliance_<timestamp>.xlsx)"))
+                            help=("Output XLSX, or ZIP with --split-by-kear-id "
+                                  "(default: output_dir/compliance_<timestamp>.xlsx or .zip)"))
     compliance.add_argument(
         "--custom-headers", type=Path,
-        help="INI visibility profile; only columns with visibility = true are displayed",
+        help="INI column/sheet visibility profile with a Report Configuration audit sheet",
+    )
+    compliance.add_argument(
+        "--split-by-kear-id", action="store_true",
+        help="Write a ZIP with one workbook per Entity/Kear Id (requires --input with Kear Id)",
     )
     bouquets = commands.add_parser(
         "bouquets-report", help="Export BOUQUETS_* infrastructure rulesets and dictionaries",
@@ -373,12 +377,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         if args.command == "compliance-report":
             db.initialize()
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             target = args.out or Path(settings.output_dir) / (
-                "compliance_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".xlsx"
+                "compliance_" + stamp + (".zip" if args.split_by_kear_id else ".xlsx")
             )
             print(generate_compliance_workbook(
                 Path(settings.raw_dir), target, settings.dangerous_port_lists, args.input, db,
                 custom_headers_path=args.custom_headers,
+                split_by_kear_id=args.split_by_kear_id, timestamp=stamp,
             ))
             return 0
         if args.command == "bouquets-report":

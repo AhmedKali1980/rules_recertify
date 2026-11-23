@@ -477,6 +477,62 @@ Le profil n'est jamais lu sans `--custom-headers`. Un autre chemin, par exemple
 L'installateur crée `config/headers.conf` à la première installation et conserve
 sa personnalisation lors des mises à jour.
 
+Le même profil peut choisir les onglets grâce au préfixe `sheet:` :
+
+```ini
+[sheet:Summary]
+visibility = false
+
+[sheet:Infra Rules]
+visibility = false
+
+[sheet:Report Configuration]
+visibility = true
+```
+
+Les noms disponibles sont `Summary`, `Business Rules`, `Infra Rules`,
+`Data Quality` et `Report Configuration`. Un onglet non déclaré reste visible
+pour conserver la compatibilité avec les profils existants. Un onglet désactivé
+est omis du classeur, sans conserver de feuille Excel masquée contenant ses
+données. Il faut garder au moins un onglet visible et au moins une colonne
+visible si une feuille de détail est activée.
+
+En mode `--custom-headers`, le nouvel onglet `Report Configuration` indique,
+pour chaque colonne et chaque onglet, la visibilité configurée, la disponibilité
+et l'affichage effectif. Il explique aussi les colonnes non déclarées ou absentes
+de l'entrée. Il est visible par défaut et peut être désactivé dans le profil.
+Sans `--custom-headers`, aucun réglage d'onglet n'est lu et cette feuille
+récapitulative n'est pas ajoutée : les quatre onglets habituels restent inchangés.
+
+Pour produire une archive ZIP contenant un classeur par couple **Entity/Kear ID** :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --input microcosmos.xlsx --split-by-kear-id \
+  --custom-headers config/headers.conf
+```
+
+`--split-by-kear-id` fonctionne aussi sans `--custom-headers`, avec les colonnes
+et onglets habituels. La sortie par défaut est
+`var/output/compliance_<timestamp>.zip` (dans le `output_dir` configuré), avec
+des chemins tels que `CFT/compliance_<Kear ID>_<timestamp>.xlsx` dans l'archive.
+Un `--out` explicite doit désigner un fichier `.zip` dans ce mode.
+Les différents modules et environnements d'un même couple Entity/Kear ID sont
+réunis dans un classeur ; un même Kear ID présent dans plusieurs Entity produit
+un classeur dans chaque dossier Entity.
+
+L'entrée doit fournir `Kear Id` : XLSX Microcosmos ou CSV/XLSX `app` avec cette
+colonne. Une Entity absente ou vide utilise le dossier `UNSPECIFIED`.
+Les lignes sans Kear ID sont ignorées avec un avertissement ; si aucun Kear ID
+n'est disponible, la génération échoue sans publier d'archive vide. Les lignes
+sans règle correspondante restent incluses dans le rapport de leur Kear ID.
+Le regroupement utilise les identités complètes, même si ces colonnes sont
+masquées. La résolution des Kears distants est calculée avant le découpage ;
+le Summary de chaque classeur porte uniquement sur les lignes de ce couple.
+Les caractères incompatibles avec les chemins sont normalisés et les collisions
+de noms sont refusées. L'archive est publiée uniquement après génération de
+tous les classeurs ; une erreur conserve une éventuelle archive existante.
+
 `--input <csv-ou-xlsx>` permet de limiter le rapport à une colonne `app` et à
 une colonne `env` optionnelle, tout en recopiant toutes les colonnes d'entrée
 dans le résultat. Un XLSX Microcosmos peut alternativement fournir ses colonnes

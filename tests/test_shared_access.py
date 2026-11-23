@@ -226,6 +226,16 @@ class SharedAccessTest(unittest.TestCase):
                     report = load_workbook(output, read_only=True)
                     self.assertTrue(report.sheetnames)
                     report.close()
+            completed = subprocess.run([
+                str(target / "scripts/rules-recertify"), "--config", str(config),
+                "--env-file", str(target / ".env"), "compliance-report", "--input", str(microcosmos),
+                "--split-by-kear-id", "--custom-headers", str(target / "config/headers.conf"),
+            ], cwd=target, env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            archive = Path(completed.stdout.strip())
+            self.assertEqual(archive.suffix, ".zip")
+            self.assertEqual(archive.stat().st_mode & 0o777, 0o660)
+            self.assertEqual(archive.stat().st_gid, os.getgid())
             for log in (target / "var/logs").glob("rules-recertify-*.jsonl"):
                 self.assertEqual(log.stat().st_mode & 0o777, 0o660)
 

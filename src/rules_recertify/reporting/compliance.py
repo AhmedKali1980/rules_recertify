@@ -19,10 +19,11 @@ from .app_server_scope import (
     load_app_server_scope_index, normalized_label,
 )
 from .dangerous_ports import PORT_CATALOGS, _catalog_interval, dangerous_ports
-from .compliance_layout import CONFIGURATION_SHEET, ComplianceLayout, load_compliance_layout
+from .compliance_layout import CONFIGURATION_SHEET, DETAIL_SHEETS, ComplianceLayout, load_compliance_layout
 from .compliance_references import ComplianceReferences
 from .compliance_schema import (
-    DEFAULT_HEADERS, REFERENCE_HEADERS, RULE_ID, RULE_STATUS, available_headers, canonical_header, output_row,
+    COLUMN_GROUPS, DEFAULT_HEADERS, REFERENCE_HEADERS, RULE_ID, RULE_STATUS,
+    available_headers, canonical_header, output_row,
 )
 from .microcosmos import _safe_component
 from .workbook import _expand_services, _load_report_services
@@ -231,7 +232,11 @@ def _write_compliance_workbook(
         ("Data Quality", "DataQuality", data_quality_rows),
     ):
         if visible(sheet):
-            _write_compliance_sheet(workbook, [output_row(row) for row in data], sheet, table, selected_headers)
+            presented = [output_row(row) for row in data]
+            if sheet in ("Business Rules", "Infra Rules"):
+                presented.sort(key=lambda row: tuple(str(row.get(name) or "").casefold() for name in
+                                                    ("Kear Id (Scope)", "Module (Scope)", "illumio label env (Scope)")))
+            _write_compliance_sheet(workbook, presented, sheet, table, selected_headers)
     if references is not None:
         dictionaries = references.for_rows(rows)
         for sheet, data in dictionaries.items():
@@ -671,7 +676,8 @@ def _write_compliance_sheet(
     sheet_name: str = "Compliance", table_name: str = "ComplianceResults",
     headers: Optional[Sequence[str]] = None,
 ) -> None:
-    from openpyxl.formatting.rule import CellIsRule
+    from openpyxl.formatting.rule import CellIsRule, FormulaRule
+    from openpyxl.utils import get_column_letter
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.worksheet.table import Table, TableStyleInfo
 
@@ -680,6 +686,15 @@ def _write_compliance_sheet(
     pale_red, red = "FCE8E6", "B42318"
     pale_amber, amber = "FFF2DA", "B35D0A"
     pale_blue, blue = "E2EDF7", "0B6B8B"
+    grey = "ECECEC"
+    header_blues = ("1E4669", "255477", "2C6185", "336D93", "3B799F", "235B82")
+    body_blues = ("EDF3F9", "E6EFF7", "F1F6FB", "E8F1FA", "DFEBF7", "EAF2FB")
+    grey_fill = PatternFill("solid", fgColor=grey)
+    body_fills = {color: PatternFill("solid", fgColor=color) for color in body_blues}
+    group_colors = {name: (heading, body) for group, heading, body in zip(COLUMN_GROUPS, header_blues, body_blues)
+                    for name in group} if sheet_name in DETAIL_SHEETS else {}
+    disabled_rows = [index for index, row in enumerate(rows, 2) if row.get(RULE_STATUS) == "Disabled"]
+    disabled_set = set(disabled_rows)
     sheet = workbook.create_sheet(sheet_name)
     headers = list(headers or (list(rows[0]) if rows else ["Match status"]))
     sheet.append(headers)
@@ -697,7 +712,7 @@ def _write_compliance_sheet(
     vertical_side = Side(style="thin", color="D5DEE9")
     vertical_border = Border(left=vertical_side, right=vertical_side)
     for cell in sheet[1]:
-        cell.fill = PatternFill("solid", fgColor=navy)
+        cell.fill = PatternFill("solid", fgColor=group_colors.get(cell.value, (navy, ""))[0])
         cell.font = Font(name="Aptos", size=10, bold=True, color=white)
         cell.alignment = Alignment(vertical="center", wrap_text=True, indent=1)
         cell.border = vertical_border
@@ -706,6 +721,10 @@ def _write_compliance_sheet(
             cell.font = Font(name="Aptos", size=10, color=dark)
             cell.alignment = Alignment(vertical="center", wrap_text=True)
             cell.border = vertical_border
+            if row_number in disabled_set:
+                cell.fill = grey_fill
+            elif headers[cell.column - 1] in group_colors:
+                cell.fill = body_fills[group_colors[headers[cell.column - 1]][1]]
             if headers[cell.column - 1] == RULE_ID:
                 cell.number_format = "@"
                 cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
@@ -729,6 +748,39 @@ def _write_compliance_sheet(
         values = [len(str(row.get(header, "") or "")) for row in rows[:250]]
         width = preferred_widths.get(header, min(max([len(header), *values]) + 2, 36))
         sheet.column_dimensions[sheet.cell(1, index).column_letter].width = width
+
+    if sheet_name == "iplists":
+        for name in ("name", "include", "exclude"):
+            if name in headers:
+                sheet.column_dimensions[get_column_letter(headers.index(name) + 1)].width = 52
+        for index in range(2, sheet.max_row + 1):
+            lines = max((sum(max(1, (len(line) + 51) // 52) for line in str(cell.value or "").split("\n"))
+                         for cell in sheet[index]), default=1)
+            sheet.row_dimensions[index].height = min(409, max(30, 14 * lines + 6))
+
+    if disabled_rows:
+        last_column = get_column_letter(len(headers))
+        if RULE_STATUS in headers:
+            status_column = get_column_letter(headers.index(RULE_STATUS) + 1)
+            ranges = f"A2:{last_column}{sheet.max_row}"
+            formula = f'${status_column}2="Disabled"'
+        else:
+            # No hidden helper columns: keep the generated row status when the
+            # profile omits the status field. Coalesce adjacent disabled rows.
+            blocks = []
+            start = end = disabled_rows[0]
+            for index in disabled_rows[1:]:
+                if index == end + 1:
+                    end = index
+                else:
+                    blocks.append(f"A{start}:{last_column}{end}")
+                    start = end = index
+            blocks.append(f"A{start}:{last_column}{end}")
+            ranges, formula = " ".join(blocks), "TRUE"
+        # First priority preserves the full grey row over status-cell fills.
+        sheet.conditional_formatting.add(ranges, FormulaRule(
+            formula=[formula], fill=grey_fill, stopIfTrue=True,
+        ))
 
     formats = {
         "MATCHED": (pale_green, green), "HIT": (pale_green, green),
@@ -1613,7 +1665,7 @@ def _global_consumer_in_use(rule: Mapping[str, str]) -> bool:
 def _iplist_names(value: str) -> List[str]:
     names = []
     for part in re.split(r"[;\n]", value):
-        name = part.strip().split(" (", 1)[0].strip()
+        name = re.sub(r"\s+\(/orgs/\d+/(?:sec_policy/[^/)]+/)?ip_lists/\d+\)\s*$", "", part).strip()
         if name.casefold().startswith("ip list:"):
             name = name.partition(":")[2].strip()
         if name:

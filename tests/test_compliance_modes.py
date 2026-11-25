@@ -87,7 +87,7 @@ class ComplianceModesTest(unittest.TestCase):
             self.assertEqual(headers, DEFAULT_HEADERS)
             self.assertEqual(headers[:9], ("Kear Id (Scope)", "Application Name (Scope)", "Entity", "Module (Scope)",
                                           "illumio label app (Scope)", "illumio label env (Scope)",
-                                          "Number impacted App servers (Scope)", RULE_STATUS, RULE_ID))
+                                          "Number of impacted App servers (Scope)", RULE_STATUS, RULE_ID))
             self.assertNotIn("Owner", headers)
             self.assertNotIn("rule_href", headers)
             rows = self.rows(book, "Business Rules")
@@ -119,7 +119,7 @@ class ComplianceModesTest(unittest.TestCase):
         with closing(load_workbook(self.output)) as book:
             ip_rows = {row["name"]: row for row in self.rows(book, "iplists")}
             self.assertEqual(set(ip_rows), {"EDGE", "DOMAIN", "ONLY_B"})
-            self.assertEqual(ip_rows["EDGE"]["include"], "10.0.0.0/24; 192.0.2.0/24 # office")
+            self.assertEqual(ip_rows["EDGE"]["include"], "10.0.0.0/24\n192.0.2.0/24 # office")
             self.assertEqual(ip_rows["EDGE"]["exclude"], "10.0.0.7")
             self.assertEqual(ip_rows["DOMAIN"]["fqdns"], "example.test")
             rows = {row["name"]: row for row in self.rows(book, "workloads")}
@@ -158,7 +158,7 @@ class ComplianceModesTest(unittest.TestCase):
         self.generate(custom_headers_path=profile)
         with closing(load_workbook(self.output)) as book:
             self.assertEqual(next(book["Business Rules"].values),
-                             ("illumio label env (Scope)", "Number impacted App servers (Scope)"))
+                             ("illumio label env (Scope)", "Number of impacted App servers (Scope)"))
 
     def test_workload_reference_resolves_groups_scope_exclusions_and_all_workloads(self):
         self.write("export_labelgroups.csv", LABEL_GROUP_FIELDS,

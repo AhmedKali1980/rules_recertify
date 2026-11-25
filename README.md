@@ -639,6 +639,13 @@ et `managed`. Seules les lignes avec `managed=true` et les valeurs app/env de
 `ruleset_scope` sont retenues ; l'application de la ligne Microcosmos ou du
 peer distant ne remplace pas ce scope.
 
+Si le scope contient une app sans sélecteur env, le compteur couvre tous les
+environnements de cette app, y compris les lignes workloads dont env est vide.
+Les rôles, `All workloads` et exclusions restent appliqués selon la Direction
+ci-dessous. L'env de la ligne Microcosmos ou des peers ne limite pas ce calcul.
+Un env explicitement présent mais vide ou non résolu reste un calcul
+indisponible ; il ne devient pas un filtre « tous les environnements ».
+
 | Direction | Filtre de rôles local |
 | --- | --- |
 | `incoming` | Rôles de Destination |

@@ -982,6 +982,13 @@ matched row in `Business Rules`, including strategic rules. It reads
 of `ruleset_scope` are counted; the evaluated Microcosmos application does not
 replace that scope.
 
+When the scope specifies an app without an env selector, count that app across
+all environments, including workload rows with a blank env value. Local roles,
+All workloads and role exclusions still apply according to Direction. Neither
+the input application's environment nor peer environment labels restrict this
+count. An explicit but empty or unresolved env selector remains unavailable;
+it does not select all environments.
+
 Incoming rules use Destination roles, outgoing rules use Source roles, and
 intra-app rules use the union of both sides. Each workload CSV row contributes
 at most once to that union.

@@ -36,14 +36,22 @@ class RoleSelection:
 class AppServerScopeIndex:
     def __init__(self, counts: Mapping[Tuple[str, str], Counter[str]]):
         self.counts = counts
-        self.cache: Dict[Tuple[FrozenSet[str], FrozenSet[str], Tuple[RoleSelection, ...]], int] = {}
+        self.all_env_counts: Dict[str, Counter[str]] = defaultdict(Counter)
+        for (app, _), roles in counts.items():
+            self.all_env_counts[app].update(roles)
+        self.cache: Dict[Tuple[FrozenSet[str], Optional[FrozenSet[str]], Tuple[RoleSelection, ...]], int] = {}
 
-    def count(self, apps: Iterable[str], envs: Iterable[str], selections: Sequence[RoleSelection]) -> int:
-        key = (frozenset(apps), frozenset(envs), tuple(selections))
+    def count(self, apps: Iterable[str], envs: Optional[Iterable[str]], selections: Sequence[RoleSelection]) -> int:
+        """None selects all environments; an explicit empty set selects none."""
+        key = (frozenset(apps), None if envs is None else frozenset(envs), tuple(selections))
         if key not in self.cache:
+            buckets = (
+                (self.all_env_counts.get(app, {}) for app in key[0])
+                if key[1] is None else
+                (self.counts.get((app, env), {}) for app in key[0] for env in key[1])
+            )
             self.cache[key] = sum(
-                number for app in key[0] for env in key[1]
-                for role, number in self.counts.get((app, env), {}).items()
+                number for roles in buckets for role, number in roles.items()
                 if any(selection.matches(role) for selection in selections)
             )
         return self.cache[key]
@@ -64,7 +72,7 @@ def load_app_server_scope_index(snapshot: Path) -> Optional[AppServerScopeIndex]
                 continue
             app = normalized_label(row["app"], "app")
             env = normalized_label(row["env"], "env")
-            if app and env:
+            if app:
                 counts[(app, env)][normalized_label(row["role"], "role")] += 1
     except (OSError, UnicodeError, ValueError, csv.Error) as exc:
         LOG.warning("App server scope counts unavailable from %s: %s", source or snapshot, exc)

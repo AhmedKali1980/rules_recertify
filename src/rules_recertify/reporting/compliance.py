@@ -339,13 +339,22 @@ def _impacted_app_server_count(
 ) -> Optional[int]:
     if servers is None or enrichment["rule_category"] not in {"business_rule", "strategic_rule"}:
         return None
-    prefixes = {"incoming": ("dst",), "outgoing": ("src",), "intra-app": ("src", "dst")}.get(
-        enrichment["direction"]
-    )
+    scope = rule.get("ruleset_scope", "").strip()
+    if not scope and "OUTBOUND2APA" in rule.get("ruleset_name", "").upper():
+        # Empty-scope OUTBOUND2APA counts Source directly, independently of
+        # the report row's direction or the Microcosmos input application.
+        labels = rule.get("src_labels", "")
+        groups = rule.get("src_label_groups", "")
+        prefixes = ("src",)
+    else:
+        labels, groups = scope, ""
+        prefixes = {"incoming": ("dst",), "outgoing": ("src",), "intra-app": ("src", "dst")}.get(
+            enrichment["direction"]
+        )
     if prefixes is None:
         return None
-    apps = _scope_server_values(rule.get("ruleset_scope", ""), "", "app", group_index)
-    envs = _scope_server_values(rule.get("ruleset_scope", ""), "", "env", group_index)
+    apps = _scope_server_values(labels, groups, "app", group_index)
+    envs = _scope_server_values(labels, groups, "env", group_index)
     if apps is None or envs is None or not apps[1] or not envs[1] or "null" in apps[0] or "null" in envs[0]:
         return None
     selections = [_scope_server_roles(rule, prefix, group_index) for prefix in prefixes]
@@ -568,11 +577,12 @@ def _write_summary_sheet(
     box(f"A{row_number}:C{row_number}", IMPACTED_APP_SERVERS, light, dark, 10, True)
     box(f"D{row_number}:M{row_number}",
         "Business and strategic rules: count managed workload rows matching the ruleset scope app/env. "
-        "Incoming uses Destination roles; outgoing uses Source roles; intra-app uses their union, "
+        "Empty-scope OUTBOUND2APA uses Source app/env/roles. Otherwise incoming uses Destination roles; "
+        "outgoing uses Source roles; intra-app uses their union, "
         "counting each row once. All workloads or no included role allows the full scope on that side; "
         "role exclusions still apply. Zero means no matching rows; blank means unavailable or not applicable.",
         light, dark, 10)
-    sheet.row_dimensions[row_number].height = 64
+    sheet.row_dimensions[row_number].height = 80
 
 
 def _write_compliance_sheet(

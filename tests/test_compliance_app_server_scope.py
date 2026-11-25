@@ -143,6 +143,41 @@ class AppServerScopeTest(unittest.TestCase):
         singular.unlink()
         self.assertIsNone(load_app_server_scope_index(self.snapshot))
 
+    def test_empty_scope_outbound2apa_counts_source_independently_of_direction(self):
+        changes = {"ruleset_scope": " \t", "ruleset_name": "APP_outbound2apa_PRD",
+                   "src_labels": "role:DB;app:A;env:PRD", "dst_labels": "role:WEB;app:B;env:UAT"}
+        for direction in ("incoming", "outgoing", "intra-app", "undetermined"):
+            with self.subTest(direction=direction):
+                self.assertEqual(self.count(direction, **changes), 2)
+        self.assertEqual(self.count("outgoing", category="strategic_rule", **changes), 2)
+        self.assertEqual(self.count("outgoing", **{**changes, "src_labels": "app:B;env:PRD;role:DB"}), 1)
+        self.assertEqual(self.count("outgoing", **{**changes, "src_labels": "app:A;env:UAT;role:DB"}), 0)
+
+    def test_empty_scope_outbound2apa_respects_source_roles_groups_and_exclusions(self):
+        changes = {"ruleset_scope": "", "ruleset_name": "OUTBOUND2APA",
+                   "src_labels": "app:A;env:PRD;role:WEB;role:DB", "src_labels_exclusions": "role:DB"}
+        self.assertEqual(self.count("incoming", **changes), 1)
+        self.assertEqual(self.count("outgoing", **{**changes, "src_labels": "app:A;env:PRD",
+                                                  "src_labels_exclusions": ""}), 6)
+        self.assertEqual(self.count("outgoing", **{**changes, "src_labels": "app:A;env:PRD",
+                                                  "src_labels_exclusions": "role:OLD"}), 4)
+        self.assertEqual(self.count("outgoing", **{**changes, "src_all_workloads": "true"}), 4)
+        self.assertEqual(self.count("outgoing", **{**changes, "src_labels": "env:PRD;rolegroup:ROLES",
+                                                  "src_label_groups": "APPS", "src_labels_exclusions": ""}), 4)
+
+    def test_source_fallback_requires_empty_scope_outbound2apa_and_resolvable_source(self):
+        changes = {"ruleset_scope": "", "ruleset_name": "OUTBOUND2APA",
+                   "src_labels": "app:B;env:PRD;role:DB"}
+        # A nonempty scope retains the ordinary scope/direction calculation.
+        self.assertEqual(self.count("outgoing", **{**changes, "ruleset_scope": "app:A;env:PRD"}), 2)
+        self.assertIsNone(self.count("outgoing", **{**changes, "ruleset_scope": "app:A"}))
+        self.assertIsNone(self.count("outgoing", **{**changes, "ruleset_name": "OTHER"}))
+        self.assertIsNone(self.count("outgoing", category="infra_rule", **changes))
+        for labels in ("", "app:A", "env:PRD", "appgroup:UNKNOWN;env:PRD",
+                       "app:A;env:null", "app:A;env:PRD;rolegroup:UNKNOWN"):
+            with self.subTest(labels=labels):
+                self.assertIsNone(self.count("outgoing", **{**changes, "src_labels": labels}))
+
     def prepare_report(self):
         base = self.rule
         rules = [
@@ -157,6 +192,13 @@ class AppServerScopeTest(unittest.TestCase):
             dict(base, rule_href="strategic", rule_type="deny", dst_labels="", dst_iplists="EXTERNAL"),
             dict(base, rule_href="unknown", src_labels="app:B", dst_labels="app:C"),
             dict(base, rule_href="infra", ruleset_name="GLOBAL_TEST", dst_labels="", dst_iplists="EXTERNAL"),
+            dict(base, rule_href="outbound-source", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
+                 src_labels="app:A;env:PRD;role:DB", dst_labels="app:APA_EXTERNAL;env:PRD"),
+            dict(base, rule_href="outbound-source-excluded", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
+                 src_labels="app:A;env:PRD;role:WEB;role:DB", src_labels_exclusions="role:DB",
+                 dst_labels="app:APA_EXTERNAL;env:PRD"),
+            dict(base, rule_href="outbound-incoming-source", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
+                 src_labels="app:B;env:PRD;role:DB", dst_labels="app:A;env:PRD;role:OLD"),
         ]
         self.write_csv(self.snapshot / "rules_inventory.csv", RULE_FIELDS, rules)
         self.write_csv(self.snapshot / "export_labelgroups.csv", LABEL_GROUP_FIELDS, self.group_rows)
@@ -171,12 +213,15 @@ class AppServerScopeTest(unittest.TestCase):
         output = self.root / "standard.xlsx"
         generate_compliance_workbook(self.root, output, (), source)
         expected = {"outgoing": 1, "incoming": 2, "intra": 3, "all": 6, "no-role": 6,
-                    "excluded": 1, "zero": 0, "strategic": 1, "unknown": None}
+                    "excluded": 1, "zero": 0, "strategic": 1, "unknown": None,
+                    "outbound-source": 2, "outbound-source-excluded": 1, "outbound-incoming-source": 1}
         with closing(load_workbook(output)) as report:
             values = list(report["Business Rules"].values)
             rows = {row[values[0].index("rule_href")]: dict(zip(values[0], row)) for row in values[1:]}
             self.assertEqual({name: row[IMPACTED_APP_SERVERS] for name, row in rows.items()}, expected)
             self.assertIsInstance(rows["zero"][IMPACTED_APP_SERVERS], int)
+            self.assertEqual(rows["outbound-source"]["Direction"], "outgoing")
+            self.assertEqual(rows["outbound-incoming-source"]["Direction"], "incoming")
             for name in ("Infra Rules", "Data Quality"):
                 values = list(report[name].values)
                 self.assertTrue(all(row[values[0].index(IMPACTED_APP_SERVERS)] is None for row in values[1:]))

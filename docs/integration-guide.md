@@ -984,8 +984,17 @@ replace that scope.
 
 Incoming rules use Destination roles, outgoing rules use Source roles, and
 intra-app rules use the union of both sides. Each workload CSV row contributes
-at most once to that union. `All workloads` or no included role selects the full
-app/env scope on that side. Role exclusions are applied separately to each side
+at most once to that union.
+
+Exception: when `ruleset_scope` is empty or whitespace-only and `ruleset_name`
+contains `OUTBOUND2APA` (case-insensitive), the count uses Source app/env/roles
+directly, including its label groups and role exclusions. Destination, the
+Microcosmos input application and the displayed Direction do not replace Source
+for this calculation. Both app and env must be resolved from Source; otherwise
+the count stays blank. A nonempty scope always retains the normal calculation.
+
+`All workloads` or no included role selects the full app/env scope on that side.
+Role exclusions are applied separately to each side
 before the union: a row excluded from Source can still be counted if selected
 in Destination. Role/app/env groups use the existing label-group reference,
 including nested groups with fully known members. Incomplete, unresolved or
@@ -993,8 +1002,8 @@ cyclic group selections leave the count blank.
 
 Zero means the reference and selection are usable but no managed rows match.
 Blank means unavailable or not applicable: missing/unreadable/invalid reference,
-missing or unresolved app/env scope, undetermined direction, unresolved role
-selectors, infrastructure rows or unmatched Data Quality rows. A valid
+missing or unresolved app/env scope, undetermined direction outside the above
+exception, unresolved role selectors, infrastructure rows or unmatched Data Quality rows. A valid
 header-only export represents zero managed rows. Invalid references do not
 produce partial counts or prevent the rest of the report from being generated;
 the reason is logged. Counts use CSV rows, without deduplicating hostname/href.

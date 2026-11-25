@@ -645,6 +645,15 @@ peer distant ne remplace pas ce scope.
 | `outgoing` | Rôles de Source |
 | `intra-app` | Union des rôles Source et Destination, chaque ligne comptée une seule fois |
 
+**Exception `OUTBOUND2APA` sans scope :** si `ruleset_scope` est vide (ou ne
+contient que des espaces) et que `ruleset_name` contient `OUTBOUND2APA`, sans
+tenir compte de la casse, le compteur utilise directement les app/env/role de
+Source, y compris ses groupes de labels et exclusions de rôles. Destination,
+l'application Microcosmos et la Direction de la ligne ne remplacent pas Source
+pour ce calcul. App et env doivent être résolus en Source ; sinon la cellule
+reste vide. Une règle `OUTBOUND2APA` avec un scope renseigné conserve le calcul
+normal ci-dessus.
+
 `All workloads` ou l'absence de rôle inclus sélectionne tous les serveurs du
 scope sur ce côté. Les exclusions de rôles s'appliquent à chaque côté avant
 l'union ; une exclusion Source n'exclut donc pas un serveur encore sélectionné
@@ -655,7 +664,8 @@ développé ne devient pas un filtre « tous les rôles ».
 
 **0** indique un calcul possible sans serveur correspondant. Une cellule vide
 indique un calcul indisponible (export absent/invalide/illisible, app/env du scope
-non résolvable, direction indéterminée ou groupe de rôles incomplet).
+non résolvable, direction indéterminée hors exception ci-dessus ou groupe de
+rôles incomplet).
 Les lignes `Infra Rules` et `Data Quality` ne sont pas calculées pour cet indicateur.
 Le rapport reste généré si le référentiel workloads est indisponible, avec un
 avertissement dans les logs. Les lignes du CSV sont comptées, sans déduplication

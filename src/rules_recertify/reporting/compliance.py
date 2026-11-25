@@ -346,6 +346,8 @@ def _write_summary_sheet(
     workbook: object, rows: Sequence[Mapping[str, object]], catalogs: Sequence[str],
 ) -> None:
     from openpyxl.chart import BarChart, Reference
+    from openpyxl.chart.label import DataLabelList
+    from openpyxl.chart.series import DataPoint
     from openpyxl.styles import Alignment, Font, PatternFill
 
     navy, dark, blue, teal = "10233B", "172D48", "0B6B8B", "057D79"
@@ -429,20 +431,60 @@ def _write_summary_sheet(
         row_number += 1
 
     box("A25:M25", "TRAFFIC USAGE DISTRIBUTION", navy, white, 11, True)
-    sheet["A27"], sheet["B27"] = "STATUS", "RULE ROWS"
-    for cell in sheet[27][:2]:
+    sheet["A27"], sheet["B27"], sheet["C27"] = "STATUS", "MATCHED ROWS", "MEANING"
+    sheet.row_dimensions[27].height = 30
+    for cell in sheet[27][:3]:
         cell.fill = PatternFill("solid", fgColor=navy)
         cell.font = Font(name="Aptos", size=10, bold=True, color=white)
-    for offset, status in enumerate(("HIT", "NO_HIT", "NO_DATA"), 28):
-        sheet.cell(offset, 1, status)
-        sheet.cell(offset, 2, usage[status])
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    usage_states = (
+        ("HIT", "Traffic observed", green),
+        ("NO_HIT", "Usage data, no traffic", amber),
+        ("NO_DATA", "Usage data unavailable", "667085"),
+    )
+    for offset, (status, meaning, color) in enumerate(usage_states, 28):
+        label = sheet.cell(offset, 1, status)
+        label.fill = PatternFill("solid", fgColor=color)
+        label.font = Font(name="Aptos", size=10, bold=True, color=white)
+        label.alignment = Alignment(vertical="center", horizontal="center")
+        count = sheet.cell(offset, 2, usage[status])
+        count.number_format = "#,##0"
+        count.font = Font(name="Aptos", size=10, bold=True, color=dark)
+        count.alignment = Alignment(vertical="center", horizontal="center")
+        description = sheet.cell(offset, 3, meaning)
+        description.font = Font(name="Aptos", size=10, color=dark)
+        description.alignment = Alignment(vertical="center", wrap_text=True)
+        sheet.row_dimensions[offset].height = 36
+    box("A32:C35", "Counts MATCHED report rows. A rule can appear for multiple applications.",
+        light, dark, 10)
     chart = BarChart()
     chart.type = "col"
     chart.style = 10
-    chart.title = "Rule usage status"
-    chart.y_axis.title = "Report rows"
+    chart.title = "Observed traffic usage"
+    chart.x_axis.title = "Usage status"
+    chart.x_axis.delete = False
+    chart.x_axis.tickLblPos = "low"
+    chart.y_axis.title = "Matched report rows"
+    chart.y_axis.delete = False
+    chart.y_axis.scaling.min = 0
+    chart.y_axis.numFmt = "#,##0"
+    if max(usage[status] for status, _, _ in usage_states) <= 10:
+        chart.y_axis.majorUnit = 1
     chart.add_data(Reference(sheet, min_col=2, min_row=27, max_row=30), titles_from_data=True)
     chart.set_categories(Reference(sheet, min_col=1, min_row=28, max_row=30))
+    chart.varyColors = False
+    for index, (_, _, color) in enumerate(usage_states):
+        point = DataPoint(idx=index)
+        point.graphicalProperties.solidFill = color
+        point.graphicalProperties.line.solidFill = color
+        chart.series[0].data_points.append(point)
+    chart.dataLabels = DataLabelList()
+    chart.dataLabels.showVal = True
+    chart.dataLabels.showCatName = False
+    chart.dataLabels.showSerName = False
+    chart.dataLabels.showLegendKey = False
+    chart.dataLabels.dLblPos = "outEnd"
+    chart.dataLabels.numFmt = "#,##0"
     chart.legend = None
     chart.width, chart.height = 20, 8
     sheet.add_chart(chart, "D27")

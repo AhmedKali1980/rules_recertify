@@ -443,7 +443,7 @@ La commande suivante évalue toutes les applications du snapshot courant :
 
 Trois modes de présentation sont disponibles :
 
-- Sans option : les 36 colonnes métier, dans l'ordre défini par le PO, de
+- Sans option : les 38 colonnes métier, dans l'ordre défini par le PO, de
   `Kear Id (Scope)` à `PORTS_ADMIN Last Hit`.
 - `--debug` : toutes les colonnes disponibles, y compris les diagnostics et les
   métadonnées supplémentaires de l'entrée, sans colonne masquée.
@@ -466,11 +466,16 @@ des colonnes présentes avec des cellules vides.
 `Business Rules` et `Infra Rules` sont triés par `Kear Id (Scope)`, puis
 `Module (Scope)`, puis `illumio label env (Scope)`. Les tris utilisent les
 informations complètes avant projection, même lorsque ces colonnes ne sont pas
-affichées dans un profil custom. Les entêtes et fonds de colonnes différencient
-six groupes par des nuances de bleu : identité/scope et compteur de serveurs ;
+affichées dans un profil custom. Le tableau utilise des lignes alternées ; les
+entêtes alternent un bleu foncé et un bleu moins foncé entre les six groupes :
+identité/scope et compteur de serveurs ;
 description de règle et endpoints/services ; exposition et usage ; hits To Control ;
 hits To Eradicate ; hits Admin. Cette correspondance suit les noms de colonnes,
 indépendamment de leur position dans le profil.
+
+Le mode par défaut inclut `Source contains User` et `Destination contains User`
+immédiatement après `rule_type`, avec les mêmes calculs que dans les modes
+debug/custom.
 
 Les règles `Disabled` ont un fond gris clair sur toute la ligne, prioritaire sur
 les autres couleurs de cellule. Ce fond reste présent si le statut est omis du
@@ -551,12 +556,16 @@ récapitulative n'est pas ajoutée : les six onglets de données sont présents.
 
 `iplists` contient uniquement les IP Lists utilisées par les règles du classeur,
 avec `name`, `include`, `exclude`, `fqdns` provenant de
-`var/raw/snapshot/export_iplists.csv`. Le contenu, les commentaires et les FQDNs
-sont conservés sans résolution réseau. Les parenthèses font partie du nom :
+`var/raw/snapshot/export_iplists.csv`. Les commentaires `#...` des valeurs
+include/exclude sont retirés dans le rapport : `192.168.10.2#MONSERVEUR` devient
+`192.168.10.2` et `192.18.10.0/24#SUBNET FRANCE` devient `192.18.10.0/24`.
+Les CSV de collecte restent inchangés. Les parenthèses font partie du nom :
 seul un éventuel href Illumio ajouté en suffixe est retiré lors de la résolution.
-Les lignes sont triées par `name`. Dans `include` et `exclude`, les séparateurs
-entre entrées deviennent des retours à la ligne, avec conservation des
-commentaires et ajustement de la hauteur des cellules pour la lecture.
+Les lignes sont triées par `name`. Dans `include`, `exclude` et `fqdns`, chaque
+valeur apparaît sur sa propre ligne, sans résolution réseau des FQDNs.
+Les colonnes visibles des deux feuilles de référence sont ajustées à la plus
+longue entrée de toutes les lignes, et les hauteurs aux cellules multilignes,
+dans les limites du format Excel, pour éviter les retours à la ligne artificiels.
 
 `workloads` contient uniquement les workloads **managed** correspondant aux
 sélections Source/Destination des règles du classeur : `app`, `env`, `role`,

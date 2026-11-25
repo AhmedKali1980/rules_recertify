@@ -85,6 +85,9 @@ class ComplianceModesTest(unittest.TestCase):
             self.assertEqual(book.sheetnames, ["Summary", "Business Rules", "Infra Rules", "Data Quality", "iplists", "workloads"])
             headers = tuple(cell.value for cell in book["Business Rules"][1])
             self.assertEqual(headers, DEFAULT_HEADERS)
+            self.assertEqual(len(headers), 38)
+            index = headers.index("rule_type")
+            self.assertEqual(headers[index + 1:index + 3], ("Source contains User", "Destination contains User"))
             self.assertEqual(headers[:9], ("Kear Id (Scope)", "Application Name (Scope)", "Entity", "Module (Scope)",
                                           "illumio label app (Scope)", "illumio label env (Scope)",
                                           "Number of impacted App servers (Scope)", RULE_STATUS, RULE_ID))
@@ -119,7 +122,7 @@ class ComplianceModesTest(unittest.TestCase):
         with closing(load_workbook(self.output)) as book:
             ip_rows = {row["name"]: row for row in self.rows(book, "iplists")}
             self.assertEqual(set(ip_rows), {"EDGE", "DOMAIN", "ONLY_B"})
-            self.assertEqual(ip_rows["EDGE"]["include"], "10.0.0.0/24\n192.0.2.0/24 # office")
+            self.assertEqual(ip_rows["EDGE"]["include"], "10.0.0.0/24\n192.0.2.0/24")
             self.assertEqual(ip_rows["EDGE"]["exclude"], "10.0.0.7")
             self.assertEqual(ip_rows["DOMAIN"]["fqdns"], "example.test")
             rows = {row["name"]: row for row in self.rows(book, "workloads")}

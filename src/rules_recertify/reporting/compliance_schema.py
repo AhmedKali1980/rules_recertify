@@ -18,7 +18,8 @@ ALIASES = {
 DEFAULT_HEADERS = (
     "Kear Id (Scope)", "Application Name (Scope)", "Entity", "Module (Scope)",
     "illumio label app (Scope)", "illumio label env (Scope)", IMPACTED_APP_SERVERS,
-    RULE_STATUS, RULE_ID, "Direction", "Rule Category", "rule_type", "rule_description",
+    RULE_STATUS, RULE_ID, "Direction", "Rule Category", "rule_type",
+    "Source contains User", "Destination contains User", "rule_description",
     "Source", "Destination", "services", "PORTS_TO_CONTROL", "PORTS_TO_ERADICATE", "PORTS_ADMIN",
     "Usage Status", "Last Hit", "Days Since Last Hit", "Total Hit Flows", "Observed Windows",
     "First Observed", "Last Observed", "Port Breakdown Complete",
@@ -29,10 +30,13 @@ DEFAULT_HEADERS = (
 ALL_HEADERS = (*DEFAULT_HEADERS, "Kear Remote", "Account", "Account Leader",
                "Microsegmentation Solution", "Program (MIO)", "Program (KPI)",
                "Match status", "Warning", "Global Consumer in use", "ruleset_name",
-               "ruleset_scope", "ruleset_enabled", "rule_enabled", "rule_href",
-               "Source contains User", "Destination contains User", "Protection type")
-COLUMN_GROUPS = (DEFAULT_HEADERS[:7], DEFAULT_HEADERS[7:16], DEFAULT_HEADERS[16:27],
-                 DEFAULT_HEADERS[27:30], DEFAULT_HEADERS[30:33], DEFAULT_HEADERS[33:36])
+               "ruleset_scope", "ruleset_enabled", "rule_enabled", "rule_href", "Protection type")
+COLUMN_GROUPS = (
+    DEFAULT_HEADERS[:7],
+    DEFAULT_HEADERS[7:DEFAULT_HEADERS.index("PORTS_TO_CONTROL")],
+    DEFAULT_HEADERS[DEFAULT_HEADERS.index("PORTS_TO_CONTROL"):DEFAULT_HEADERS.index("PORTS_TO_CONTROL Hit Ports")],
+    DEFAULT_HEADERS[-9:-6], DEFAULT_HEADERS[-6:-3], DEFAULT_HEADERS[-3:],
+)
 REFERENCE_HEADERS = {
     "iplists": ("name", "include", "exclude", "fqdns"),
     "workloads": ("app", "env", "role", "loc", "OS", "hostname", "name", "managed", "enforcement",

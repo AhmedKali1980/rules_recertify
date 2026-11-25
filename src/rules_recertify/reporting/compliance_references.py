@@ -17,8 +17,10 @@ LOG = logging.getLogger(__name__)
 DIMENSIONS = ("app", "env", "role", "loc")
 
 
-def _ip_entries(value: str) -> str:
-    return "\n".join(part.strip() for part in re.split(r"[;\r\n]+", value) if part.strip())
+def _reference_entries(value: str, *, strip_comments: bool = False) -> str:
+    entries = ((part.partition("#")[0] if strip_comments else part).strip()
+               for part in re.split(r"[;\r\n]+", value))
+    return "\n".join(entry for entry in entries if entry)
 
 
 def _read_reference(snapshot: Path, names: Sequence[str], required: Sequence[str]) -> list[dict[str, str]]:
@@ -127,7 +129,8 @@ class ComplianceReferences:
                  for rule in self.rules.get(str(row.get("rule_href", "")), [])}
         used_ip_lists = {name.casefold(): name for rule in rules.values() for prefix in ("src", "dst")
                          for name in _iplist_names(rule.get(f"{prefix}_iplists", ""))} if "iplists" in self.enabled else {}
-        ip_rows = [{name: _ip_entries(row.get(name, "")) if name in ("include", "exclude") else row.get(name, "")
+        ip_rows = [{name: _reference_entries(row.get(name, ""), strip_comments=name != "fqdns")
+                    if name in ("include", "exclude", "fqdns") else row.get(name, "")
                     for name in REFERENCE_HEADERS["iplists"]}
                    for row in self.iplists if row["name"].casefold() in used_ip_lists]
         found = {row["name"].casefold() for row in ip_rows}

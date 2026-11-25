@@ -140,6 +140,7 @@ def generate_compliance_workbook(
             usage = _usage_columns(
                 usage_by_rule.get(rule["rule_href"]), report_catalogs,
             )
+            app_server_count = _impacted_app_server_count(rule, enrichment, app_servers, group_index)
             rows.append({
                 **_with_rule_enrichment_columns(input_values, enrichment),
                 "Program (KPI)": programs,
@@ -155,7 +156,11 @@ def generate_compliance_workbook(
                 "rule_href": rule["rule_href"],
                 "Source": source,
                 "Destination": destination,
-                IMPACTED_APP_SERVERS: _impacted_app_server_count(rule, enrichment, app_servers, group_index),
+                IMPACTED_APP_SERVERS: (
+                    "undefined" if app_server_count is None
+                    and enrichment["rule_category"] in {"business_rule", "strategic_rule"}
+                    else app_server_count
+                ),
                 "Source contains User": str(
                     source_kind == "iplist" and _contains_user_iplist(source)
                 ).upper(),
@@ -355,16 +360,25 @@ def _impacted_app_server_count(
         return None
     apps = _scope_server_values(labels, groups, "app", group_index)
     envs = _scope_server_values(labels, groups, "env", group_index)
-    if apps is None or envs is None or not apps[1] or not envs[1] or "null" in apps[0] or "null" in envs[0]:
+    # A nonempty scope without an env selector covers every environment.
+    # An explicit but unresolved env, or missing Source env for the empty-scope
+    # OUTBOUND2APA exception, must not silently broaden the selection.
+    any_env = bool(scope) and not any(
+        component.partition(":")[0].strip().casefold() in {"env", "envgroup"}
+        for component in _parts(scope)
+    )
+    if (apps is None or envs is None or not apps[1] or (not envs[1] and not any_env)
+            or "null" in apps[0] or "null" in envs[0]):
         return None
+    environments = None if any_env else envs[0]
     selections = [_scope_server_roles(rule, prefix, group_index) for prefix in prefixes]
     if any(selection is not None and selection.included is None and not selection.excluded
            for selection in selections):
         # Union with an unrestricted local side covers the complete app/env scope.
-        return servers.count(apps[0], envs[0], [RoleSelection()])
+        return servers.count(apps[0], environments, [RoleSelection()])
     if any(selection is None for selection in selections):
         return None
-    return servers.count(apps[0], envs[0], [selection for selection in selections if selection is not None])
+    return servers.count(apps[0], environments, [selection for selection in selections if selection is not None])
 
 
 def _empty_usage_columns(catalogs: Sequence[str]) -> Dict[str, object]:
@@ -577,10 +591,12 @@ def _write_summary_sheet(
     box(f"A{row_number}:C{row_number}", IMPACTED_APP_SERVERS, light, dark, 10, True)
     box(f"D{row_number}:M{row_number}",
         "Business and strategic rules: count managed workload rows matching the ruleset scope app/env. "
+        "A scope with app but no env covers all environments. "
         "Empty-scope OUTBOUND2APA uses Source app/env/roles. Otherwise incoming uses Destination roles; "
         "outgoing uses Source roles; intra-app uses their union, "
         "counting each row once. All workloads or no included role allows the full scope on that side; "
-        "role exclusions still apply. Zero means no matching rows; blank means unavailable or not applicable.",
+        "role exclusions still apply. Zero means no matching rows; undefined means the calculation is "
+        "unavailable. Blank means not applicable (Infra Rules or Data Quality).",
         light, dark, 10)
     sheet.row_dimensions[row_number].height = 80
 

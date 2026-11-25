@@ -38,6 +38,7 @@ class AppServerScopeTest(unittest.TestCase):
             ("A", "PRD", "WEB", "false"), ("A", "PRD", "WEB", ""),
             ("A", "UAT", "WEB", "true"), ("AX", "PRD", "WEB", "true"),
             ("B", "PRD", "DB", "true"),
+            ("A", "", "DB", "true"),
         ]
         self.write_csv(self.workloads, ("app", "env", "role", "managed"), [
             dict(zip(("app", "env", "role", "managed"), row)) for row in rows
@@ -54,6 +55,7 @@ class AppServerScopeTest(unittest.TestCase):
              "member_label_groups": "ROLES"},
             {"name": "CYCLIC_ROLES", "key": "role", "member_label_groups": "CYCLIC_ROLES"},
             {"name": "APPS", "key": "app", "member_labels": "app:A;app:B"},
+            {"name": "EMPTY_ENVS", "key": "env"},
         ]
         self.groups = _label_group_index(self.group_rows)
         self.rule = {**dict.fromkeys(RULE_FIELDS, ""), "ruleset_name": "APPLICATION",
@@ -115,10 +117,39 @@ class AppServerScopeTest(unittest.TestCase):
         self.assertIsNone(self.count("undetermined"))
         self.assertIsNone(self.count("incoming", category="infra_rule"))
         self.assertEqual(self.count("incoming", category="strategic_rule"), 2)
-        for scope in ("", "app:A", "env:PRD", "appgroup:UNKNOWN;env:PRD", "app:A;env:null"):
+        for scope in ("", "env:PRD", "appgroup:UNKNOWN;env:PRD", "app:A;env:null"):
             self.assertIsNone(self.count("incoming", ruleset_scope=scope))
         self.assertEqual(self.count("incoming", ruleset_scope="app:Z;env:PRD"), 0)
         self.assertEqual(self.count("incoming", ruleset_scope="app:A;env:DEV"), 0)
+
+    def test_app_only_scope_covers_all_environments_with_local_roles_and_exclusions(self):
+        self.assertEqual(self.count("incoming", ruleset_scope="app:A"), 3)
+        self.assertEqual(self.count("outgoing", ruleset_scope="app:A"), 2)
+        self.assertEqual(self.count("intra-app", ruleset_scope="app:A"), 5)
+        self.assertEqual(self.count("incoming", category="strategic_rule", ruleset_scope="app:A"), 3)
+        self.assertEqual(self.count("incoming", ruleset_scope="app:A", dst_all_workloads="true"), 8)
+        self.assertEqual(self.count("outgoing", ruleset_scope="app:A", src_labels=""), 8)
+        self.assertEqual(self.count("outgoing", ruleset_scope="app:A", src_labels="role:WEB;env:PRD"), 2)
+        self.assertEqual(self.count("incoming", ruleset_scope="app:A", dst_labels="",
+                                    dst_labels_exclusions="role:OLD"), 6)
+        self.assertEqual(self.count("outgoing", ruleset_scope="app:A", src_labels="role:WEB;role:DB",
+                                    src_labels_exclusions="role:DB"), 2)
+        self.assertEqual(self.count("incoming", ruleset_scope="app:A", dst_labels="rolegroup:ROLES"), 5)
+        self.assertEqual(self.count("incoming", ruleset_scope="appgroup:APPS"), 4)
+        self.assertEqual(self.count("incoming", ruleset_scope="app:A", dst_labels="role:MISSING"), 0)
+        self.assertEqual(self.count("incoming", ruleset_scope="app:UNKNOWN"), 0)
+
+    def test_explicit_environment_selectors_and_cached_counts_do_not_become_wildcards(self):
+        for scope in ("app:A;env:", "app:A;envgroup:", "app:A;envgroup:UNKNOWN", "app:A;env:null"):
+            with self.subTest(scope=scope):
+                self.assertIsNone(self.count("incoming", ruleset_scope=scope))
+        self.assertEqual(self.count("outgoing", ruleset_scope="app:A;env:PRD"), 1)
+        self.assertEqual(self.count("incoming", ruleset_scope="app:A;env:UAT"), 0)
+        self.assertEqual(self.count("incoming", ruleset_scope="app:A;env:DEV"), 0)
+        for envs, expected in ((None, 8), ({"prd"}, 6), ({"uat"}, 1), ({""}, 1), (set(), 0), (None, 8)):
+            with self.subTest(envs=envs):
+                self.assertEqual(self.index.count({"a"}, envs, [RoleSelection()]), expected)
+        self.assertEqual(self.count("incoming", ruleset_scope="app:A;envgroup:EMPTY_ENVS"), 0)
 
     def test_reference_alias_priority_normalization_and_unavailable_inputs(self):
         singular = self.snapshot / "export_wkld.csv"
@@ -170,7 +201,8 @@ class AppServerScopeTest(unittest.TestCase):
                    "src_labels": "app:B;env:PRD;role:DB"}
         # A nonempty scope retains the ordinary scope/direction calculation.
         self.assertEqual(self.count("outgoing", **{**changes, "ruleset_scope": "app:A;env:PRD"}), 2)
-        self.assertIsNone(self.count("outgoing", **{**changes, "ruleset_scope": "app:A"}))
+        self.assertEqual(self.count("outgoing", **{**changes, "ruleset_scope": "app:A"}), 3)
+        self.assertIsNone(self.count("outgoing", **{**changes, "ruleset_scope": "app:A;env:"}))
         self.assertIsNone(self.count("outgoing", **{**changes, "ruleset_name": "OTHER"}))
         self.assertIsNone(self.count("outgoing", category="infra_rule", **changes))
         for labels in ("", "app:A", "env:PRD", "appgroup:UNKNOWN;env:PRD",
@@ -191,6 +223,7 @@ class AppServerScopeTest(unittest.TestCase):
             dict(base, rule_href="zero", src_labels="", src_iplists="EXTERNAL", dst_labels="role:MISSING"),
             dict(base, rule_href="strategic", rule_type="deny", dst_labels="", dst_iplists="EXTERNAL"),
             dict(base, rule_href="unknown", src_labels="app:B", dst_labels="app:C"),
+            dict(base, rule_href="strategic-unknown", rule_type="deny", src_labels="app:B", dst_labels="app:C"),
             dict(base, rule_href="infra", ruleset_name="GLOBAL_TEST", dst_labels="", dst_iplists="EXTERNAL"),
             dict(base, rule_href="outbound-source", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
                  src_labels="app:A;env:PRD;role:DB", dst_labels="app:APA_EXTERNAL;env:PRD"),
@@ -199,6 +232,15 @@ class AppServerScopeTest(unittest.TestCase):
                  dst_labels="app:APA_EXTERNAL;env:PRD"),
             dict(base, rule_href="outbound-incoming-source", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
                  src_labels="app:B;env:PRD;role:DB", dst_labels="app:A;env:PRD;role:OLD"),
+            dict(base, rule_href="all-env-outgoing", ruleset_scope="app:A", src_labels="app:A;env:PRD;role:WEB",
+                 dst_labels="", dst_iplists="EXTERNAL"),
+            dict(base, rule_href="all-env-incoming", ruleset_scope="app:A", dst_labels="app:A;env:PRD;role:DB",
+                 src_labels="", src_iplists="EXTERNAL"),
+            dict(base, rule_href="all-env-intra", ruleset_scope="app:A", src_labels="app:A;env:PRD;role:WEB"),
+            dict(base, rule_href="all-env-all", ruleset_scope="app:A", src_all_workloads="true",
+                 src_labels="app:A;env:PRD;role:WEB"),
+            dict(base, rule_href="all-env-excluded", ruleset_scope="app:A", src_labels="app:A;env:PRD;role:WEB;role:DB",
+                 src_labels_exclusions="role:DB", dst_labels="", dst_iplists="EXTERNAL"),
         ]
         self.write_csv(self.snapshot / "rules_inventory.csv", RULE_FIELDS, rules)
         self.write_csv(self.snapshot / "export_labelgroups.csv", LABEL_GROUP_FIELDS, self.group_rows)
@@ -213,13 +255,17 @@ class AppServerScopeTest(unittest.TestCase):
         output = self.root / "standard.xlsx"
         generate_compliance_workbook(self.root, output, (), source)
         expected = {"outgoing": 1, "incoming": 2, "intra": 3, "all": 6, "no-role": 6,
-                    "excluded": 1, "zero": 0, "strategic": 1, "unknown": None,
-                    "outbound-source": 2, "outbound-source-excluded": 1, "outbound-incoming-source": 1}
+                    "excluded": 1, "zero": 0, "strategic": 1, "unknown": "undefined",
+                    "strategic-unknown": "undefined",
+                    "outbound-source": 2, "outbound-source-excluded": 1, "outbound-incoming-source": 1,
+                    "all-env-outgoing": 2, "all-env-incoming": 3, "all-env-intra": 5,
+                    "all-env-all": 8, "all-env-excluded": 2}
         with closing(load_workbook(output)) as report:
             values = list(report["Business Rules"].values)
             rows = {row[values[0].index("rule_href")]: dict(zip(values[0], row)) for row in values[1:]}
             self.assertEqual({name: row[IMPACTED_APP_SERVERS] for name, row in rows.items()}, expected)
             self.assertIsInstance(rows["zero"][IMPACTED_APP_SERVERS], int)
+            self.assertIsInstance(rows["outgoing"][IMPACTED_APP_SERVERS], int)
             self.assertEqual(rows["outbound-source"]["Direction"], "outgoing")
             self.assertEqual(rows["outbound-incoming-source"]["Direction"], "incoming")
             for name in ("Infra Rules", "Data Quality"):
@@ -248,7 +294,7 @@ class AppServerScopeTest(unittest.TestCase):
             self.assertNotIn(IMPACTED_APP_SERVERS, next(report["Business Rules"].values))
 
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl required")
-    def test_missing_reference_leaves_counts_blank_and_installed_cli_loads_the_feature(self):
+    def test_missing_reference_displays_undefined_and_installed_cli_loads_the_feature(self):
         source = self.prepare_report()
         target = self.root / "deployment"
         environment = dict(os.environ)
@@ -277,7 +323,23 @@ class AppServerScopeTest(unittest.TestCase):
             values = list(report["Business Rules"].values)
             self.assertEqual(values[1][values[0].index(IMPACTED_APP_SERVERS)], 1)
         self.workloads.unlink()
-        generate_compliance_workbook(self.root, output, (), source)
-        with closing(load_workbook(output)) as report:
+
+        def assert_undefined_counts(report):
             values = list(report["Business Rules"].values)
-            self.assertTrue(all(row[values[0].index(IMPACTED_APP_SERVERS)] is None for row in values[1:]))
+            self.assertGreater(len(values), 1)
+            self.assertTrue(all(row[values[0].index(IMPACTED_APP_SERVERS)] == "undefined" for row in values[1:]))
+            for name in ("Infra Rules", "Data Quality"):
+                values = list(report[name].values)
+                self.assertTrue(all(row[values[0].index(IMPACTED_APP_SERVERS)] is None for row in values[1:]))
+
+        for profile in (None, target / "config/headers.conf"):
+            generate_compliance_workbook(self.root, output, (), source, custom_headers_path=profile)
+            with closing(load_workbook(output)) as report:
+                assert_undefined_counts(report)
+        archive_path = self.root / "undefined.zip"
+        generate_compliance_workbook(self.root, archive_path, (), source,
+                                     custom_headers_path=target / "config/headers.conf",
+                                     split_by_kear_id=True, timestamp="20261125T120000Z")
+        with ZipFile(archive_path) as archive:
+            with closing(load_workbook(io.BytesIO(archive.read("E1/compliance_K-A_20261125T120000Z.xlsx")))) as report:
+                assert_undefined_counts(report)

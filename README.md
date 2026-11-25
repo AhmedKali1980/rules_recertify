@@ -658,8 +658,8 @@ tenir compte de la casse, le compteur utilise directement les app/env/role de
 Source, y compris ses groupes de labels et exclusions de rôles. Destination,
 l'application Microcosmos et la Direction de la ligne ne remplacent pas Source
 pour ce calcul. App et env doivent être résolus en Source ; sinon la cellule
-reste vide. Une règle `OUTBOUND2APA` avec un scope renseigné conserve le calcul
-normal ci-dessus.
+affiche `undefined`. Une règle `OUTBOUND2APA` avec un scope renseigné conserve
+le calcul normal ci-dessus.
 
 `All workloads` ou l'absence de rôle inclus sélectionne tous les serveurs du
 scope sur ce côté. Les exclusions de rôles s'appliquent à chaque côté avant
@@ -669,11 +669,13 @@ depuis `export_labelgroups.csv`, y compris les groupes imbriqués dont tous les
 membres sont connus. Un groupe non résolu ou seulement partiellement
 développé ne devient pas un filtre « tous les rôles ».
 
-**0** indique un calcul possible sans serveur correspondant. Une cellule vide
+**0** indique un calcul possible sans serveur correspondant. **`undefined`**
 indique un calcul indisponible (export absent/invalide/illisible, app/env du scope
 non résolvable, direction indéterminée hors exception ci-dessus ou groupe de
 rôles incomplet).
-Les lignes `Infra Rules` et `Data Quality` ne sont pas calculées pour cet indicateur.
+Les lignes `Infra Rules` et `Data Quality` ne sont pas calculées pour cet indicateur
+et conservent une cellule vide (non applicable). Les comptes disponibles, y
+compris zéro, restent des valeurs numériques dans Excel.
 Le rapport reste généré si le référentiel workloads est indisponible, avec un
 avertissement dans les logs. Les lignes du CSV sont comptées, sans déduplication
 par nom de serveur ; l'union des rôles évite seulement de compter une même ligne

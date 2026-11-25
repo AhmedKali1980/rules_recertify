@@ -140,6 +140,7 @@ def generate_compliance_workbook(
             usage = _usage_columns(
                 usage_by_rule.get(rule["rule_href"]), report_catalogs,
             )
+            app_server_count = _impacted_app_server_count(rule, enrichment, app_servers, group_index)
             rows.append({
                 **_with_rule_enrichment_columns(input_values, enrichment),
                 "Program (KPI)": programs,
@@ -155,7 +156,11 @@ def generate_compliance_workbook(
                 "rule_href": rule["rule_href"],
                 "Source": source,
                 "Destination": destination,
-                IMPACTED_APP_SERVERS: _impacted_app_server_count(rule, enrichment, app_servers, group_index),
+                IMPACTED_APP_SERVERS: (
+                    "undefined" if app_server_count is None
+                    and enrichment["rule_category"] in {"business_rule", "strategic_rule"}
+                    else app_server_count
+                ),
                 "Source contains User": str(
                     source_kind == "iplist" and _contains_user_iplist(source)
                 ).upper(),
@@ -590,7 +595,8 @@ def _write_summary_sheet(
         "Empty-scope OUTBOUND2APA uses Source app/env/roles. Otherwise incoming uses Destination roles; "
         "outgoing uses Source roles; intra-app uses their union, "
         "counting each row once. All workloads or no included role allows the full scope on that side; "
-        "role exclusions still apply. Zero means no matching rows; blank means unavailable or not applicable.",
+        "role exclusions still apply. Zero means no matching rows; undefined means the calculation is "
+        "unavailable. Blank means not applicable (Infra Rules or Data Quality).",
         light, dark, 10)
     sheet.row_dimensions[row_number].height = 80
 

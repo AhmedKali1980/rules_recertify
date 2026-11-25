@@ -998,19 +998,23 @@ contains `OUTBOUND2APA` (case-insensitive), the count uses Source app/env/roles
 directly, including its label groups and role exclusions. Destination, the
 Microcosmos input application and the displayed Direction do not replace Source
 for this calculation. Both app and env must be resolved from Source; otherwise
-the count stays blank. A nonempty scope always retains the normal calculation.
+the count displays `undefined`. A nonempty scope always retains the normal
+calculation.
 
 `All workloads` or no included role selects the full app/env scope on that side.
 Role exclusions are applied separately to each side
 before the union: a row excluded from Source can still be counted if selected
 in Destination. Role/app/env groups use the existing label-group reference,
 including nested groups with fully known members. Incomplete, unresolved or
-cyclic group selections leave the count blank.
+cyclic group selections display `undefined`.
 
 Zero means the reference and selection are usable but no managed rows match.
-Blank means unavailable or not applicable: missing/unreadable/invalid reference,
-missing or unresolved app/env scope, undetermined direction outside the above
-exception, unresolved role selectors, infrastructure rows or unmatched Data Quality rows. A valid
+`undefined` means the Business Rules calculation is unavailable: missing,
+unreadable or invalid reference, missing or unresolved app/env scope,
+undetermined direction outside the above exception or unresolved role selectors.
+Infra Rules and Data Quality rows remain
+blank because the metric does not apply to them. Available counts, including
+zero, remain numeric Excel values. A valid
 header-only export represents zero managed rows. Invalid references do not
 produce partial counts or prevent the rest of the report from being generated;
 the reason is logged. Counts use CSV rows, without deduplicating hostname/href.
@@ -1026,8 +1030,8 @@ visibility = true
 
 The shipped profile enables it. Existing local profiles remain preserved and
 must explicitly add this section to display a new column. `Report Configuration`
-tracks its visibility, and Summary explains the direction filters and blank/zero
-distinction without changing the existing traffic metrics.
+tracks its visibility, and Summary explains the direction filters and the
+undefined/zero distinction without changing the existing traffic metrics.
 
 When an app-group-scoped rule is discovered through an explicit source
 application and its destination is `All workloads`, direction is evaluated

@@ -223,6 +223,7 @@ class AppServerScopeTest(unittest.TestCase):
             dict(base, rule_href="zero", src_labels="", src_iplists="EXTERNAL", dst_labels="role:MISSING"),
             dict(base, rule_href="strategic", rule_type="deny", dst_labels="", dst_iplists="EXTERNAL"),
             dict(base, rule_href="unknown", src_labels="app:B", dst_labels="app:C"),
+            dict(base, rule_href="strategic-unknown", rule_type="deny", src_labels="app:B", dst_labels="app:C"),
             dict(base, rule_href="infra", ruleset_name="GLOBAL_TEST", dst_labels="", dst_iplists="EXTERNAL"),
             dict(base, rule_href="outbound-source", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
                  src_labels="app:A;env:PRD;role:DB", dst_labels="app:APA_EXTERNAL;env:PRD"),
@@ -254,7 +255,8 @@ class AppServerScopeTest(unittest.TestCase):
         output = self.root / "standard.xlsx"
         generate_compliance_workbook(self.root, output, (), source)
         expected = {"outgoing": 1, "incoming": 2, "intra": 3, "all": 6, "no-role": 6,
-                    "excluded": 1, "zero": 0, "strategic": 1, "unknown": None,
+                    "excluded": 1, "zero": 0, "strategic": 1, "unknown": "undefined",
+                    "strategic-unknown": "undefined",
                     "outbound-source": 2, "outbound-source-excluded": 1, "outbound-incoming-source": 1,
                     "all-env-outgoing": 2, "all-env-incoming": 3, "all-env-intra": 5,
                     "all-env-all": 8, "all-env-excluded": 2}
@@ -263,6 +265,7 @@ class AppServerScopeTest(unittest.TestCase):
             rows = {row[values[0].index("rule_href")]: dict(zip(values[0], row)) for row in values[1:]}
             self.assertEqual({name: row[IMPACTED_APP_SERVERS] for name, row in rows.items()}, expected)
             self.assertIsInstance(rows["zero"][IMPACTED_APP_SERVERS], int)
+            self.assertIsInstance(rows["outgoing"][IMPACTED_APP_SERVERS], int)
             self.assertEqual(rows["outbound-source"]["Direction"], "outgoing")
             self.assertEqual(rows["outbound-incoming-source"]["Direction"], "incoming")
             for name in ("Infra Rules", "Data Quality"):
@@ -291,7 +294,7 @@ class AppServerScopeTest(unittest.TestCase):
             self.assertNotIn(IMPACTED_APP_SERVERS, next(report["Business Rules"].values))
 
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl required")
-    def test_missing_reference_leaves_counts_blank_and_installed_cli_loads_the_feature(self):
+    def test_missing_reference_displays_undefined_and_installed_cli_loads_the_feature(self):
         source = self.prepare_report()
         target = self.root / "deployment"
         environment = dict(os.environ)
@@ -320,7 +323,23 @@ class AppServerScopeTest(unittest.TestCase):
             values = list(report["Business Rules"].values)
             self.assertEqual(values[1][values[0].index(IMPACTED_APP_SERVERS)], 1)
         self.workloads.unlink()
-        generate_compliance_workbook(self.root, output, (), source)
-        with closing(load_workbook(output)) as report:
+
+        def assert_undefined_counts(report):
             values = list(report["Business Rules"].values)
-            self.assertTrue(all(row[values[0].index(IMPACTED_APP_SERVERS)] is None for row in values[1:]))
+            self.assertGreater(len(values), 1)
+            self.assertTrue(all(row[values[0].index(IMPACTED_APP_SERVERS)] == "undefined" for row in values[1:]))
+            for name in ("Infra Rules", "Data Quality"):
+                values = list(report[name].values)
+                self.assertTrue(all(row[values[0].index(IMPACTED_APP_SERVERS)] is None for row in values[1:]))
+
+        for profile in (None, target / "config/headers.conf"):
+            generate_compliance_workbook(self.root, output, (), source, custom_headers_path=profile)
+            with closing(load_workbook(output)) as report:
+                assert_undefined_counts(report)
+        archive_path = self.root / "undefined.zip"
+        generate_compliance_workbook(self.root, archive_path, (), source,
+                                     custom_headers_path=target / "config/headers.conf",
+                                     split_by_kear_id=True, timestamp="20261125T120000Z")
+        with ZipFile(archive_path) as archive:
+            with closing(load_workbook(io.BytesIO(archive.read("E1/compliance_K-A_20261125T120000Z.xlsx")))) as report:
+                assert_undefined_counts(report)

@@ -441,7 +441,34 @@ La commande suivante évalue toutes les applications du snapshot courant :
   compliance-report --out var/output/compliance.xlsx
 ```
 
-Sans option supplémentaire, toutes les colonnes habituelles sont conservées.
+Trois modes de présentation sont disponibles :
+
+- Sans option : les 36 colonnes métier, dans l'ordre défini par le PO, de
+  `Kear Id (Scope)` à `PORTS_ADMIN Last Hit`.
+- `--debug` : toutes les colonnes disponibles, y compris les diagnostics et les
+  métadonnées supplémentaires de l'entrée, sans colonne masquée.
+- `--custom-headers CHEMIN` : uniquement les colonnes activées dans ce profil INI,
+  avec le contrôle des onglets. Ce mode est exclusif de `--debug`.
+
+Exemple du mode complet :
+
+```bash
+./scripts/rules-recertify --config config/local.json --env-file .env \
+  compliance-report --input microcosmos.xlsx --debug
+```
+
+Les entêtes de sortie deviennent `Kear Id (Scope)`, `Application Name (Scope)`,
+`Module (Scope)`, `illumio label app (Scope)` et `illumio label env (Scope)`.
+Les noms des colonnes d'entrée Microcosmos restent inchangés. L'environnement
+Illumio résolu alimente la colonne env du rapport. Les identités absentes restent
+des colonnes présentes avec des cellules vides.
+
+`rule_status (Enabled/Disabled)` vaut `Disabled` si `ruleset_enabled` ou
+`rule_enabled` vaut false, sinon `Enabled`. Une entrée sans règle correspondante
+n'a pas de statut. `rule-id` extrait les deux identifiants de `rule_href` :
+`/rule_sets/11155/sec_rules/101899` devient `11155-101899`. Ce champ est du texte
+aligné à droite, avec conservation des zéros initiaux.
+
 Pour choisir les colonnes affichées, passer explicitement un profil INI :
 
 ```bash
@@ -468,7 +495,9 @@ trois feuilles de détail, dans leur ordre habituel. Les calculs, la répartitio
 des règles et le Summary restent complets, même si leurs colonnes sont masquées.
 Le fichier fourni déclare toutes les colonnes standard comme visibles ; ajouter
 une section pour conserver une colonne supplémentaire du fichier d'entrée.
-Les colonnes d'identité Microcosmos et `env` absentes de l'entrée sont ignorées.
+Les anciens noms de colonnes restent des alias acceptés, y compris l'ancien
+nom du compteur de serveurs. Deux alias d'une même colonne doivent avoir la même
+visibilité. Les entêtes Excel utilisent toujours les nouveaux noms.
 Un nom inconnu, une visibilité invalide ou une sélection sans colonne disponible
 produit une erreur sans remplacer le fichier de sortie existant.
 
@@ -491,8 +520,10 @@ visibility = true
 ```
 
 Les noms disponibles sont `Summary`, `Business Rules`, `Infra Rules`,
-`Data Quality` et `Report Configuration`. Un onglet non déclaré reste visible
-pour conserver la compatibilité avec les profils existants. Un onglet désactivé
+`Data Quality`, `iplists`, `workloads` et `Report Configuration`. Un onglet
+historique non déclaré reste visible ; les deux nouveaux onglets de référence
+doivent être activés explicitement dans les anciens profils. Le nouveau modèle
+les active. Un onglet désactivé
 est omis du classeur, sans conserver de feuille Excel masquée contenant ses
 données. Il faut garder au moins un onglet visible et au moins une colonne
 visible si une feuille de détail est activée.
@@ -502,7 +533,51 @@ pour chaque colonne et chaque onglet, la visibilité configurée, la disponibili
 et l'affichage effectif. Il explique aussi les colonnes non déclarées ou absentes
 de l'entrée. Il est visible par défaut et peut être désactivé dans le profil.
 Sans `--custom-headers`, aucun réglage d'onglet n'est lu et cette feuille
-récapitulative n'est pas ajoutée : les quatre onglets habituels restent inchangés.
+récapitulative n'est pas ajoutée : les six onglets de données sont présents.
+
+`iplists` contient uniquement les IP Lists utilisées par les règles du classeur,
+avec `name`, `include`, `exclude`, `fqdns` provenant de
+`var/raw/snapshot/export_iplists.csv`. Le contenu, les commentaires et les FQDNs
+sont conservés sans résolution réseau.
+
+`workloads` contient uniquement les workloads **managed** correspondant aux
+sélections Source/Destination des règles du classeur : `app`, `env`, `role`,
+`loc`, `OS`, `hostname`, `name`, `managed`, `enforcement`, `created_at`,
+`ip_with_default_gw`, `external_data_reference`. La source est
+`export_wkld.csv` (repli sur `export_wklds.csv`) dans le snapshot ; `os_id` est
+accepté pour `OS`. Les labels explicites, groupes et exclusions sont résolus ;
+le scope complète les dimensions omises, sauf pour les consumers non scopés.
+Avec `unscoped_consumers=false`, les applications Source restent limitées au
+scope, comme pour la sélection des règles.
+Les sélecteurs workload explicites sont recherchés par name/hostname/href.
+Chaque ligne du référentiel sélectionnée plusieurs fois apparaît une seule fois.
+Les références absentes ou invalides sont signalées dans les logs ; une IP List
+introuvable conserve son nom avec contenu vide.
+
+Les colonnes de ces feuilles sont indépendantes des colonnes de détail :
+
+```ini
+[sheet:workloads]
+visibility = true
+
+[column:workloads:hostname]
+visibility = true
+
+[column:workloads:managed]
+visibility = true
+
+[sheet:iplists]
+visibility = true
+
+[column:iplists:name]
+visibility = true
+```
+
+Une feuille de référence activée doit garder au moins une colonne visible.
+Le fichier `config/headers.conf` fourni déclare tous les onglets et toutes les
+colonnes standard, y compris celles des références. Les profils locaux existants
+restent conservés lors des mises à jour ; les nouvelles sections peuvent y être
+ajoutées manuellement ou dans un nouveau fichier de profil.
 
 Pour produire une archive ZIP contenant un classeur par couple **Entity/Kear ID** :
 
@@ -512,8 +587,8 @@ Pour produire une archive ZIP contenant un classeur par couple **Entity/Kear ID*
   --custom-headers config/headers.conf
 ```
 
-`--split-by-kear-id` fonctionne aussi sans `--custom-headers`, avec les colonnes
-et onglets habituels. La sortie par défaut est
+`--split-by-kear-id` fonctionne dans chacun des trois modes. Les références de
+chaque classeur sont limitées à ses propres règles. La sortie par défaut est
 `var/output/compliance_<timestamp>.zip` (dans le `output_dir` configuré), avec
 des chemins tels que `CFT/compliance_<Kear ID>_<timestamp>.xlsx` dans l'archive.
 Un `--out` explicite doit désigner un fichier `.zip` dans ce mode.
@@ -534,8 +609,9 @@ de noms sont refusées. L'archive est publiée uniquement après génération de
 tous les classeurs ; une erreur conserve une éventuelle archive existante.
 
 `--input <csv-ou-xlsx>` permet de limiter le rapport à une colonne `app` et à
-une colonne `env` optionnelle, tout en recopiant toutes les colonnes d'entrée
-dans le résultat. Un XLSX Microcosmos peut alternativement fournir ses colonnes
+une colonne `env` optionnelle. Les métadonnées supplémentaires restent disponibles
+en `--debug` ou lorsqu'elles sont activées dans le profil personnalisé.
+Un XLSX Microcosmos peut alternativement fournir ses colonnes
 `Kear Id`, `Application Name`, `Module`, `Account`, `Account Leader`,
 `Microsegmentation Solution`, `Environment`, `Entity` et `Program` (optionnelle).
 Le `Module` est résolu par correspondance exacte avec la partie du label `app`
@@ -562,8 +638,8 @@ un message explicite dans la colonne `Warning`, uniquement lorsqu'une règle
 Extrascope combine `unscoped_consumers=TRUE` et `src_all_workloads=TRUE`, car
 elle consomme alors l'ensemble des workloads managés du PCE.
 
-Le rapport ajoute aussi `Kear Remote`, `Direction`, `Rule Category` et la
-colonne `rule_description` provenant de `rules_inventory.csv`. En mode
+Le rapport complet permet aussi d'afficher `Kear Remote` ; `Direction`,
+`Rule Category` et `rule_description` restent dans le mode par défaut. En mode
 Microcosmos, les rôles seuls et `All workloads` sont interprétés dans le
 scope de la ruleset. Une application explicite
 différente est résolue par son `Module` et son environnement dans l'extract
@@ -574,8 +650,9 @@ modules rattachés au même Kear sont considérés `intra-app`. Les rulesets
 utilisant une IP List `ZNOT_*` sont `strategic_rule`; les autres sont
 `business_rule`.
 
-Les colonnes d'identité (`Kear Id`, `Module`, `Application Name`, `Account`,
-`app`) restent celles de l'application Microcosmos évaluée sur chaque ligne.
+Les colonnes d'identité (`Kear Id (Scope)`, `Module (Scope)`,
+`Application Name (Scope)`, `Account`, `illumio label app (Scope)`) restent
+celles de l'application Microcosmos évaluée sur chaque ligne.
 Une règle peut donc apparaître pour une application différente de celle du
 `ruleset_scope` lorsqu'elle est sélectionnée en Source ou Destination.
 Avec `unscoped_consumers=TRUE`, une application sélectionnée par le groupe en
@@ -630,7 +707,7 @@ seuls ne permettent pas de déduire un Kear : sa résolution reste signalée
 comme indisponible lorsqu'aucune application distante n'est identifiée.
 Ces champs restent facultatifs pour lire les exports plus anciens.
 
-La colonne **`Number of impacted App servers (scope)`** compte les lignes de
+La colonne **`Number impacted App servers (Scope)`** compte les lignes de
 serveurs managed concernées dans le scope applicatif, pour toutes les règles
 de l'onglet `Business Rules`, y compris les `strategic_rule`.
 Le référentiel est `var/raw/snapshot/export_wklds.csv` en priorité, avec repli
@@ -695,7 +772,7 @@ La colonne est présente dans le rapport standard et dans les classeurs par
 Entity/Kear ID. Pour l'afficher avec un profil personnalisé existant, ajouter :
 
 ```ini
-[Number of impacted App servers (scope)]
+[Number impacted App servers (Scope)]
 visibility = true
 ```
 

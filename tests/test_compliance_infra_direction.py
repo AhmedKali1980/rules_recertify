@@ -155,12 +155,12 @@ class InfraAppgroupDirectionTest(unittest.TestCase):
             output = root / "report.xlsx"
             for custom in (None, profile):
                 with self.subTest(profile=custom):
-                    generate_compliance_workbook(root, output, (), source, custom_headers_path=custom)
+                    generate_compliance_workbook(root, output, (), source, custom_headers_path=custom, debug=custom is None)
                     with closing(load_workbook(output)) as report:
                         values = list(report["Infra Rules"].values)
                         rows = [dict(zip(values[0], row)) for row in values[1:]]
                         self.assertEqual([row["Direction"] for row in rows], ["outgoing", "incoming"])
-                        self.assertEqual([row["Kear Id"] for row in rows], ["K-LOCAL", "K-LOCAL"])
+                        self.assertEqual([row["Kear Id (Scope)"] for row in rows], ["K-LOCAL", "K-LOCAL"])
                         self.assertEqual([row["services"] for row in rows], ["SSH (22 TCP)", "All Services"])
                         self.assertEqual(report["Summary"]["D10"].value, 0)
                         if custom is None:

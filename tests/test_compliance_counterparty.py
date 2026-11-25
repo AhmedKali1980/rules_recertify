@@ -156,16 +156,17 @@ class ComplianceCounterpartyTest(unittest.TestCase):
                         book.active.append([row.get(column, "") for column in MICROCOSMOS_COLUMNS])
                     book.save(source)
                     book.close()
-                    output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source)
+                    output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source, debug=True)
                     with closing(load_workbook(output, read_only=True)) as report:
                         values = list(report["Business Rules"].values)
                         rows = [dict(zip(values[0], row)) for row in values[1:]]
                         self.assertEqual(len(rows), 2)
-                        by_module = {row["Module"]: row for row in rows}
+                        by_module = {row["Module (Scope)"]: row for row in rows}
                         for original in inputs:
                             actual = by_module[original["Module"]]
-                            for field in ("Kear Id", "Application Name", "Account", "app"):
-                                self.assertEqual(actual[field], original[field])
+                            for field, header in (("Kear Id", "Kear Id (Scope)"), ("Application Name", "Application Name (Scope)"),
+                                                  ("Account", "Account"), ("app", "illumio label app (Scope)")):
+                                self.assertEqual(actual[header], original[field])
                             self.assertEqual(actual["rule_href"], self.rule["rule_href"])
                         arcos = by_module[self.arcos["Module"]]
                         self.assertEqual(arcos["Direction"], "outgoing")

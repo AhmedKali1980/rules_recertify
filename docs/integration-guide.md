@@ -994,12 +994,21 @@ intra-app rules use the union of both sides. Each workload CSV row contributes
 at most once to that union.
 
 Exception: when `ruleset_scope` is empty or whitespace-only and `ruleset_name`
-contains `OUTBOUND2APA` (case-insensitive), the count uses Source app/env/roles
-directly, including its label groups and role exclusions. Destination, the
-Microcosmos input application and the displayed Direction do not replace Source
-for this calculation. Both app and env must be resolved from Source; otherwise
-the count displays `undefined`. A nonempty scope always retains the normal
-calculation.
+contains `OUTBOUND2APA` (case-insensitive), count the union of managed workload
+rows selected by Source and Destination. Keep each side's app/env/role filters,
+label groups and exclusions together; do not mix labels across sides. A CSV
+row selected on both sides contributes once. The workload reference's
+`managed=true` flag determines which rows are counted.
+
+This rule total includes a managed Destination even when it violates the
+OUTBOUND2APA convention, independently of the displayed Direction or evaluated
+Microcosmos application. Each side with an app selector must provide resolvable
+app/env and role selectors; otherwise display `undefined` rather than a partial
+total. Sides without an app selector, such as IP Lists, do not imply every
+managed workload; no app on either side leaves the total `undefined`. No
+included role selects all roles within that side's app/env. A nonempty scope
+retains the normal calculation. Direction and the
+`OUTBOUND2APA_DESTINATION_MANAGED` warning retain their existing behavior.
 
 `All workloads` or no included role selects the full app/env scope on that side.
 Role exclusions are applied separately to each side

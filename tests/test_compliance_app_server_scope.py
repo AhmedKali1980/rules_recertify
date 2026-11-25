@@ -39,6 +39,7 @@ class AppServerScopeTest(unittest.TestCase):
             ("A", "UAT", "WEB", "true"), ("AX", "PRD", "WEB", "true"),
             ("B", "PRD", "DB", "true"),
             ("A", "", "DB", "true"),
+            ("APA_EXTERNAL", "PRD", "DB", "false"),
         ]
         self.write_csv(self.workloads, ("app", "env", "role", "managed"), [
             dict(zip(("app", "env", "role", "managed"), row)) for row in rows
@@ -196,7 +197,54 @@ class AppServerScopeTest(unittest.TestCase):
         self.assertEqual(self.count("outgoing", **{**changes, "src_labels": "env:PRD;rolegroup:ROLES",
                                                   "src_label_groups": "APPS", "src_labels_exclusions": ""}), 4)
 
-    def test_source_fallback_requires_empty_scope_outbound2apa_and_resolvable_source(self):
+    def test_outbound2apa_counts_managed_destination_or_both_endpoints_without_duplicates(self):
+        changes = {"ruleset_scope": " \t", "ruleset_name": "APP_outbound2apa_PRD",
+                   "src_labels": "app:B;env:PRD;role:DB", "dst_labels": "app:A;env:PRD;role:DB"}
+        for direction in ("incoming", "outgoing", "intra-app", "undetermined"):
+            with self.subTest(direction=direction):
+                self.assertEqual(self.count(direction, **changes), 3)
+        self.assertEqual(self.count("incoming", category="strategic_rule", **changes), 3)
+        for source in ("", "app:APA_EXTERNAL;env:PRD;role:DB"):
+            self.assertEqual(self.count("incoming", **{**changes, "src_labels": source, "src_iplists": "EXTERNAL"}), 2)
+        # Identical selectors count the two matching CSV rows once each, not four.
+        self.assertEqual(self.count("intra-app", **{**changes, "src_labels": "app:A;env:PRD;role:DB"}), 2)
+        self.assertEqual(self.count("incoming", **{**changes, "src_labels": "app:APA_EXTERNAL;env:PRD",
+                                                  "dst_labels": "app:A;env:PRD;role:MISSING"}), 0)
+
+    def test_outbound2apa_union_preserves_each_sides_app_env_roles_and_exclusions(self):
+        changes = {"ruleset_scope": "", "ruleset_name": "OUTBOUND2APA",
+                   "src_labels": "app:A;env:UAT;role:WEB", "dst_labels": "app:B;env:PRD;role:DB"}
+        self.assertEqual(self.count("outgoing", **changes), 2)
+        self.assertEqual(self.count("outgoing", **{**changes, "src_labels": "app:A;env:PRD;role:DB",
+                                                  "dst_labels": "app:A;env:UAT;role:WEB"}), 3)
+        overlapping = {**changes, "src_labels": "app:A;env:PRD;role:WEB;role:DB",
+                       "dst_labels": "app:A;env:PRD;role:DB;role:OLD"}
+        self.assertEqual(self.count("intra-app", **overlapping), 5)
+        self.assertEqual(self.count("intra-app", **{**overlapping, "src_labels_exclusions": "role:DB"}), 5)
+        self.assertEqual(self.count("intra-app", **{**overlapping, "src_labels_exclusions": "role:DB",
+                                                   "dst_labels_exclusions": "role:DB"}), 3)
+        all_source = {**changes, "src_labels": "app:A;env:PRD", "src_all_workloads": "true",
+                      "src_labels_exclusions": "role:OLD", "dst_labels": "app:A;env:PRD;role:OLD"}
+        self.assertEqual(self.count("intra-app", **all_source), 6)
+        self.assertEqual(self.count("intra-app", **{**all_source, "dst_labels_exclusions": "role:OLD"}), 4)
+        grouped = {**changes, "src_labels": "env:PRD;rolegroup:ROLES", "src_label_groups": "APPS",
+                   "dst_labels": "app:A;env:PRD;role:DB"}
+        self.assertEqual(self.count("intra-app", **grouped), 4)
+        self.assertEqual(self.count("intra-app", **{**grouped, "src_labels_exclusions": "app:B"}), 3)
+        self.assertEqual(self.count("outgoing", **{**changes, "src_labels": "app:A;env:PRD;env:UAT;role:WEB",
+                                                  "src_labels_exclusions": "env:PRD"}), 2)
+
+    def test_outbound2apa_unresolved_endpoint_does_not_produce_partial_total(self):
+        changes = {"ruleset_scope": "", "ruleset_name": "OUTBOUND2APA",
+                   "src_labels": "app:A;env:PRD;role:WEB"}
+        for destination in ("appgroup:UNKNOWN;env:PRD", "app:B", "app:B;env:null",
+                            "app:B;env:PRD;rolegroup:UNKNOWN"):
+            with self.subTest(destination=destination):
+                self.assertIsNone(self.count("outgoing", **{**changes, "dst_labels": destination}))
+        self.assertIsNone(self.count("incoming", **{**changes, "src_labels": "app:A",
+                                                   "dst_labels": "app:B;env:PRD;role:DB"}))
+
+    def test_endpoint_fallback_requires_empty_scope_outbound2apa_and_resolvable_app_filters(self):
         changes = {"ruleset_scope": "", "ruleset_name": "OUTBOUND2APA",
                    "src_labels": "app:B;env:PRD;role:DB"}
         # A nonempty scope retains the ordinary scope/direction calculation.
@@ -232,6 +280,17 @@ class AppServerScopeTest(unittest.TestCase):
                  dst_labels="app:APA_EXTERNAL;env:PRD"),
             dict(base, rule_href="outbound-incoming-source", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
                  src_labels="app:B;env:PRD;role:DB", dst_labels="app:A;env:PRD;role:OLD"),
+            dict(base, rule_href="outbound-destination-only", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
+                 src_labels="app:APA_EXTERNAL;env:PRD;role:DB", dst_labels="app:A;env:PRD;role:DB"),
+            dict(base, rule_href="outbound-overlap", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
+                 src_labels="app:A;env:PRD;role:WEB;role:DB", dst_labels="app:A;env:PRD;role:DB;role:OLD"),
+            dict(base, rule_href="outbound-overlap-excluded", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
+                 src_labels="app:A;env:PRD", src_all_workloads="true", src_labels_exclusions="role:OLD",
+                 dst_labels="app:A;env:PRD;role:OLD"),
+            dict(base, rule_href="outbound-unresolved", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
+                 src_labels="app:A;env:PRD;role:WEB", dst_labels="appgroup:UNKNOWN;env:PRD"),
+            dict(base, rule_href="outbound-zero", ruleset_name="APP_OUTBOUND2APA_PRD", ruleset_scope="",
+                 src_labels="app:APA_EXTERNAL;env:PRD", dst_labels="app:A;env:PRD;role:MISSING"),
             dict(base, rule_href="all-env-outgoing", ruleset_scope="app:A", src_labels="app:A;env:PRD;role:WEB",
                  dst_labels="", dst_iplists="EXTERNAL"),
             dict(base, rule_href="all-env-incoming", ruleset_scope="app:A", dst_labels="app:A;env:PRD;role:DB",
@@ -257,7 +316,9 @@ class AppServerScopeTest(unittest.TestCase):
         expected = {"outgoing": 1, "incoming": 2, "intra": 3, "all": 6, "no-role": 6,
                     "excluded": 1, "zero": 0, "strategic": 1, "unknown": "undefined",
                     "strategic-unknown": "undefined",
-                    "outbound-source": 2, "outbound-source-excluded": 1, "outbound-incoming-source": 1,
+                    "outbound-source": 2, "outbound-source-excluded": 1, "outbound-incoming-source": 3,
+                    "outbound-destination-only": 2, "outbound-overlap": 5, "outbound-overlap-excluded": 6,
+                    "outbound-unresolved": "undefined", "outbound-zero": 0,
                     "all-env-outgoing": 2, "all-env-incoming": 3, "all-env-intra": 5,
                     "all-env-all": 8, "all-env-excluded": 2}
         with closing(load_workbook(output)) as report:
@@ -268,6 +329,8 @@ class AppServerScopeTest(unittest.TestCase):
             self.assertIsInstance(rows["outgoing"][IMPACTED_APP_SERVERS], int)
             self.assertEqual(rows["outbound-source"]["Direction"], "outgoing")
             self.assertEqual(rows["outbound-incoming-source"]["Direction"], "incoming")
+            self.assertEqual(rows["outbound-destination-only"]["Direction"], "incoming")
+            self.assertIn("OUTBOUND2APA_DESTINATION_MANAGED", rows["outbound-destination-only"]["Warning"])
             for name in ("Infra Rules", "Data Quality"):
                 values = list(report[name].values)
                 self.assertTrue(all(row[values[0].index(IMPACTED_APP_SERVERS)] is None for row in values[1:]))
@@ -317,6 +380,10 @@ class AppServerScopeTest(unittest.TestCase):
         with closing(load_workbook(output)) as report:
             values = list(report["Business Rules"].values)
             self.assertEqual(values[1][values[0].index(IMPACTED_APP_SERVERS)], 1)
+            rows = {row[values[0].index("rule_href")]: dict(zip(values[0], row)) for row in values[1:]}
+            self.assertEqual(rows["outbound-destination-only"][IMPACTED_APP_SERVERS], 2)
+            self.assertEqual(rows["outbound-overlap"][IMPACTED_APP_SERVERS], 5)
+            self.assertEqual(rows["outbound-unresolved"][IMPACTED_APP_SERVERS], "undefined")
         source.write_text(f"app,env,Kear Id,Entity,{IMPACTED_APP_SERVERS}\nA,PRD,K-A,E1,999\n")
         generate_compliance_workbook(self.root, output, (), source)
         with closing(load_workbook(output)) as report:

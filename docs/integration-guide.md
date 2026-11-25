@@ -814,7 +814,7 @@ To restrict the displayed columns, explicitly select an INI visibility profile:
 
 The three presentation modes are:
 
-- No mode option: the PO's 36 business columns in their prescribed order,
+- No mode option: the PO's 38 business columns in their prescribed order,
   from `Kear Id (Scope)` through `PORTS_ADMIN Last Hit`.
 - `--debug`: every available detail column, including diagnostics and extra
   input metadata, with no hidden Excel columns.
@@ -891,10 +891,15 @@ an unsupported/missing href leaves this field blank.
 
 Business Rules and Infra Rules sort by `Kear Id (Scope)`, `Module (Scope)`, then
 `illumio label env (Scope)`. Sorting precedes visibility projection, including
-when a custom profile omits all sort columns. Six coordinated blue header/body
-bands distinguish scope identity and server impact; rule details and endpoints;
+when a custom profile omits all sort columns. Restore the table's alternating
+row bands, with two alternating blue header shades across the six groups:
+scope identity and server impact; rule details and endpoints;
 exposure/usage; To Control hits; To Eradicate hits; and Admin hits. Group colors
 follow column names rather than their displayed positions.
+
+Default mode includes `Source contains User` and `Destination contains User`
+immediately after `rule_type`, retaining their existing calculations and custom
+profile visibility behavior.
 
 Disabled rules receive a light grey background across the entire row, taking
 priority over other cell backgrounds. This remains effective when the profile
@@ -903,12 +908,16 @@ counter header is `Number of impacted App servers (Scope)`; the previous name
 without "of" remains an accepted profile alias.
 
 `iplists` lists only IP Lists used by the workbook's rules, reading `name`,
-`include`, `exclude`, `fqdns` from `snapshot/export_iplists.csv`. Original values,
-including comments and FQDNs, remain intact and do not trigger network lookups.
+`include`, `exclude`, `fqdns` from `snapshot/export_iplists.csv`. Strip `#...`
+comments from include/exclude entries in the report only, keeping the address
+or subnet before the comment. For example, `192.168.10.2#MONSERVEUR` becomes
+`192.168.10.2`. Source CSVs remain unchanged. FQDNs do not trigger network lookups.
 Preserve literal parentheses in names; strip only an optional appended Illumio
-IP List href annotation. Sort rows by name. Display include/exclude entries on
-separate lines, preserving each entry and its comments; row heights adjust for
-wrapped multiline content.
+IP List href annotation. Sort rows by name. Display include/exclude and FQDN
+entries on separate lines. Fit visible columns in both reference sheets using
+the longest individual line across all rows, rather than a sample or the whole
+multiline cell. Adjust row heights to the resulting multiline content, within
+Excel's column-width/row-height limits, to avoid unnecessary word wrapping.
 
 `workloads` lists only matching **managed** workload rows from
 `snapshot/export_wkld.csv` (plural filename fallback). Columns are `app`, `env`,

@@ -687,11 +687,9 @@ def _write_compliance_sheet(
     pale_amber, amber = "FFF2DA", "B35D0A"
     pale_blue, blue = "E2EDF7", "0B6B8B"
     grey = "ECECEC"
-    header_blues = ("1E4669", "255477", "2C6185", "336D93", "3B799F", "235B82")
-    body_blues = ("EDF3F9", "E6EFF7", "F1F6FB", "E8F1FA", "DFEBF7", "EAF2FB")
+    header_blues = (navy, "255477")
     grey_fill = PatternFill("solid", fgColor=grey)
-    body_fills = {color: PatternFill("solid", fgColor=color) for color in body_blues}
-    group_colors = {name: (heading, body) for group, heading, body in zip(COLUMN_GROUPS, header_blues, body_blues)
+    group_colors = {name: header_blues[index % 2] for index, group in enumerate(COLUMN_GROUPS)
                     for name in group} if sheet_name in DETAIL_SHEETS else {}
     disabled_rows = [index for index, row in enumerate(rows, 2) if row.get(RULE_STATUS) == "Disabled"]
     disabled_set = set(disabled_rows)
@@ -712,7 +710,7 @@ def _write_compliance_sheet(
     vertical_side = Side(style="thin", color="D5DEE9")
     vertical_border = Border(left=vertical_side, right=vertical_side)
     for cell in sheet[1]:
-        cell.fill = PatternFill("solid", fgColor=group_colors.get(cell.value, (navy, ""))[0])
+        cell.fill = PatternFill("solid", fgColor=group_colors.get(cell.value, navy))
         cell.font = Font(name="Aptos", size=10, bold=True, color=white)
         cell.alignment = Alignment(vertical="center", wrap_text=True, indent=1)
         cell.border = vertical_border
@@ -723,8 +721,6 @@ def _write_compliance_sheet(
             cell.border = vertical_border
             if row_number in disabled_set:
                 cell.fill = grey_fill
-            elif headers[cell.column - 1] in group_colors:
-                cell.fill = body_fills[group_colors[headers[cell.column - 1]][1]]
             if headers[cell.column - 1] == RULE_ID:
                 cell.number_format = "@"
                 cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
@@ -745,17 +741,27 @@ def _write_compliance_sheet(
         IMPACTED_APP_SERVERS: 24,
     }
     for index, header in enumerate(headers, 1):
-        values = [len(str(row.get(header, "") or "")) for row in rows[:250]]
-        width = preferred_widths.get(header, min(max([len(header), *values]) + 2, 36))
-        sheet.column_dimensions[sheet.cell(1, index).column_letter].width = width
+        dimension = sheet.column_dimensions[get_column_letter(index)]
+        if sheet_name in REFERENCE_HEADERS:
+            # Fit individual displayed entries, rather than the whole multiline
+            # cell, and inspect every row so later long values are not missed.
+            longest = max((len(line) for row in rows
+                           for line in str(row.get(header, "") or "").splitlines()), default=0)
+            width = min(255, max(10, max(len(header), longest) + 3))
+            dimension.bestFit = True
+        else:
+            values = [len(str(row.get(header, "") or "")) for row in rows[:250]]
+            width = preferred_widths.get(header, min(max([len(header), *values]) + 2, 36))
+        dimension.width = width
 
-    if sheet_name == "iplists":
-        for name in ("name", "include", "exclude"):
-            if name in headers:
-                sheet.column_dimensions[get_column_letter(headers.index(name) + 1)].width = 52
+    if sheet_name in REFERENCE_HEADERS:
         for index in range(2, sheet.max_row + 1):
-            lines = max((sum(max(1, (len(line) + 51) // 52) for line in str(cell.value or "").split("\n"))
-                         for cell in sheet[index]), default=1)
+            lines = 1
+            for cell in sheet[index]:
+                capacity = max(1, int(sheet.column_dimensions[cell.column_letter].width) - 2)
+                wrapped = sum(max(1, (len(line) + capacity - 1) // capacity)
+                              for line in str(cell.value or "").splitlines())
+                lines = max(lines, wrapped)
             sheet.row_dimensions[index].height = min(409, max(30, 14 * lines + 6))
 
     if disabled_rows:

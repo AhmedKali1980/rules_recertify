@@ -630,6 +630,51 @@ seuls ne permettent pas de déduire un Kear : sa résolution reste signalée
 comme indisponible lorsqu'aucune application distante n'est identifiée.
 Ces champs restent facultatifs pour lire les exports plus anciens.
 
+La colonne **`Number of impacted App servers (scope)`** compte les lignes de
+serveurs managed concernées dans le scope applicatif, pour toutes les règles
+de l'onglet `Business Rules`, y compris les `strategic_rule`.
+Le référentiel est `var/raw/snapshot/export_wklds.csv` en priorité, avec repli
+sur le nom historique `export_wkld.csv`. Il doit fournir `app`, `env`, `role`
+et `managed`. Seules les lignes avec `managed=true` et les valeurs app/env de
+`ruleset_scope` sont retenues ; l'application de la ligne Microcosmos ou du
+peer distant ne remplace pas ce scope.
+
+| Direction | Filtre de rôles local |
+| --- | --- |
+| `incoming` | Rôles de Destination |
+| `outgoing` | Rôles de Source |
+| `intra-app` | Union des rôles Source et Destination, chaque ligne comptée une seule fois |
+
+`All workloads` ou l'absence de rôle inclus sélectionne tous les serveurs du
+scope sur ce côté. Les exclusions de rôles s'appliquent à chaque côté avant
+l'union ; une exclusion Source n'exclut donc pas un serveur encore sélectionné
+en Destination. Les groupes applicatifs/environnement/rôles connus sont résolus
+depuis `export_labelgroups.csv`, y compris les groupes imbriqués dont tous les
+membres sont connus. Un groupe non résolu ou seulement partiellement
+développé ne devient pas un filtre « tous les rôles ».
+
+**0** indique un calcul possible sans serveur correspondant. Une cellule vide
+indique un calcul indisponible (export absent/invalide/illisible, app/env du scope
+non résolvable, direction indéterminée ou groupe de rôles incomplet).
+Les lignes `Infra Rules` et `Data Quality` ne sont pas calculées pour cet indicateur.
+Le rapport reste généré si le référentiel workloads est indisponible, avec un
+avertissement dans les logs. Les lignes du CSV sont comptées, sans déduplication
+par nom de serveur ; l'union des rôles évite seulement de compter une même ligne
+à la fois comme Source et Destination.
+
+La colonne est présente dans le rapport standard et dans les classeurs par
+Entity/Kear ID. Pour l'afficher avec un profil personnalisé existant, ajouter :
+
+```ini
+[Number of impacted App servers (scope)]
+visibility = true
+```
+
+Elle respecte ensuite les mêmes règles de visibilité et apparaît dans
+`Report Configuration`. Le fichier d'exemple active déjà cette colonne ; les
+profils locaux conservés lors des mises à jour restent des listes explicites
+de colonnes à afficher.
+
 Pour une règle sans scope dont le nom contient `OUTBOUND2APA`, la direction
 reflète les extrémités réelles, même si elles ne respectent pas la convention
 managed en Source et unmanaged en Destination. Une application managed en

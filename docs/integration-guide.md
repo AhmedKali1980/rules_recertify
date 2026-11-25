@@ -973,6 +973,46 @@ Explicit `src_workloads` and `dst_workloads` selectors remain part of the
 calculations and appear as `workload:<name>` in `Source` and `Destination`.
 They do not create dedicated output columns; older snapshots without these
 optional input fields remain supported.
+
+The numeric **`Number of impacted App servers (scope)`** column covers every
+matched row in `Business Rules`, including strategic rules. It reads
+`raw_dir/snapshot/export_wklds.csv`, falling back to the deployed filename
+`export_wkld.csv` only when the plural file is absent. The export must contain
+`app`, `env`, `role` and `managed`. Only managed rows matching the app/env values
+of `ruleset_scope` are counted; the evaluated Microcosmos application does not
+replace that scope.
+
+Incoming rules use Destination roles, outgoing rules use Source roles, and
+intra-app rules use the union of both sides. Each workload CSV row contributes
+at most once to that union. `All workloads` or no included role selects the full
+app/env scope on that side. Role exclusions are applied separately to each side
+before the union: a row excluded from Source can still be counted if selected
+in Destination. Role/app/env groups use the existing label-group reference,
+including nested groups with fully known members. Incomplete, unresolved or
+cyclic group selections leave the count blank.
+
+Zero means the reference and selection are usable but no managed rows match.
+Blank means unavailable or not applicable: missing/unreadable/invalid reference,
+missing or unresolved app/env scope, undetermined direction, unresolved role
+selectors, infrastructure rows or unmatched Data Quality rows. A valid
+header-only export represents zero managed rows. Invalid references do not
+produce partial counts or prevent the rest of the report from being generated;
+the reason is logged. Counts use CSV rows, without deduplicating hostname/href.
+Labels are matched exactly after case/inline-reference normalization.
+
+The standard report includes this column. It is also carried into the per-Kear
+workbooks and can be shown/hidden with the existing custom profile:
+
+```ini
+[Number of impacted App servers (scope)]
+visibility = true
+```
+
+The shipped profile enables it. Existing local profiles remain preserved and
+must explicitly add this section to display a new column. `Report Configuration`
+tracks its visibility, and Summary explains the direction filters and blank/zero
+distinction without changing the existing traffic metrics.
+
 When an app-group-scoped rule is discovered through an explicit source
 application and its destination is `All workloads`, direction is evaluated
 relative to the application that caused the match and is `outgoing`. The

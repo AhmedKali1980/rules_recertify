@@ -14,6 +14,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from ..history.database import Database
 from ..workloader.csvio import parse_bool, read_rows
+from .app_server_scope import (
+    IMPACTED_APP_SERVERS, AppServerScopeIndex, RoleSelection,
+    load_app_server_scope_index, normalized_label,
+)
 from .dangerous_ports import PORT_CATALOGS, _catalog_interval, dangerous_ports
 from .compliance_layout import CONFIGURATION_SHEET, ComplianceLayout, load_compliance_layout
 from .microcosmos import _safe_component
@@ -75,6 +79,7 @@ def generate_compliance_workbook(
     ]
     groups = list(read_rows(snapshot / "export_labelgroups.csv", LABEL_GROUP_FIELDS))
     group_index = _label_group_index(groups)
+    app_servers = load_app_server_scope_index(snapshot)
     services, _ = _load_report_services(raw_dir)
     report_catalogs = tuple(dict.fromkeys((*dangerous_port_lists, *PORT_CATALOGS)))
     usage_by_rule = database.compliance_usage() if database is not None else {}
@@ -96,10 +101,12 @@ def generate_compliance_workbook(
             [*MICROCOSMOS_COLUMNS, "app"]
             if "Program (MIO)" in input_columns else input_columns
         )
-        input_values = {column: input_row.get(column, "") for column in primary_columns}
+        input_values = {column: input_row.get(column, "") for column in primary_columns
+                        if column.casefold() != IMPACTED_APP_SERVERS.casefold()}
         extra_values = {
             column: input_row.get(column, "")
             for column in input_columns if column not in primary_columns
+            and column.casefold() != IMPACTED_APP_SERVERS.casefold()
         }
         if not matched:
             rows.append({
@@ -112,6 +119,7 @@ def generate_compliance_workbook(
                     "rule_description", "rule_enabled", "rule_href",
                 )},
                 "Source": "", "Destination": "",
+                IMPACTED_APP_SERVERS: None,
                 "Source contains User": "FALSE",
                 "Destination contains User": "FALSE",
                 "services": "",
@@ -147,6 +155,7 @@ def generate_compliance_workbook(
                 "rule_href": rule["rule_href"],
                 "Source": source,
                 "Destination": destination,
+                IMPACTED_APP_SERVERS: _impacted_app_server_count(rule, enrichment, app_servers, group_index),
                 "Source contains User": str(
                     source_kind == "iplist" and _contains_user_iplist(source)
                 ).upper(),
@@ -249,6 +258,104 @@ def _write_split_compliance_archive(
                 archive.write(target, arcname=member.as_posix())
         temporary.replace(output)
     return output
+
+
+def _scope_server_group_values(
+    group: Mapping[str, object], dimension: str, group_index: Mapping[str, Mapping[str, object]],
+    seen: frozenset[str] = frozenset(),
+) -> Optional[frozenset[str]]:
+    name = str(group["name"]).casefold()
+    if name in seen or group.get("key") != dimension:
+        return None
+    values = set(_group_member_values(name, dimension, group_index))
+    if not str(group.get("fully_expanded_members", "")).strip():
+        for reference in _parts(group.get("member_label_groups", "")):
+            child = group_index.get(_clean_label_group_reference(reference).casefold())
+            if child is None:
+                return None
+            members = _scope_server_group_values(child, dimension, group_index, seen | {name})
+            if members is None:
+                return None
+            values.update(members)
+    return frozenset(normalized_label(value, dimension) for value in values)
+
+
+def _scope_server_values(
+    labels_value: object, group_references: object, dimension: str,
+    group_index: Mapping[str, Mapping[str, object]],
+) -> Optional[Tuple[frozenset[str], bool]]:
+    """Resolve only the requested dimension, preserving an explicit empty set."""
+    labels = _labels(labels_value)
+    specified = bool(labels.get(dimension) or labels.get(dimension + "group"))
+    referenced_groups = []
+    for key in (dimension, dimension + "group"):
+        for value in labels.get(key, set()):
+            group = group_index.get(_clean_label_group_reference(value).casefold())
+            if key.endswith("group") and (not group or group.get("key") != dimension):
+                return None
+            if group and group.get("key") == dimension:
+                referenced_groups.append(group)
+    for reference in _parts(group_references):
+        group = group_index.get(_clean_label_group_reference(reference).casefold())
+        if group is None:
+            key = reference.partition(":")[0].strip().casefold()
+            if key in {"app", "appgroup", "env", "envgroup", "role", "rolegroup", "loc", "locgroup"}:
+                if key in {dimension, dimension + "group"}:
+                    return None
+            else:
+                return None
+        elif group.get("key") == dimension:
+            specified = True
+            referenced_groups.append(group)
+    expanded = _expanded_selector_labels(labels_value, group_references, group_index)
+    values = {normalized_label(value, dimension) for value in expanded.get(dimension, set())}
+    for group in referenced_groups:
+        members = _scope_server_group_values(group, dimension, group_index)
+        if members is None:
+            return None
+        values.update(members)
+    return frozenset(values), specified
+
+
+def _scope_server_roles(
+    rule: Mapping[str, str], prefix: str, group_index: Mapping[str, Mapping[str, object]],
+) -> Optional[RoleSelection]:
+    excluded = _scope_server_values(rule.get(f"{prefix}_labels_exclusions", ""),
+                                    rule.get(f"{prefix}_label_groups_exclusions", ""), "role", group_index)
+    if excluded is None:
+        return None
+    if parse_bool(rule.get(f"{prefix}_all_workloads", "")):
+        return RoleSelection(None, excluded[0])
+    included = _scope_server_values(rule.get(f"{prefix}_labels", ""),
+                                    rule.get(f"{prefix}_label_groups", ""), "role", group_index)
+    if included is None:
+        return None
+    return RoleSelection(included[0] if included[1] else None, excluded[0])
+
+
+def _impacted_app_server_count(
+    rule: Mapping[str, str], enrichment: Mapping[str, str], servers: Optional[AppServerScopeIndex],
+    group_index: Mapping[str, Mapping[str, object]],
+) -> Optional[int]:
+    if servers is None or enrichment["rule_category"] not in {"business_rule", "strategic_rule"}:
+        return None
+    prefixes = {"incoming": ("dst",), "outgoing": ("src",), "intra-app": ("src", "dst")}.get(
+        enrichment["direction"]
+    )
+    if prefixes is None:
+        return None
+    apps = _scope_server_values(rule.get("ruleset_scope", ""), "", "app", group_index)
+    envs = _scope_server_values(rule.get("ruleset_scope", ""), "", "env", group_index)
+    if apps is None or envs is None or not apps[1] or not envs[1] or "null" in apps[0] or "null" in envs[0]:
+        return None
+    selections = [_scope_server_roles(rule, prefix, group_index) for prefix in prefixes]
+    if any(selection is not None and selection.included is None and not selection.excluded
+           for selection in selections):
+        # Union with an unrestricted local side covers the complete app/env scope.
+        return servers.count(apps[0], envs[0], [RoleSelection()])
+    if any(selection is None for selection in selections):
+        return None
+    return servers.count(apps[0], envs[0], [selection for selection in selections if selection is not None])
 
 
 def _empty_usage_columns(catalogs: Sequence[str]) -> Dict[str, object]:
@@ -455,6 +562,18 @@ def _write_summary_sheet(
         sheet.row_dimensions[row_number].height = 32
         row_number += 1
 
+    row_number += 1
+    box(f"A{row_number}:M{row_number}", "APP SERVER IMPACT (SCOPE)", navy, white, 11, True)
+    row_number += 1
+    box(f"A{row_number}:C{row_number}", IMPACTED_APP_SERVERS, light, dark, 10, True)
+    box(f"D{row_number}:M{row_number}",
+        "Business and strategic rules: count managed workload rows matching the ruleset scope app/env. "
+        "Incoming uses Destination roles; outgoing uses Source roles; intra-app uses their union, "
+        "counting each row once. All workloads or no included role allows the full scope on that side; "
+        "role exclusions still apply. Zero means no matching rows; blank means unavailable or not applicable.",
+        light, dark, 10)
+    sheet.row_dimensions[row_number].height = 64
+
 
 def _write_compliance_sheet(
     workbook: object, rows: Sequence[Mapping[str, object]],
@@ -510,6 +629,7 @@ def _write_compliance_sheet(
     preferred_widths = {
         "rule_description": 55, "Source": 50, "Destination": 50, "services": 45,
         "Warning": 55, "ruleset_scope": 45, "rule_href": 48,
+        IMPACTED_APP_SERVERS: 24,
     }
     for index, header in enumerate(headers, 1):
         values = [len(str(row.get(header, "") or "")) for row in rows[:250]]

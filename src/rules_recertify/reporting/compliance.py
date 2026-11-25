@@ -15,7 +15,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from ..history.database import Database
 from ..workloader.csvio import parse_bool, read_rows
 from .app_server_scope import (
-    IMPACTED_APP_SERVERS, AppServerScopeIndex, RoleSelection,
+    IMPACTED_APP_SERVERS, AppServerScopeIndex, AppServerSelection, RoleSelection,
     load_app_server_scope_index, normalized_label,
 )
 from .dangerous_ports import PORT_CATALOGS, _catalog_interval, dangerous_ports
@@ -338,6 +338,34 @@ def _scope_server_roles(
     return RoleSelection(included[0] if included[1] else None, excluded[0])
 
 
+def _outbound2apa_app_server_count(
+    rule: Mapping[str, str], servers: AppServerScopeIndex,
+    group_index: Mapping[str, Mapping[str, object]],
+) -> Optional[int]:
+    selections = []
+    for prefix in ("src", "dst"):
+        labels = rule.get(f"{prefix}_labels", "")
+        groups = rule.get(f"{prefix}_label_groups", "")
+        apps = _scope_server_values(labels, groups, "app", group_index)
+        if apps is None:
+            return None
+        if not apps[1]:
+            # IP Lists or a side without an application cannot supply an app
+            # scope. Do not extrapolate it to every managed workload.
+            continue
+        envs = _scope_server_values(labels, groups, "env", group_index)
+        excluded_labels = rule.get(f"{prefix}_labels_exclusions", "")
+        excluded_groups = rule.get(f"{prefix}_label_groups_exclusions", "")
+        excluded_apps = _scope_server_values(excluded_labels, excluded_groups, "app", group_index)
+        excluded_envs = _scope_server_values(excluded_labels, excluded_groups, "env", group_index)
+        roles = _scope_server_roles(rule, prefix, group_index)
+        if (envs is None or not envs[1] or "null" in apps[0] or "null" in envs[0]
+                or excluded_apps is None or excluded_envs is None or roles is None):
+            return None
+        selections.append(AppServerSelection(apps[0] - excluded_apps[0], envs[0] - excluded_envs[0], roles))
+    return servers.count_union(selections) if selections else None
+
+
 def _impacted_app_server_count(
     rule: Mapping[str, str], enrichment: Mapping[str, str], servers: Optional[AppServerScopeIndex],
     group_index: Mapping[str, Mapping[str, object]],
@@ -346,23 +374,16 @@ def _impacted_app_server_count(
         return None
     scope = rule.get("ruleset_scope", "").strip()
     if not scope and "OUTBOUND2APA" in rule.get("ruleset_name", "").upper():
-        # Empty-scope OUTBOUND2APA counts Source directly, independently of
-        # the report row's direction or the Microcosmos input application.
-        labels = rule.get("src_labels", "")
-        groups = rule.get("src_label_groups", "")
-        prefixes = ("src",)
-    else:
-        labels, groups = scope, ""
-        prefixes = {"incoming": ("dst",), "outgoing": ("src",), "intra-app": ("src", "dst")}.get(
-            enrichment["direction"]
-        )
+        return _outbound2apa_app_server_count(rule, servers, group_index)
+    prefixes = {"incoming": ("dst",), "outgoing": ("src",), "intra-app": ("src", "dst")}.get(
+        enrichment["direction"]
+    )
     if prefixes is None:
         return None
-    apps = _scope_server_values(labels, groups, "app", group_index)
-    envs = _scope_server_values(labels, groups, "env", group_index)
+    apps = _scope_server_values(scope, "", "app", group_index)
+    envs = _scope_server_values(scope, "", "env", group_index)
     # A nonempty scope without an env selector covers every environment.
-    # An explicit but unresolved env, or missing Source env for the empty-scope
-    # OUTBOUND2APA exception, must not silently broaden the selection.
+    # An explicit but unresolved env must not silently broaden the selection.
     any_env = bool(scope) and not any(
         component.partition(":")[0].strip().casefold() in {"env", "envgroup"}
         for component in _parts(scope)
@@ -592,7 +613,8 @@ def _write_summary_sheet(
     box(f"D{row_number}:M{row_number}",
         "Business and strategic rules: count managed workload rows matching the ruleset scope app/env. "
         "A scope with app but no env covers all environments. "
-        "Empty-scope OUTBOUND2APA uses Source app/env/roles. Otherwise incoming uses Destination roles; "
+        "Empty-scope OUTBOUND2APA unions Source and Destination app/env/roles. "
+        "Otherwise incoming uses Destination roles; "
         "outgoing uses Source roles; intra-app uses their union, "
         "counting each row once. All workloads or no included role allows the full scope on that side; "
         "role exclusions still apply. Zero means no matching rows; undefined means the calculation is "

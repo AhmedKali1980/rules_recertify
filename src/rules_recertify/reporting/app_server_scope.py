@@ -33,6 +33,13 @@ class RoleSelection:
         return (self.included is None or role in self.included) and role not in self.excluded
 
 
+@dataclass(frozen=True)
+class AppServerSelection:
+    apps: FrozenSet[str]
+    envs: FrozenSet[str]
+    roles: RoleSelection
+
+
 class AppServerScopeIndex:
     def __init__(self, counts: Mapping[Tuple[str, str], Counter[str]]):
         self.counts = counts
@@ -40,6 +47,7 @@ class AppServerScopeIndex:
         for (app, _), roles in counts.items():
             self.all_env_counts[app].update(roles)
         self.cache: Dict[Tuple[FrozenSet[str], Optional[FrozenSet[str]], Tuple[RoleSelection, ...]], int] = {}
+        self.union_cache: Dict[FrozenSet[AppServerSelection], int] = {}
 
     def count(self, apps: Iterable[str], envs: Optional[Iterable[str]], selections: Sequence[RoleSelection]) -> int:
         """None selects all environments; an explicit empty set selects none."""
@@ -55,6 +63,22 @@ class AppServerScopeIndex:
                 if any(selection.matches(role) for selection in selections)
             )
         return self.cache[key]
+
+    def count_union(self, selections: Sequence[AppServerSelection]) -> int:
+        """Union independent app/env/role selections, counting each CSV row once."""
+        key = frozenset(selections)
+        if key not in self.union_cache:
+            by_scope: Dict[Tuple[str, str], set[RoleSelection]] = defaultdict(set)
+            for selection in key:
+                for app in selection.apps:
+                    for env in selection.envs:
+                        by_scope[(app, env)].add(selection.roles)
+            self.union_cache[key] = sum(
+                number for scope, roles in by_scope.items()
+                for role, number in self.counts.get(scope, {}).items()
+                if any(selection.matches(role) for selection in roles)
+            )
+        return self.union_cache[key]
 
 
 def load_app_server_scope_index(snapshot: Path) -> Optional[AppServerScopeIndex]:

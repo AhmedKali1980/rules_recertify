@@ -654,12 +654,22 @@ indisponible ; il ne devient pas un filtre « tous les environnements ».
 
 **Exception `OUTBOUND2APA` sans scope :** si `ruleset_scope` est vide (ou ne
 contient que des espaces) et que `ruleset_name` contient `OUTBOUND2APA`, sans
-tenir compte de la casse, le compteur utilise directement les app/env/role de
-Source, y compris ses groupes de labels et exclusions de rôles. Destination,
-l'application Microcosmos et la Direction de la ligne ne remplacent pas Source
-pour ce calcul. App et env doivent être résolus en Source ; sinon la cellule
-affiche `undefined`. Une règle `OUTBOUND2APA` avec un scope renseigné conserve
-le calcul normal ci-dessus.
+tenir compte de la casse, le compteur utilise l'union des serveurs managed
+sélectionnés en Source et en Destination. Chaque côté conserve ses propres
+app/env/role, groupes de labels et exclusions : les labels des deux côtés ne
+sont pas mélangés, et une ligne workloads sélectionnée des deux côtés ne compte
+qu'une fois. Le filtre `managed=true` vient du référentiel workloads.
+
+Ce total de la règle couvre donc aussi une Destination managed contraire à la
+convention interne, indépendamment de la Direction ou de l'application
+Microcosmos évaluée. Chaque côté portant un sélecteur d'app doit fournir app/env
+et rôles résolubles ; sinon la cellule affiche `undefined`, sans total partiel.
+Un côté sans sélecteur d'app (par exemple une IP List) n'est pas extrapolé à
+tous les serveurs ; si aucun côté ne fournit d'app, le total est `undefined`.
+L'absence de rôle inclus sélectionne tous les rôles de l'app/env de ce côté.
+Une règle `OUTBOUND2APA` avec un scope renseigné conserve le calcul normal
+ci-dessus. La Direction et l'avertissement `OUTBOUND2APA_DESTINATION_MANAGED`
+restent calculés selon les règles existantes.
 
 `All workloads` ou l'absence de rôle inclus sélectionne tous les serveurs du
 scope sur ce côté. Les exclusions de rôles s'appliquent à chaque côté avant

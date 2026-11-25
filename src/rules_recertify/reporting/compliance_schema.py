@@ -13,6 +13,7 @@ ALIASES = {
     "Module": "Module (Scope)", "app": "illumio label app (Scope)",
     "Environment": "illumio label env (Scope)", "env": "illumio label env (Scope)",
     "Number of impacted App servers (scope)": IMPACTED_APP_SERVERS,
+    "Number impacted App servers (Scope)": IMPACTED_APP_SERVERS,
 }
 DEFAULT_HEADERS = (
     "Kear Id (Scope)", "Application Name (Scope)", "Entity", "Module (Scope)",
@@ -30,6 +31,8 @@ ALL_HEADERS = (*DEFAULT_HEADERS, "Kear Remote", "Account", "Account Leader",
                "Match status", "Warning", "Global Consumer in use", "ruleset_name",
                "ruleset_scope", "ruleset_enabled", "rule_enabled", "rule_href",
                "Source contains User", "Destination contains User", "Protection type")
+COLUMN_GROUPS = (DEFAULT_HEADERS[:7], DEFAULT_HEADERS[7:16], DEFAULT_HEADERS[16:27],
+                 DEFAULT_HEADERS[27:30], DEFAULT_HEADERS[30:33], DEFAULT_HEADERS[33:36])
 REFERENCE_HEADERS = {
     "iplists": ("name", "include", "exclude", "fqdns"),
     "workloads": ("app", "env", "role", "loc", "OS", "hostname", "name", "managed", "enforcement",

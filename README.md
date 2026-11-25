@@ -463,6 +463,20 @@ Les noms des colonnes d'entrée Microcosmos restent inchangés. L'environnement
 Illumio résolu alimente la colonne env du rapport. Les identités absentes restent
 des colonnes présentes avec des cellules vides.
 
+`Business Rules` et `Infra Rules` sont triés par `Kear Id (Scope)`, puis
+`Module (Scope)`, puis `illumio label env (Scope)`. Les tris utilisent les
+informations complètes avant projection, même lorsque ces colonnes ne sont pas
+affichées dans un profil custom. Les entêtes et fonds de colonnes différencient
+six groupes par des nuances de bleu : identité/scope et compteur de serveurs ;
+description de règle et endpoints/services ; exposition et usage ; hits To Control ;
+hits To Eradicate ; hits Admin. Cette correspondance suit les noms de colonnes,
+indépendamment de leur position dans le profil.
+
+Les règles `Disabled` ont un fond gris clair sur toute la ligne, prioritaire sur
+les autres couleurs de cellule. Ce fond reste présent si le statut est omis du
+profil. Le nom corrigé du compteur est `Number of impacted App servers (Scope)` ;
+le précédent nom sans « of » reste un alias accepté dans les anciens profils.
+
 `rule_status (Enabled/Disabled)` vaut `Disabled` si `ruleset_enabled` ou
 `rule_enabled` vaut false, sinon `Enabled`. Une entrée sans règle correspondante
 n'a pas de statut. `rule-id` extrait les deux identifiants de `rule_href` :
@@ -538,7 +552,11 @@ récapitulative n'est pas ajoutée : les six onglets de données sont présents.
 `iplists` contient uniquement les IP Lists utilisées par les règles du classeur,
 avec `name`, `include`, `exclude`, `fqdns` provenant de
 `var/raw/snapshot/export_iplists.csv`. Le contenu, les commentaires et les FQDNs
-sont conservés sans résolution réseau.
+sont conservés sans résolution réseau. Les parenthèses font partie du nom :
+seul un éventuel href Illumio ajouté en suffixe est retiré lors de la résolution.
+Les lignes sont triées par `name`. Dans `include` et `exclude`, les séparateurs
+entre entrées deviennent des retours à la ligne, avec conservation des
+commentaires et ajustement de la hauteur des cellules pour la lecture.
 
 `workloads` contient uniquement les workloads **managed** correspondant aux
 sélections Source/Destination des règles du classeur : `app`, `env`, `role`,
@@ -551,6 +569,8 @@ Avec `unscoped_consumers=false`, les applications Source restent limitées au
 scope, comme pour la sélection des règles.
 Les sélecteurs workload explicites sont recherchés par name/hostname/href.
 Chaque ligne du référentiel sélectionnée plusieurs fois apparaît une seule fois.
+L'onglet est trié par `app`, `env`, `loc`, `OS`, `hostname`, `created_at`, dans cet
+ordre, même si certaines de ces colonnes ne sont pas affichées.
 Les références absentes ou invalides sont signalées dans les logs ; une IP List
 introuvable conserve son nom avec contenu vide.
 
@@ -707,7 +727,7 @@ seuls ne permettent pas de déduire un Kear : sa résolution reste signalée
 comme indisponible lorsqu'aucune application distante n'est identifiée.
 Ces champs restent facultatifs pour lire les exports plus anciens.
 
-La colonne **`Number impacted App servers (Scope)`** compte les lignes de
+La colonne **`Number of impacted App servers (Scope)`** compte les lignes de
 serveurs managed concernées dans le scope applicatif, pour toutes les règles
 de l'onglet `Business Rules`, y compris les `strategic_rule`.
 Le référentiel est `var/raw/snapshot/export_wklds.csv` en priorité, avec repli
@@ -772,7 +792,7 @@ La colonne est présente dans le rapport standard et dans les classeurs par
 Entity/Kear ID. Pour l'afficher avec un profil personnalisé existant, ajouter :
 
 ```ini
-[Number impacted App servers (Scope)]
+[Number of impacted App servers (Scope)]
 visibility = true
 ```
 

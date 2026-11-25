@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -14,6 +15,10 @@ from .compliance_schema import REFERENCE_HEADERS
 
 LOG = logging.getLogger(__name__)
 DIMENSIONS = ("app", "env", "role", "loc")
+
+
+def _ip_entries(value: str) -> str:
+    return "\n".join(part.strip() for part in re.split(r"[;\r\n]+", value) if part.strip())
 
 
 def _read_reference(snapshot: Path, names: Sequence[str], required: Sequence[str]) -> list[dict[str, str]]:
@@ -122,7 +127,8 @@ class ComplianceReferences:
                  for rule in self.rules.get(str(row.get("rule_href", "")), [])}
         used_ip_lists = {name.casefold(): name for rule in rules.values() for prefix in ("src", "dst")
                          for name in _iplist_names(rule.get(f"{prefix}_iplists", ""))} if "iplists" in self.enabled else {}
-        ip_rows = [{name: row.get(name, "") for name in REFERENCE_HEADERS["iplists"]}
+        ip_rows = [{name: _ip_entries(row.get(name, "")) if name in ("include", "exclude") else row.get(name, "")
+                    for name in REFERENCE_HEADERS["iplists"]}
                    for row in self.iplists if row["name"].casefold() in used_ip_lists]
         found = {row["name"].casefold() for row in ip_rows}
         for name in sorted(used_ip_lists.keys() - found):
@@ -137,4 +143,7 @@ class ComplianceReferences:
             row = self.workloads[number]
             workload_rows.append({**{name: row.get(name, "") for name in REFERENCE_HEADERS["workloads"]},
                                   "OS": row.get("OS") or row.get("os") or row.get("os_id", "")})
+        ip_rows.sort(key=lambda row: row["name"].casefold())
+        workload_rows.sort(key=lambda row: tuple(row[name].casefold() for name in
+                                               ("app", "env", "loc", "OS", "hostname", "created_at")))
         return {"iplists": ip_rows, "workloads": workload_rows}

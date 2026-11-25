@@ -889,9 +889,26 @@ status. `rule-id` extracts `<ruleset id>-<sec rule id>` from `rule_href`, such a
 `11155-101899`. It is stored as text and right-aligned, preserving leading zeros;
 an unsupported/missing href leaves this field blank.
 
+Business Rules and Infra Rules sort by `Kear Id (Scope)`, `Module (Scope)`, then
+`illumio label env (Scope)`. Sorting precedes visibility projection, including
+when a custom profile omits all sort columns. Six coordinated blue header/body
+bands distinguish scope identity and server impact; rule details and endpoints;
+exposure/usage; To Control hits; To Eradicate hits; and Admin hits. Group colors
+follow column names rather than their displayed positions.
+
+Disabled rules receive a light grey background across the entire row, taking
+priority over other cell backgrounds. This remains effective when the profile
+omits the status column, without adding hidden helper columns. The corrected
+counter header is `Number of impacted App servers (Scope)`; the previous name
+without "of" remains an accepted profile alias.
+
 `iplists` lists only IP Lists used by the workbook's rules, reading `name`,
 `include`, `exclude`, `fqdns` from `snapshot/export_iplists.csv`. Original values,
 including comments and FQDNs, remain intact and do not trigger network lookups.
+Preserve literal parentheses in names; strip only an optional appended Illumio
+IP List href annotation. Sort rows by name. Display include/exclude entries on
+separate lines, preserving each entry and its comments; row heights adjust for
+wrapped multiline content.
 
 `workloads` lists only matching **managed** workload rows from
 `snapshot/export_wkld.csv` (plural filename fallback). Columns are `app`, `env`,
@@ -903,6 +920,9 @@ not inherit it. With `unscoped_consumers=false`, Source application selectors
 remain restricted to the scope, as in rule matching. Explicit workload
 names/hostnames/hrefs are included when found.
 Each selected reference row appears once even if used by multiple rules.
+Sort by `app`, `env`, `loc`, `OS`, `hostname`, `created_at`, in that order, before
+reference-column visibility is applied. Text sort comparisons ignore case and
+equal keys retain their original order.
 Missing/invalid references log warnings; a missing IP List retains its name with
 empty contents instead of preventing report generation.
 
@@ -1034,7 +1054,7 @@ calculations and appear as `workload:<name>` in `Source` and `Destination`.
 They do not create dedicated output columns; older snapshots without these
 optional input fields remain supported.
 
-The numeric **`Number impacted App servers (Scope)`** column covers every
+The numeric **`Number of impacted App servers (Scope)`** column covers every
 matched row in `Business Rules`, including strategic rules. It reads
 `raw_dir/snapshot/export_wklds.csv`, falling back to the deployed filename
 `export_wkld.csv` only when the plural file is absent. The export must contain
@@ -1093,7 +1113,7 @@ The standard report includes this column. It is also carried into the per-Kear
 workbooks and can be shown/hidden with the existing custom profile:
 
 ```ini
-[Number impacted App servers (Scope)]
+[Number of impacted App servers (Scope)]
 visibility = true
 ```
 

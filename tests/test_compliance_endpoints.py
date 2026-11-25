@@ -117,7 +117,7 @@ class ComplianceEndpointTest(unittest.TestCase):
                         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
                         writer.writeheader()
                         writer.writerows([self.dhcp_rule, self.safir_rule, workload_rule])
-                    output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source)
+                    output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source, debug=True)
                     with closing(load_workbook(output, read_only=True)) as report:
                         values = list(report["Business Rules"].values)
                         rows = {row[values[0].index("rule_href")]: dict(zip(values[0], row)) for row in values[1:]}

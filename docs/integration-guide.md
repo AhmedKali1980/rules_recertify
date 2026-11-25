@@ -779,7 +779,7 @@ workbooks, for both `report` and `report-batch`.
 `compliance-report` evaluates the materialized `snapshot/rules_inventory.csv`.
 Without `--input`, every `app` entry in `snapshot/labels.csv` is evaluated.
 With `--input <csv-or-xlsx>`, the standard format requires `app` and accepts an
-optional `env`; all input columns are reproduced in the output. An absent `env`
+optional `env`; extra input columns remain available in debug/custom modes. An absent `env`
 matches the application in every environment. A Microcosmos XLSX can instead
 provide `Kear Id`, `Application Name`, `Module`, `Account`, `Account Leader`,
 `Microsegmentation Solution`, `Environment`, `Entity`, and the optional future
@@ -787,9 +787,11 @@ provide `Kear Id`, `Application Name`, `Module`, `Account`, `Account Leader`,
 comparison with the portion of each `labels.csv` app value after its second
 underscore (for example `X232223` resolves to `APM_L3.GBTO.EUR_X232223`). The
 Microcosmos environment is matched to `env`; one source row is expanded when a
-module resolves to more than one full app label. The output begins with the
-canonical Microcosmos columns, renames its program to `Program (MIO)`, then
-adds `app`, `Program (KPI)`, match status, and the existing compliance fields.
+module resolves to more than one full app label. Input column names remain
+unchanged. Output identity headers use `Kear Id (Scope)`, `Application Name (Scope)`,
+`Module (Scope)`, `illumio label app (Scope)` and `illumio label env (Scope)`.
+The env output uses the resolved Illumio environment. Standard identity columns
+remain present with blank values when not supplied by the input.
 The Microcosmos reader expects its native two-row header: it identifies the
 required fields on the first row, skips the second sub-header row, and ignores
 unrelated grouped columns (including merged cells with empty first-row names).
@@ -810,8 +812,16 @@ To restrict the displayed columns, explicitly select an INI visibility profile:
   --custom-headers config/headers.conf --out var/output/compliance-custom.xlsx
 ```
 
-The existing full report remains the default when `--custom-headers` is omitted;
-no visibility profile is read automatically. Use any explicit path, such as
+The three presentation modes are:
+
+- No mode option: the PO's 36 business columns in their prescribed order,
+  from `Kear Id (Scope)` through `PORTS_ADMIN Last Hit`.
+- `--debug`: every available detail column, including diagnostics and extra
+  input metadata, with no hidden Excel columns.
+- `--custom-headers PATH`: only enabled columns and worksheets from that profile.
+
+`--debug` and `--custom-headers` are mutually exclusive. No profile is read
+automatically in default/debug mode. Use any explicit path, such as
 `--custom-headers config/headers2.conf`, to select another profile. The supplied
 `config/headers.conf` enables all standard columns. To customize it, use exact
 report column names as section names:
@@ -831,8 +841,9 @@ Only columns explicitly set to `visibility = true` appear in `Business Rules`,
 `Infra Rules`, and `Data Quality`, retaining the normal report column order.
 Unlisted columns are hidden, including extra input metadata; add a section such
 as `[Owner]` when that column is present in the input and should be included.
-Optional Microcosmos identity columns and `env` are skipped when unavailable for
-the selected input. Other unknown names, missing/invalid visibility settings,
+Legacy detail header names remain accepted aliases, including the previous
+server-count header. Aliases for the same column must agree on visibility;
+output headers always use the new names. Unknown names, missing/invalid visibility settings,
 duplicate sections/options, unreadable files, or a selection with no available
 visible columns fail with a clear error before replacing an existing output.
 Files use UTF-8; a Windows UTF-8 BOM and CRLF line endings are supported.
@@ -858,8 +869,9 @@ visibility = true
 ```
 
 Supported sheet names are `Summary`, `Business Rules`, `Infra Rules`,
-`Data Quality` and `Report Configuration`. Unlisted sheets default to visible,
-so existing column-only profiles remain usable. Disabled sheets are omitted
+`Data Quality`, `iplists`, `workloads` and `Report Configuration`. Historical
+unlisted sheets default to visible. New reference sheets are opt-in in older
+profiles; the shipped template enables them. Disabled sheets are omitted
 entirely, rather than stored as hidden worksheets. At least one sheet must be
 visible. Detail sheets require at least one enabled available column; a
 summary/audit-only report does not.
@@ -868,8 +880,56 @@ summary/audit-only report does not.
 configured column/sheet visibility, availability, effective display and the
 reason for any omission. Columns absent from the selected input or unlisted in
 the profile are identified. The audit sheet itself defaults to visible and can
-be disabled explicitly. The default report without `--custom-headers` still has
-exactly its four existing sheets and does not read this configuration.
+be disabled explicitly. Default/debug reports contain six sheets, including both
+reference tabs, without the configuration audit.
+
+`rule_status (Enabled/Disabled)` is `Disabled` when either `ruleset_enabled` or
+`rule_enabled` is false, otherwise `Enabled`. Unmatched inputs have no rule
+status. `rule-id` extracts `<ruleset id>-<sec rule id>` from `rule_href`, such as
+`11155-101899`. It is stored as text and right-aligned, preserving leading zeros;
+an unsupported/missing href leaves this field blank.
+
+`iplists` lists only IP Lists used by the workbook's rules, reading `name`,
+`include`, `exclude`, `fqdns` from `snapshot/export_iplists.csv`. Original values,
+including comments and FQDNs, remain intact and do not trigger network lookups.
+
+`workloads` lists only matching **managed** workload rows from
+`snapshot/export_wkld.csv` (plural filename fallback). Columns are `app`, `env`,
+`role`, `loc`, `OS`, `hostname`, `name`, `managed`, `enforcement`, `created_at`,
+`ip_with_default_gw`, `external_data_reference`; `os_id` is accepted for `OS`.
+Source/Destination label combinations, known nested groups and exclusions are
+resolved independently. Scope fills omitted dimensions; unscoped consumers do
+not inherit it. With `unscoped_consumers=false`, Source application selectors
+remain restricted to the scope, as in rule matching. Explicit workload
+names/hostnames/hrefs are included when found.
+Each selected reference row appears once even if used by multiple rules.
+Missing/invalid references log warnings; a missing IP List retains its name with
+empty contents instead of preventing report generation.
+
+Reference column visibility uses qualified sections to avoid conflicts with
+detail aliases such as `app`:
+
+```ini
+[sheet:workloads]
+visibility = true
+
+[column:workloads:hostname]
+visibility = true
+
+[column:workloads:managed]
+visibility = true
+
+[sheet:iplists]
+visibility = true
+
+[column:iplists:name]
+visibility = true
+```
+
+Unlisted reference columns are omitted. Each enabled reference tab must have
+at least one visible column. The shipped template includes every standard
+detail/reference column and all worksheets. Local profiles remain preserved
+during upgrades: add new sections manually or use a new profile file.
 
 To generate a ZIP with one workbook per Entity/Kear ID pair, combine the options:
 
@@ -879,8 +939,8 @@ To generate a ZIP with one workbook per Entity/Kear ID pair, combine the options
   --custom-headers config/headers.conf --split-by-kear-id
 ```
 
-Splitting is independent of custom visibility: omit `--custom-headers` for full
-workbooks without the configuration audit. The archive defaults to
+Splitting works with all three modes. Each member's reference dictionaries cover
+only its own rules, even when detail sheets are disabled. The archive defaults to
 `<output_dir>/compliance_<UTC timestamp>.zip`, normally under `var/output`.
 With `--out`, supply an explicit `.zip` path. Archive members are named
 `<Entity>/compliance_<Kear ID>_<timestamp>.xlsx`, using the same timestamp.
@@ -925,8 +985,8 @@ meaning that an Extrascope rule consumes every managed workload in the PCE.
 In that critical case the `Warning` column reports `WARNING: Global Consumer
 applies the rule to all managed workloads in the PCE`.
 
-Every compliance export also includes `Kear Remote`, `Direction`, and
-`Rule Category`, and exposes the rule's `rule_description` directly from
+The complete/debug report also includes `Kear Remote`; all modes calculate
+`Direction`, `Rule Category`, and the rule's `rule_description` directly from
 `rules_inventory.csv`. In Microcosmos mode, the ruleset-scope application is local;
 roles without an explicit application and `All workloads` inherit that local
 scope. An explicit different application is resolved to a remote Kear by its
@@ -974,7 +1034,7 @@ calculations and appear as `workload:<name>` in `Source` and `Destination`.
 They do not create dedicated output columns; older snapshots without these
 optional input fields remain supported.
 
-The numeric **`Number of impacted App servers (scope)`** column covers every
+The numeric **`Number impacted App servers (Scope)`** column covers every
 matched row in `Business Rules`, including strategic rules. It reads
 `raw_dir/snapshot/export_wklds.csv`, falling back to the deployed filename
 `export_wkld.csv` only when the plural file is absent. The export must contain
@@ -1033,7 +1093,7 @@ The standard report includes this column. It is also carried into the per-Kear
 workbooks and can be shown/hidden with the existing custom profile:
 
 ```ini
-[Number of impacted App servers (scope)]
+[Number impacted App servers (Scope)]
 visibility = true
 ```
 

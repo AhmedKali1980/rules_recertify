@@ -312,7 +312,7 @@ class AppServerScopeTest(unittest.TestCase):
     def test_standard_custom_hidden_and_split_outputs_keep_numeric_counts(self):
         source = self.prepare_report()
         output = self.root / "standard.xlsx"
-        generate_compliance_workbook(self.root, output, (), source)
+        generate_compliance_workbook(self.root, output, (), source, debug=True)
         expected = {"outgoing": 1, "incoming": 2, "intra": 3, "all": 6, "no-role": 6,
                     "excluded": 1, "zero": 0, "strategic": 1, "unknown": "undefined",
                     "strategic-unknown": "undefined",
@@ -339,8 +339,8 @@ class AppServerScopeTest(unittest.TestCase):
         generate_compliance_workbook(self.root, output, (), source, custom_headers_path=profile)
         with closing(load_workbook(output)) as report:
             values = list(report["Business Rules"].values)
-            self.assertEqual(values[0], ("rule_href", IMPACTED_APP_SERVERS))
-            self.assertEqual(dict(values[1:]), expected)
+            self.assertEqual(values[0], (IMPACTED_APP_SERVERS, "rule_href"))
+            self.assertEqual({row[1]: row[0] for row in values[1:]}, expected)
             audit = list(report["Report Configuration"].values)
             self.assertTrue(next(dict(zip(audit[0], row))["Displayed"]
                                  for row in audit[1:] if row[0] == "Column" and row[1] == IMPACTED_APP_SERVERS))
@@ -350,7 +350,7 @@ class AppServerScopeTest(unittest.TestCase):
         with ZipFile(archive_path) as archive:
             data = archive.read("E1/compliance_K-A_20261125T120000Z.xlsx")
             with closing(load_workbook(io.BytesIO(data))) as report:
-                self.assertEqual(dict(list(report["Business Rules"].values)[1:]), expected)
+                self.assertEqual({row[1]: row[0] for row in list(report["Business Rules"].values)[1:]}, expected)
         profile.write_text(f"[{IMPACTED_APP_SERVERS}]\nvisibility=false\n[rule_href]\nvisibility=true\n")
         generate_compliance_workbook(self.root, output, (), source, custom_headers_path=profile)
         with closing(load_workbook(output)) as report:

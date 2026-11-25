@@ -149,11 +149,11 @@ class CompliancePresentationTest(unittest.TestCase):
                 book.active.append([data.get(column, "") for column in MICROCOSMOS_COLUMNS])
             book.save(source)
             book.close()
-            output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source)
+            output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source, debug=True)
             with closing(load_workbook(output, read_only=True)) as report:
                 values = list(report["Business Rules"].values)
                 rows = [dict(zip(values[0], row)) for row in values[1:]]
-                keyed = {(row["Kear Id"], row["rule_href"]): row for row in rows}
+                keyed = {(row["Kear Id (Scope)"], row["rule_href"]): row for row in rows}
                 self.assertEqual(len(keyed), len(rows))
                 group = keyed[("K-LOCAL", "/rules/group")]
                 self.assertEqual(group["ruleset_scope"], "role:WEB; app:APM_REGION_LOCAL; env:PRD")

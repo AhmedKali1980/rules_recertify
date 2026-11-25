@@ -147,7 +147,10 @@ def parser() -> argparse.ArgumentParser:
     compliance.add_argument("--out", type=Path,
                             help=("Output XLSX, or ZIP with --split-by-kear-id "
                                   "(default: output_dir/compliance_<timestamp>.xlsx or .zip)"))
-    compliance.add_argument(
+    compliance_modes = compliance.add_mutually_exclusive_group()
+    compliance_modes.add_argument("--debug", action="store_true",
+                                 help="Show every compliance column without hiding columns")
+    compliance_modes.add_argument(
         "--custom-headers", type=Path,
         help="INI column/sheet visibility profile with a Report Configuration audit sheet",
     )
@@ -385,6 +388,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 Path(settings.raw_dir), target, settings.dangerous_port_lists, args.input, db,
                 custom_headers_path=args.custom_headers,
                 split_by_kear_id=args.split_by_kear_id, timestamp=stamp,
+                debug=args.debug,
             ))
             return 0
         if args.command == "bouquets-report":

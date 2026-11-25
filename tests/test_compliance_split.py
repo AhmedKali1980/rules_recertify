@@ -71,7 +71,7 @@ class ComplianceSplitTest(unittest.TestCase):
     def generate(self, source=None, profile=None):
         return generate_compliance_workbook(
             self.raw, self.output, (), source or self.source,
-            custom_headers_path=profile, split_by_kear_id=True, timestamp=self.stamp,
+            custom_headers_path=profile, split_by_kear_id=True, timestamp=self.stamp, debug=profile is None,
         )
 
     def data_rows(self, book):
@@ -84,7 +84,7 @@ class ComplianceSplitTest(unittest.TestCase):
 
     def test_zip_groups_by_entity_and_kear_and_preserves_global_kear_resolution(self):
         full_path = self.root / "full.xlsx"
-        generate_compliance_workbook(self.raw, full_path, (), self.source)
+        generate_compliance_workbook(self.raw, full_path, (), self.source, debug=True)
         with closing(load_workbook(full_path)) as book:
             full_rows = self.data_rows(book)
         self.assertEqual(self.generate(), self.output)
@@ -97,13 +97,13 @@ class ComplianceSplitTest(unittest.TestCase):
             for entity, kear in expected:
                 name = f"{entity}/compliance_{kear}_{self.stamp}.xlsx"
                 with closing(load_workbook(io.BytesIO(archive.read(name)))) as book:
-                    self.assertEqual(book.sheetnames, ["Summary", "Business Rules", "Infra Rules", "Data Quality"])
-                    expected_rows = [row for row in full_rows if row["Kear Id"] == kear
+                    self.assertEqual(book.sheetnames, ["Summary", "Business Rules", "Infra Rules", "Data Quality", "iplists", "workloads"])
+                    expected_rows = [row for row in full_rows if row["Kear Id (Scope)"] == kear
                                      and (row["Entity"] or "UNSPECIFIED") == entity]
                     self.assertEqual(self.data_rows(book), expected_rows)
                     self.assertEqual(book["Summary"]["A6"].value, len(expected_rows))
                     if (entity, kear) == ("E1", "K-A"):
-                        self.assertEqual({row["Environment"] for row in expected_rows}, {"PRD", "UAT"})
+                        self.assertEqual({row["illumio label env (Scope)"] for row in expected_rows}, {"PRD", "UAT"})
                         row = next(row for row in self.data_rows(book) if row["rule_href"] == "/rules/a")
                         self.assertEqual(row["Kear Remote"], "K-B")
         self.assertEqual(list(self.output.parent.iterdir()), [self.output])
@@ -120,10 +120,10 @@ class ComplianceSplitTest(unittest.TestCase):
                 with closing(load_workbook(io.BytesIO(archive.read(member)))) as book:
                     self.assertEqual(book.sheetnames, ["Business Rules", "Data Quality", "Report Configuration"])
                     for name in ("Business Rules", "Data Quality"):
-                        self.assertEqual(next(book[name].values), ("Direction", "Module"))
+                        self.assertEqual(next(book[name].values), ("Module (Scope)", "Direction"))
                     values = list(book["Report Configuration"].values)
                     audit = {(row[0], row[1]): dict(zip(values[0], row)) for row in values[1:]}
-                    self.assertFalse(audit[("Column", "Kear Id")]["Displayed"])
+                    self.assertFalse(audit[("Column", "Kear Id (Scope)")]["Displayed"])
                     self.assertFalse(audit[("Sheet", "Summary")]["Displayed"])
 
     def test_missing_identity_all_empty_ids_and_invalid_output_are_rejected(self):

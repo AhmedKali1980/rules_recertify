@@ -12,7 +12,7 @@ from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Sequence, Tuple
 from ..workloader.csvio import parse_bool, read_rows
 
 
-IMPACTED_APP_SERVERS = "Number of impacted App servers (scope)"
+IMPACTED_APP_SERVERS = "Number impacted App servers (Scope)"
 LOG = logging.getLogger(__name__)
 
 

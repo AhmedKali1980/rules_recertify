@@ -103,14 +103,14 @@ class CompliancePeerKearTest(unittest.TestCase):
                 book.active.append([row.get(field, "") for field in MICROCOSMOS_COLUMNS])
             book.save(source)
             book.close()
-            target = generate_compliance_workbook(root, root / "compliance.xlsx", (), source)
+            target = generate_compliance_workbook(root, root / "compliance.xlsx", (), source, debug=True)
             with closing(load_workbook(target, read_only=True)) as report:
                 values = list(report["Business Rules"].values)
-                rows = {row[values[0].index("app")]: dict(zip(values[0], row)) for row in values[1:]}
+                rows = {row[values[0].index("illumio label app (Scope)")]: dict(zip(values[0], row)) for row in values[1:]}
                 self.assertEqual(set(rows), {self.scope_app, self.source_app})
                 actual = rows[self.scope_app]
-                self.assertEqual(actual["Kear Id"], self.kear)
-                self.assertEqual(actual["Module"], "CG.SAFIR.CREDIT.RISK.AGENTLESS")
+                self.assertEqual(actual["Kear Id (Scope)"], self.kear)
+                self.assertEqual(actual["Module (Scope)"], "CG.SAFIR.CREDIT.RISK.AGENTLESS")
                 self.assertEqual(actual["Direction"], "outgoing")
                 self.assertEqual(actual["Kear Remote"], KEAR_NOT_ONBOARDED)
                 self.assertEqual(actual["Warning"], "REMOTE_KEAR_NOT_FOUND")

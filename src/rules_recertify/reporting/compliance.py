@@ -20,6 +20,10 @@ from .app_server_scope import (
 )
 from .dangerous_ports import PORT_CATALOGS, _catalog_interval, dangerous_ports
 from .compliance_layout import CONFIGURATION_SHEET, ComplianceLayout, load_compliance_layout
+from .compliance_references import ComplianceReferences
+from .compliance_schema import (
+    DEFAULT_HEADERS, REFERENCE_HEADERS, RULE_ID, RULE_STATUS, available_headers, canonical_header, output_row,
+)
 from .microcosmos import _safe_component
 from .workbook import _expand_services, _load_report_services
 
@@ -52,10 +56,13 @@ def generate_compliance_workbook(
     input_path: Optional[Path] = None, database: Optional[Database] = None,
     custom_headers_path: Optional[Path] = None,
     split_by_kear_id: bool = False, timestamp: Optional[str] = None,
+    debug: bool = False,
 ) -> Path:
     """Evaluate matching snapshot rules for optional app/environment input rows."""
     if importlib.util.find_spec("openpyxl") is None:
         raise RuntimeError("openpyxl is required for compliance report generation")
+    if debug and custom_headers_path is not None:
+        raise ValueError("--debug and --custom-headers are mutually exclusive")
     if split_by_kear_id:
         if input_path is None:
             raise ValueError("--split-by-kear-id requires --input with a Kear Id column")
@@ -101,16 +108,18 @@ def generate_compliance_workbook(
             [*MICROCOSMOS_COLUMNS, "app"]
             if "Program (MIO)" in input_columns else input_columns
         )
+        reserved = {IMPACTED_APP_SERVERS, RULE_ID, RULE_STATUS}
         input_values = {column: input_row.get(column, "") for column in primary_columns
-                        if column.casefold() != IMPACTED_APP_SERVERS.casefold()}
+                        if canonical_header(column) not in reserved}
         extra_values = {
             column: input_row.get(column, "")
             for column in input_columns if column not in primary_columns
-            and column.casefold() != IMPACTED_APP_SERVERS.casefold()
+            and canonical_header(column) not in reserved
         }
         if not matched:
             rows.append({
                 **_with_rule_enrichment_columns(input_values), "Program (KPI)": programs,
+                "env": env, RULE_STATUS: "", RULE_ID: "",
                 "Match status": "APP_NOT_FOUND" if not app else "NO_MATCH",
                 "Warning": "",
                 "Global Consumer in use": "FALSE",
@@ -143,6 +152,7 @@ def generate_compliance_workbook(
             app_server_count = _impacted_app_server_count(rule, enrichment, app_servers, group_index)
             rows.append({
                 **_with_rule_enrichment_columns(input_values, enrichment),
+                "env": env,
                 "Program (KPI)": programs,
                 "Match status": "MATCHED",
                 "Warning": _join_warnings(_extrascope_warning(rule), enrichment["warning"]),
@@ -154,6 +164,11 @@ def generate_compliance_workbook(
                 "rule_description": rule["rule_description"],
                 "rule_enabled": rule["rule_enabled"],
                 "rule_href": rule["rule_href"],
+                RULE_STATUS: (
+                    "Disabled" if any(rule[name].strip().casefold() == "false" for name in ("ruleset_enabled", "rule_enabled"))
+                    else "Enabled"
+                ),
+                RULE_ID: _rule_id(rule["rule_href"]),
                 "Source": source,
                 "Destination": destination,
                 IMPACTED_APP_SERVERS: (
@@ -179,19 +194,28 @@ def generate_compliance_workbook(
                 **extra_values,
             })
 
-    headers = list(rows[0]) if rows else ["Match status"]
+    headers = available_headers(list(dict.fromkeys(name for row in rows for name in row)))
     layout = (
         load_compliance_layout(custom_headers_path, headers, (*MICROCOSMOS_COLUMNS, "env"))
         if custom_headers_path is not None else None
     )
+    selected_headers = headers if debug or layout is not None else DEFAULT_HEADERS
+    reference_sheets = [name for name in REFERENCE_HEADERS if layout is None or layout.sheet_visible(name)]
+    references = ComplianceReferences(snapshot, rules, group_index, reference_sheets) if reference_sheets else None
     if split_by_kear_id:
-        return _write_split_compliance_archive(rows, headers, report_catalogs, output, layout, timestamp)
-    return _write_compliance_workbook(rows, headers, report_catalogs, output, layout)
+        return _write_split_compliance_archive(rows, selected_headers, report_catalogs, output, layout, timestamp, references)
+    return _write_compliance_workbook(rows, selected_headers, report_catalogs, output, layout, references)
+
+
+def _rule_id(href: str) -> str:
+    match = re.search(r"(?:^|/)rule_sets/(\d+)/sec_rules/(\d+)/?$", href.strip())
+    return "-".join(match.groups()) if match else ""
 
 
 def _write_compliance_workbook(
     rows: Sequence[Mapping[str, object]], headers: Sequence[str], catalogs: Sequence[str],
     output: Path, layout: Optional[ComplianceLayout] = None,
+    references: Optional[ComplianceReferences] = None,
 ) -> Path:
     from openpyxl import Workbook
     workbook = Workbook()
@@ -207,7 +231,13 @@ def _write_compliance_workbook(
         ("Data Quality", "DataQuality", data_quality_rows),
     ):
         if visible(sheet):
-            _write_compliance_sheet(workbook, data, sheet, table, selected_headers)
+            _write_compliance_sheet(workbook, [output_row(row) for row in data], sheet, table, selected_headers)
+    if references is not None:
+        dictionaries = references.for_rows(rows)
+        for sheet, data in dictionaries.items():
+            if visible(sheet):
+                columns = layout.reference_headers(sheet) if layout is not None else REFERENCE_HEADERS[sheet]
+                _write_compliance_sheet(workbook, data, sheet, "Compliance" + sheet.title(), columns)
     if layout is not None and visible(CONFIGURATION_SHEET):
         _write_compliance_sheet(workbook, layout.configuration_rows(), CONFIGURATION_SHEET, "ReportConfiguration")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -224,6 +254,7 @@ def _write_compliance_workbook(
 def _write_split_compliance_archive(
     rows: Sequence[Mapping[str, object]], headers: Sequence[str], catalogs: Sequence[str],
     output: Path, layout: Optional[ComplianceLayout], timestamp: Optional[str],
+    references: Optional[ComplianceReferences] = None,
 ) -> Path:
     stamp = timestamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if not re.fullmatch(r"\d{8}T\d{6}Z", stamp):
@@ -259,7 +290,7 @@ def _write_split_compliance_archive(
         temporary = staging / "reports.zip"
         with ZipFile(temporary, "w", compression=ZIP_DEFLATED) as archive:
             for member, data in members:
-                target = _write_compliance_workbook(data, headers, catalogs, staging / "workbooks" / member, layout)
+                target = _write_compliance_workbook(data, headers, catalogs, staging / "workbooks" / member, layout, references)
                 archive.write(target, arcname=member.as_posix())
         temporary.replace(output)
     return output
@@ -622,6 +653,18 @@ def _write_summary_sheet(
         light, dark, 10)
     sheet.row_dimensions[row_number].height = 80
 
+    row_number += 2
+    box(f"A{row_number}:M{row_number}", "REPORT COLUMN DEFINITIONS", navy, white, 11, True)
+    for subject, explanation in (
+        (RULE_STATUS, "Disabled if either ruleset_enabled or rule_enabled is false; otherwise Enabled. Unmatched inputs have no rule status."),
+        (RULE_ID, "Text identifier <ruleset id>-<security rule id>, extracted from rule_href. It is right-aligned and preserves leading zeros."),
+        ("Reference sheets", "iplists lists the IP Lists used by this workbook's rules. workloads lists matching managed workloads only, including explicit workload selectors. Scope fills omitted label dimensions; unscoped consumers do not inherit scope. Missing references are logged."),
+    ):
+        row_number += 1
+        box(f"A{row_number}:C{row_number}", subject, light, dark, 10, True)
+        box(f"D{row_number}:M{row_number}", explanation, light, dark, 10)
+        sheet.row_dimensions[row_number].height = 42
+
 
 def _write_compliance_sheet(
     workbook: object, rows: Sequence[Mapping[str, object]],
@@ -663,6 +706,9 @@ def _write_compliance_sheet(
             cell.font = Font(name="Aptos", size=10, color=dark)
             cell.alignment = Alignment(vertical="center", wrap_text=True)
             cell.border = vertical_border
+            if headers[cell.column - 1] == RULE_ID:
+                cell.number_format = "@"
+                cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
         sheet.row_dimensions[row_number].height = 30
     if rows:
         table = Table(displayName=table_name, ref=sheet.dimensions)

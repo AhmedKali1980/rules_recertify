@@ -56,7 +56,7 @@ class ComplianceServicesTest(unittest.TestCase):
             writer.writerows(rows)
 
     def test_named_service_display_uses_snapshot_without_changing_all_service_exposure(self):
-        generate_compliance_workbook(self.raw, self.output, ())
+        generate_compliance_workbook(self.raw, self.output, (), debug=True)
         with closing(load_workbook(self.output)) as report:
             rows = {}
             expected_by_sheet = {}
@@ -90,7 +90,7 @@ class ComplianceServicesTest(unittest.TestCase):
     def test_unavailable_catalog_preserves_names_and_all_services(self):
         (self.snapshot / "export_services.csv").unlink()
         self.alternate.unlink()
-        generate_compliance_workbook(self.raw, self.output, ())
+        generate_compliance_workbook(self.raw, self.output, (), debug=True)
         with closing(load_workbook(self.output)) as report:
             rows = {}
             for name in ("Business Rules", "Infra Rules"):

@@ -52,7 +52,7 @@ class ComplianceHeadersTest(unittest.TestCase):
     def generate(self, profile=None, output=None, source=None):
         return generate_compliance_workbook(
             self.raw, output or self.output, (), source or self.source,
-            custom_headers_path=profile,
+            custom_headers_path=profile, debug=profile is None,
         )
 
     def test_visibility_projects_all_detail_sheets_without_changing_data_or_summary(self):
@@ -62,7 +62,8 @@ class ComplianceHeadersTest(unittest.TestCase):
                            "[Direction]\nvisibility=false\n[Owner]\nvisibility=true\n")
         filtered = self.generate(profile)
         with closing(load_workbook(baseline)) as full, closing(load_workbook(filtered)) as report:
-            self.assertEqual(report.sheetnames, [*full.sheetnames, "Report Configuration"])
+            self.assertEqual(report.sheetnames, [name for name in full.sheetnames if name not in ("iplists", "workloads")]
+                             + ["Report Configuration"])
             self.assertEqual(list(report["Summary"].values), list(full["Summary"].values))
             self.assertEqual(report["Summary"]["A6"].value, 3)
             self.assertEqual(report["Summary"]["D6"].value, 2)
@@ -71,16 +72,16 @@ class ComplianceHeadersTest(unittest.TestCase):
             for name in ("Business Rules", "Infra Rules", "Data Quality"):
                 original = list(full[name].values)
                 values = list(report[name].values)
-                self.assertEqual(values[0], ("Owner", "Source", "Destination"))
+                self.assertEqual(values[0], ("Source", "Destination", "Owner"))
                 indexes = [original[0].index(header) for header in values[0]]
                 self.assertEqual(values[1:], [tuple(row[index] for index in indexes) for row in original[1:]])
                 self.assertEqual(report[name].max_column, 3)
                 table = next(iter(report[name].tables.values()))
                 self.assertEqual(table.ref, "A1:C2")
-            self.assertEqual(report["Business Rules"]["C2"].value, "workload:database-01")
-            self.assertEqual(report["Infra Rules"]["B2"].value, "workload:client-01")
+            self.assertEqual(report["Business Rules"]["B2"].value, "workload:database-01")
+            self.assertEqual(report["Infra Rules"]["A2"].value, "workload:client-01")
 
-    def test_shipped_all_visible_profile_matches_defaults_for_snapshot_and_microcosmos(self):
+    def test_shipped_all_visible_profile_matches_debug_for_snapshot_and_microcosmos(self):
         source = self.root / "microcosmos.xlsx"
         workbook = Workbook()
         workbook.active.append(list(MICROCOSMOS_COLUMNS))
@@ -93,7 +94,7 @@ class ComplianceHeadersTest(unittest.TestCase):
         for input_path in (None, source):
             with self.subTest(input_path=input_path):
                 baseline = self.root / "all.xlsx"
-                generate_compliance_workbook(self.raw, baseline, (), input_path)
+                generate_compliance_workbook(self.raw, baseline, (), input_path, debug=True)
                 generate_compliance_workbook(self.raw, self.output, (), input_path,
                                              custom_headers_path=Path("config/headers.conf"))
                 with closing(load_workbook(baseline)) as full, closing(load_workbook(self.output)) as report:
@@ -138,7 +139,6 @@ class ComplianceHeadersTest(unittest.TestCase):
             ("[Source]\nvisibility=true\nvisibility=false\n", "Cannot read"),
             ("[DEFAULT]\nvisibility=true\n[Source]\n", "must not contain DEFAULT"),
             ("visibility=true\n", "Cannot read"),
-            ("[Application Name]\nvisibility=true\n", "No visible columns"),
         )
         profile = self.root / "invalid.conf"
         for contents, message in profiles:
@@ -171,6 +171,11 @@ class ComplianceHeadersTest(unittest.TestCase):
                    "--input", str(self.source), "--out", str(self.output)]
         (target / "config/headers.conf").write_text("invalid default profile")
         result = subprocess.run(command, cwd=target, env=environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with closing(load_workbook(self.output)) as full:
+            self.assertNotIn("Owner", next(full["Business Rules"].values))
+        result = subprocess.run(command + ["--debug"], cwd=target, env=environment,
+                                capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         with closing(load_workbook(self.output)) as full:
             self.assertIn("Owner", next(full["Business Rules"].values))
@@ -210,8 +215,8 @@ class ComplianceHeadersTest(unittest.TestCase):
             self.assertFalse(rows[("Column", "Owner")]["Configured visibility"])
             self.assertEqual(rows[("Column", "Owner")]["Reason"], "Not configured")
             self.assertTrue(rows[("Column", "Entity")]["Configured visibility"])
-            self.assertFalse(rows[("Column", "Entity")]["Available"])
-            self.assertFalse(rows[("Column", "Entity")]["Displayed"])
+            self.assertTrue(rows[("Column", "Entity")]["Available"])
+            self.assertTrue(rows[("Column", "Entity")]["Displayed"])
             self.assertFalse(rows[("Sheet", "Summary")]["Displayed"])
             self.assertFalse(rows[("Sheet", "Infra Rules")]["Displayed"])
             self.assertTrue(rows[("Sheet", "Business Rules")]["Displayed"])

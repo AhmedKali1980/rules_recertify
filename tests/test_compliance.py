@@ -280,17 +280,17 @@ class ComplianceTest(unittest.TestCase):
             output = root / "compliance.xlsx"
             result = subprocess.run([
                 str(launcher), "--config", str(config), "--env-file", str(env_file),
-                "compliance-report", "--input", str(source), "--out", str(output),
+                "compliance-report", "--input", str(source), "--out", str(output), "--debug",
             ], cwd=root, env=environment, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn(str(output), result.stdout)
             with closing(load_workbook(output, read_only=True)) as report:
                 self.assertEqual(report.sheetnames, [
-                    "Summary", "Business Rules", "Infra Rules", "Data Quality",
+                    "Summary", "Business Rules", "Infra Rules", "Data Quality", "iplists", "workloads",
                 ])
                 values = list(report["Business Rules"].values)
                 rows = [dict(zip(values[0], row)) for row in values[1:]]
-                local = {row["rule_href"]: row for row in rows if row["Kear Id"] == "K-LOCAL"}
+                local = {row["rule_href"]: row for row in rows if row["Kear Id (Scope)"] == "K-LOCAL"}
                 self.assertEqual(set(local), {rule["rule_href"] for rule in rules})
                 self.assertEqual(local["/rules/remote"]["Kear Remote"], "K-REMOTE")
                 self.assertEqual(local["/rules/remote"]["Direction"], "outgoing")
@@ -381,7 +381,7 @@ class ComplianceTest(unittest.TestCase):
                     writer.writerows(values)
             source = root / "applications.csv"
             source.write_text("app,env,Owner\nA,PRD,Team A\nUNKNOWN,PRD,Team B\n")
-            output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source)
+            output = generate_compliance_workbook(root, root / "compliance.xlsx", (), source, debug=True)
             with closing(load_workbook(output)) as report:
                 rows = {}
                 for name in ("Business Rules", "Infra Rules", "Data Quality"):

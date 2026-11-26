@@ -66,7 +66,7 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
             )
         }
     raw_rows, expanded_rows, usage_rows, octoflow_rows = [], [], [], []
-    prepared_nz3 = prepare_nz3_members(ip_lists)
+    prepared_nz3 = prepare_nz3_members(_effective_nz3_members(ip_lists))
     for rule in selected:
         raw = json.loads(rule["raw_json"])
         rule_pairs = _matching_rule_pairs(raw, scope_pairs)
@@ -151,7 +151,8 @@ def generate_workbook(db: Database, output_dir: Path, kear_id: str, logical_name
         ("Rules", len(selected)), ("Generated At UTC", datetime.now(timezone.utc).isoformat()))]
     if not octoflow_only:
         _sheet(workbook, "Presentation", presentation)
-        _sheet(workbook, "Raw Rules", raw_rows)
+    _sheet(workbook, "Raw Rules", raw_rows)
+    if not octoflow_only:
         _sheet(workbook, "Expanded Rules", expanded_rows)
     _sheet(workbook, "Octoflow", octoflow_rows)
     if not octoflow_only:
@@ -188,17 +189,18 @@ def _raw_reference_candidates(raw_dir: Path, filename: str) -> List[Path]:
 
 
 def _load_report_ip_lists(connection: object, raw_dir: Optional[Path]) -> Tuple[List[Dict[str, str]], str]:
-    """Prefer the newest complete raw IP-list export, with SQLite as fallback."""
+    """Prefer the published snapshot, then a complete raw export, then SQLite."""
     if raw_dir:
         candidates = _raw_reference_candidates(raw_dir, "export_iplists.csv")
         if candidates:
             source = candidates[0]
             members: List[Dict[str, str]] = []
             for row in read_rows(source, ("name", "include")):
-                for raw_member in row["include"].split(";"):
-                    member = raw_member.partition("#")[0].strip()
-                    if row["name"] and member:
-                        members.append({"name": row["name"], "member": member})
+                for field in ("include", "exclude"):
+                    for member in _ip_list_members(row.get(field, "")):
+                        if row["name"]:
+                            value = "!" + member.lstrip("!").strip() if field == "exclude" else member
+                            members.append({"name": row["name"], "member": value})
             LOG.info("Using complete IP-list reference export: %s (%s members)", source, len(members))
             return members, str(source)
     rows = [dict(row) for row in connection.execute("SELECT name,member FROM ip_lists ORDER BY rowid")]
@@ -453,16 +455,32 @@ def _workload_identities(workload: Mapping[str, object]) -> set[str]:
     }
 
 
-def _ip_list_entries(selectors: str, ip_lists: Sequence[Mapping[str, object]],
-                     ipv4_only: bool = False) -> Tuple[List[str], List[str]]:
-    members: Dict[str, Tuple[str, List[str]]] = {}
+def _ip_list_members(value: object) -> List[str]:
+    members = (part.partition("#")[0].strip() for part in re.split(r"[;\r\n]+", str(value or "")))
+    return [member for member in members if member]
+
+
+def _ip_list_catalog(ip_lists: Sequence[Mapping[str, object]]) -> Dict[str, Tuple[str, List[str], List[str]]]:
+    members: Dict[str, Tuple[str, List[str], List[str]]] = {}
     for row in ip_lists:
         name = str(row.get("name", "")).strip()
-        for raw_member in str(row.get("member", row.get("include", ""))).split(";"):
-            member = raw_member.partition("#")[0].strip()
-            if name and member:
-                key = name.casefold()
-                members.setdefault(key, (name, []))[1].append(member)
+        if not name:
+            continue
+        for member in _ip_list_members(row.get("member", row.get("include", ""))):
+            excluded = member.startswith("!")
+            value = member.lstrip("!").strip() if excluded else member
+            if value:
+                members.setdefault(name.casefold(), (name, [], []))[2 if excluded else 1].append(value)
+        for member in _ip_list_members(row.get("exclude", "")):
+            value = member.lstrip("!").strip()
+            if value:
+                members.setdefault(name.casefold(), (name, [], []))[2].append(value)
+    return members
+
+
+def _ip_list_entries(selectors: str, ip_lists: Sequence[Mapping[str, object]],
+                     ipv4_only: bool = False) -> Tuple[List[str], List[str]]:
+    members = _ip_list_catalog(ip_lists)
     entries: List[str] = []
     addresses: List[str] = []
     for selector in (item.strip() for item in re.split(r"[;\n]", selectors) if item.strip()):
@@ -473,16 +491,80 @@ def _ip_list_entries(selectors: str, ip_lists: Sequence[Mapping[str, object]],
             continue
         match = members.get(selector_name.casefold())
         if match:
-            selected_members = [
-                member for member in match[1]
-                if not ipv4_only or _is_ipv4_expression(member)
-            ]
-            if selected_members:
-                entries.append(f"IP List: {match[0]} ({';'.join(dict.fromkeys(selected_members))})")
-                addresses.extend(selected_members)
+            included = list(dict.fromkeys(member for member in match[1]
+                                          if not ipv4_only or _is_ipv4_expression(member)))
+            excluded = list(dict.fromkeys(member for member in match[2]
+                                          if not ipv4_only or _is_ipv4_expression(member)))
+            if included or excluded:
+                display = ";".join(included)
+                if excluded:
+                    display += ("; " if display else "") + "; ".join("!" + member for member in excluded)
+                entries.append(f"IP List: {match[0]} ({display})")
+                addresses.extend(_effective_ip_list_members(included, excluded))
         elif selector_name != "Any (0.0.0.0/0 and ::/0)":
             entries.append(f"IP List: {selector_name} [unresolved]")
     return entries, addresses
+
+
+def _ip_intervals(expressions: Sequence[str], version: int) -> List[Tuple[int, int]]:
+    intervals = []
+    for value in expressions:
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+            start, end = network.network_address, network.broadcast_address
+        except ValueError:
+            first, separator, last = value.partition("-")
+            if not separator:
+                continue
+            try:
+                start, end = ipaddress.ip_address(first.strip()), ipaddress.ip_address(last.strip())
+            except ValueError:
+                continue
+        if start.version == end.version == version and int(start) <= int(end):
+            intervals.append((int(start), int(end)))
+    merged: List[Tuple[int, int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _effective_ip_list_members(included: Sequence[str], excluded: Sequence[str]) -> List[str]:
+    """Subtract each list's exclusions before union with other rule selectors."""
+    if not excluded:
+        return list(included)
+    result = []
+    for version in (4, 6):
+        remaining = []
+        denied = _ip_intervals(excluded, version)
+        index = 0
+        for start, end in _ip_intervals(included, version):
+            while index < len(denied) and denied[index][1] < start:
+                index += 1
+            cursor = start
+            while index < len(denied) and denied[index][0] <= end:
+                deny_start, deny_end = denied[index]
+                if cursor < deny_start:
+                    remaining.append((cursor, deny_start - 1))
+                cursor = max(cursor, deny_end + 1)
+                if cursor > end:
+                    break
+                index += 1
+            if cursor <= end:
+                remaining.append((cursor, end))
+        address = ipaddress.IPv4Address if version == 4 else ipaddress.IPv6Address
+        for start, end in remaining:
+            result.append(str(address(start)) if start == end else f"{address(start)}-{address(end)}")
+    return result
+
+
+def _effective_nz3_members(ip_lists: Sequence[Mapping[str, object]]) -> Iterable[Mapping[str, str]]:
+    for name, included, excluded in _ip_list_catalog(ip_lists).values():
+        if name.startswith("NZ3_"):
+            for member in _effective_ip_list_members(included, excluded):
+                yield {"name": name, "member": member}
 
 
 def _is_ipv4_expression(value: str) -> bool:

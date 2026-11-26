@@ -152,10 +152,14 @@ In the generated **Octoflow** worksheet:
 - multiple `sources` and `destinations` entries are separated with `;` rather
   than line breaks;
 - the PCE dual-stack Any selector is rendered as exactly
-  `IP List: Any (0.0.0.0/0)`.
+  `IP List: Any (0.0.0.0/0)`;
+- IP List exclusions are prefixed with `!`, for example
+  `IP List: SUBNET-GLOBAL-IPL (0.0.0.0/0; !193.79.20.0/24)`. Inline
+  `#comment` suffixes are removed from both included and excluded addresses.
+  Address counts and zone membership respect these exclusions.
 
 Add `--octoflow` to either `report` or `report-batch` when the consumer needs a
-minimal workbook containing only the **Octoflow** worksheet:
+reduced workbook containing **Raw Rules**, then **Octoflow**:
 
 ```bash
 ./scripts/rules-recertify --config config/local.json --env-file .env \

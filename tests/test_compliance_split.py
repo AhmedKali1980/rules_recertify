@@ -126,6 +126,68 @@ class ComplianceSplitTest(unittest.TestCase):
                     self.assertFalse(audit[("Column", "Kear Id (Scope)")]["Displayed"])
                     self.assertFalse(audit[("Sheet", "Summary")]["Displayed"])
 
+    def test_case_variants_share_workbooks_and_entity_directories_in_all_modes(self):
+        kear = "dd14fbac-80d8-47fc-9c21-0c656fa92fca"
+        inputs = [
+            (kear, "APP_A", "PRD", "CFT"),
+            (kear.upper(), "APP_A2", "UAT", "cft"),
+            (" " + kear.upper() + " ", "APP_A", "PRD", " Cft "),
+            ("K-B", "APP_B", "PRD", "cFt"),
+            (kear, "APP_A", "PRD", "OTHER"),
+        ]
+        workbook = Workbook()
+        workbook.active.append(list(MICROCOSMOS_COLUMNS))
+        workbook.active.append([""] * len(MICROCOSMOS_COLUMNS))
+        csv_source = self.root / "variants.csv"
+        with csv_source.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=("app", "env", "Kear Id", "Module", "Entity"))
+            writer.writeheader()
+            for identifier, module, env, entity in inputs:
+                values = {"Kear Id": identifier, "Application Name": module, "Module": module,
+                          "Environment": env, "Entity": entity, "Microsegmentation Solution": "Illumio"}
+                workbook.active.append([values.get(name, "") for name in MICROCOSMOS_COLUMNS])
+                writer.writerow({"app": "APM_REGION_" + module, "env": env, "Kear Id": identifier,
+                                 "Module": module, "Entity": entity})
+        workbook.save(self.source)
+        workbook.close()
+        profile = self.root / "headers.conf"
+        profile.write_text("[Module]\nvisibility=true\n[rule_href]\nvisibility=true\n"
+                           "[Kear Id]\nvisibility=false\n[Entity]\nvisibility=false\n")
+        for source in (csv_source, self.source):
+            full_path = self.root / "full.xlsx"
+            generate_compliance_workbook(self.raw, full_path, (), source, debug=True)
+            with closing(load_workbook(full_path)) as full:
+                expected_rows = self.data_rows(full)
+            for mode in ("default", "debug", "custom"):
+                with self.subTest(source=source.suffix, mode=mode):
+                    generate_compliance_workbook(
+                        self.raw, self.output, (), source, split_by_kear_id=True, timestamp=self.stamp,
+                        debug=mode == "debug", custom_headers_path=profile if mode == "custom" else None,
+                    )
+                    with ZipFile(self.output) as archive:
+                        self.assertEqual(set(archive.namelist()), {
+                            f"CFT/compliance_{kear}_{self.stamp}.xlsx",
+                            f"CFT/compliance_K-B_{self.stamp}.xlsx",
+                            f"OTHER/compliance_{kear}_{self.stamp}.xlsx",
+                        })
+                        self.assertEqual(len(archive.namelist()), len(set(archive.namelist())))
+                        for member in archive.namelist():
+                            entity = member.split("/")[0]
+                            identifier = "K-B" if "compliance_K-B_" in member else kear
+                            matching = [row for row in expected_rows
+                                        if row["Entity"].strip().casefold() == entity.casefold()
+                                        and row["Kear Id (Scope)"].strip().casefold() == identifier.casefold()]
+                            with closing(load_workbook(io.BytesIO(archive.read(member)))) as book:
+                                self.assertEqual(book["Summary"]["A6"].value, len(matching))
+                                actual = self.data_rows(book)
+                                self.assertEqual(len(actual), len(matching))
+                                if mode == "debug":
+                                    self.assertEqual(actual, matching)
+                                elif mode == "custom":
+                                    self.assertEqual(next(book["Business Rules"].values), ("Module (Scope)", "rule_href"))
+                                    self.assertEqual(actual, [{name: row[name] for name in ("Module (Scope)", "rule_href")}
+                                                             for row in matching])
+
     def test_missing_identity_all_empty_ids_and_invalid_output_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "requires --input"):
             generate_compliance_workbook(self.raw, self.output, (), split_by_kear_id=True)
@@ -152,9 +214,10 @@ class ComplianceSplitTest(unittest.TestCase):
             with ZipFile(self.output) as archive:
                 self.assertEqual(archive.namelist(), [f"{entity}/compliance_K-A_{self.stamp}.xlsx"])
         original = self.output.read_bytes()
-        for first, second in (("E/A", "E?A"), ("E1", "e1")):
+        for first, second in ((("E/A", "K-A"), ("E?A", "K-A")),
+                              (("E1", "K/A"), ("E1", "K?A"))):
             source.write_text("app,env,Kear Id,Entity\n" + "".join(
-                f"APM_REGION_APP_A,PRD,K-A,{entity}\n" for entity in (first, second)
+                f"APM_REGION_APP_A,PRD,{kear},{entity}\n" for entity, kear in (first, second)
             ))
             with self.assertRaisesRegex(ValueError, "filenames collide"):
                 self.generate(source=source)
@@ -179,6 +242,10 @@ class ComplianceSplitTest(unittest.TestCase):
         self.assertEqual(list(self.output.parent.iterdir()), [self.output])
 
     def test_installed_cli_defaults_to_archive_in_configured_output_directory(self):
+        with closing(load_workbook(self.source)) as book:
+            book.active.cell(4, MICROCOSMOS_COLUMNS.index("Kear Id") + 1, "k-a")
+            book.active.cell(4, MICROCOSMOS_COLUMNS.index("Entity") + 1, " e1 ")
+            book.save(self.source)
         target = self.root / "deployment"
         environment = dict(os.environ)
         environment.pop("RULES_RECERTIFY_SHARED_GROUP", None)
@@ -204,4 +271,5 @@ class ComplianceSplitTest(unittest.TestCase):
         stamp = path.stem[len("compliance_"):]
         with ZipFile(path) as archive:
             self.assertEqual(len(archive.namelist()), 4)
+            self.assertIn(f"E1/compliance_K-A_{stamp}.xlsx", archive.namelist())
             self.assertTrue(all(member.endswith(f"_{stamp}.xlsx") for member in archive.namelist()))

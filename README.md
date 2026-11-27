@@ -634,6 +634,11 @@ Un `--out` explicite doit désigner un fichier `.zip` dans ce mode.
 Les différents modules et environnements d'un même couple Entity/Kear ID sont
 réunis dans un classeur ; un même Kear ID présent dans plusieurs Entity produit
 un classeur dans chaque dossier Entity.
+Le regroupement ignore les différences de majuscules/minuscules et les espaces
+en début ou fin d'Entity et de Kear ID : `CFT` et `cft`, ou un même UUID écrit
+avec une casse différente, restent dans le même classeur. La première écriture
+rencontrée, sans les espaces extérieurs, sert aux noms de dossier et de fichier ;
+les valeurs et toutes les lignes du rapport sont conservées.
 
 L'entrée doit fournir `Kear Id` : XLSX Microcosmos ou CSV/XLSX `app` avec cette
 colonne. Une Entity absente ou vide utilise le dossier `UNSPECIFIED`.
@@ -643,9 +648,11 @@ sans règle correspondante restent incluses dans le rapport de leur Kear ID.
 Le regroupement utilise les identités complètes, même si ces colonnes sont
 masquées. La résolution des Kears distants est calculée avant le découpage ;
 le Summary de chaque classeur porte uniquement sur les lignes de ce couple.
-Les caractères incompatibles avec les chemins sont normalisés et les collisions
-de noms sont refusées. L'archive est publiée uniquement après génération de
-tous les classeurs ; une erreur conserve une éventuelle archive existante.
+Les caractères incompatibles avec les chemins sont normalisés. Des identités
+distinctes qui produisent encore le même chemin (par exemple `E/A` et `E?A`)
+déclenchent une erreur indiquant les deux identités. L'archive est publiée
+uniquement après génération de tous les classeurs ; une erreur conserve une
+éventuelle archive existante.
 
 `--input <csv-ou-xlsx>` permet de limiter le rapport à une colonne `app` et à
 une colonne `env` optionnelle. Les métadonnées supplémentaires restent disponibles

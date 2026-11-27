@@ -525,7 +525,7 @@ class WorkbookExpansionTest(unittest.TestCase):
                 date(2026, 9, 12), octoflow_only=True,
             )
             octoflow_workbook = load_workbook(octoflow_target)
-            self.assertEqual(octoflow_workbook.sheetnames, ["Octoflow"])
+            self.assertEqual(octoflow_workbook.sheetnames, ["Raw Rules", "Octoflow"])
             values = {cell.value: octoflow_workbook["Octoflow"].cell(2, cell.column).value
                       for cell in octoflow_workbook["Octoflow"][1]}
             self.assertNotIn("\n", values["sources"])

@@ -681,7 +681,8 @@ whose suffix after the second underscore equals that module, case-insensitively
 (for example, `APM_RBS_FACTOBOT` maps to `FACTOBOT`). Unknown modules and
 inconsistent application names are skipped and recorded in the audit workbook.
 Add `--octoflow` to `report-batch` (or to the single-application `report`
-command) to make each generated report contain only the `Octoflow` worksheet.
+command) to make each generated report contain exactly `Raw Rules`, followed
+by `Octoflow`. `Raw Rules` retains the original values before expansion.
 
 The batch root is `output_dir/<UTC timestamp>`. Reports are grouped below
 `PRD/<sanitized Entity>` and `NONPRD/<sanitized Entity>`. Rows for the same KEAR
@@ -717,17 +718,29 @@ When an application label is present but `env` is absent, the selector matches
 all environments; report-level environment pairs must not add an implicit
 filter. A selector without `app` remains constrained by the report pairs.
 
-IP-list selectors render as `IP List: name (member1;member2)`. Members are
-split on `;` during reference ingestion and inline `#comment` suffixes are
-removed. An IP List that cannot be resolved remains visibly marked
+IP-list selectors render as `IP List: name (member1;member2; !excluded1)`.
+Both `include` and `exclude` are read; exclusions receive a `!` prefix. Members
+are split on semicolons or line breaks and inline `#comment` suffixes are
+removed from both fields. For example, include `0.0.0.0/0` and exclude
+`193.79.20.0/24#SUBNET FRANCE` render as
+`IP List: SUBNET-GLOBAL-IPL (0.0.0.0/0; !193.79.20.0/24)`.
+Address counts, permissive-rule detection, and NZ3 zone membership subtract
+each list's exclusions before union with other rule selectors. This uses
+address intervals without enumerating individual IPs, and another selector can
+still allow an address excluded by one list. These rules apply to PRD and
+NONPRD batches in both standard and `--octoflow` layouts, and to `report`.
+An IP List that cannot be resolved remains visibly marked
 `[unresolved]` rather than being silently discarded.
 Reporting resolves these selectors from the complete raw `export_iplists.csv`;
 the `NZ3_*`-only derived export remains dedicated to workload/subnet
-correlation. At report time, the newest non-empty
-`raw_dir/<YYYYMMDDTHHMMSSZ-8hex>/export_iplists.csv` is parsed directly and takes precedence
-over the SQLite snapshot. This makes reports self-healing when SQLite was
+correlation. At report time, `raw_dir/snapshot/export_iplists.csv` takes
+precedence, followed by the newest non-empty
+`raw_dir/<YYYYMMDDTHHMMSSZ-8hex>/export_iplists.csv`, then the SQLite snapshot.
+This makes reports self-healing when SQLite was
 populated by an older release that stored only `NZ3_*` members. SQLite remains
-the fallback when no raw export exists. The `Presentation` sheet records the
+the fallback when no raw export exists; it uses stored members and cannot
+reconstruct exclusions missing from a legacy database. Source CSV files are
+unchanged. The `Presentation` sheet records the
 selected file path or the SQLite fallback for auditability. Technical folders
 such as `raw/preflight` are never eligible.
 

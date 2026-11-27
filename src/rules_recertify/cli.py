@@ -111,14 +111,14 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--lookback-days", type=int)
     report.add_argument("--as-of", type=_date, default=date.today())
     report.add_argument("--octoflow", action="store_true",
-                        help="Generate a workbook containing only the Octoflow worksheet")
+                        help="Generate a workbook containing Raw Rules and Octoflow worksheets")
     batch_report = commands.add_parser("report-batch", help="Generate reports from a Microcosmos XLSX export")
     batch_report.add_argument("--microcosmos-xlsx", type=Path, required=True,
                               help="Microcosmos XLSX used to generate all non-empty Kear Id rows")
     batch_report.add_argument("--lookback-days", type=int)
     batch_report.add_argument("--as-of", type=_date, default=date.today())
     batch_report.add_argument("--octoflow", action="store_true",
-                              help="Generate each report with only the Octoflow worksheet")
+                              help="Generate each report with Raw Rules and Octoflow worksheets")
     search = commands.add_parser(
         "search-rules", help="Find items in the latest SQLite rule snapshot",
     )

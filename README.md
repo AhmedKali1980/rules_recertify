@@ -323,7 +323,8 @@ La commande `report-batch` accepte un export Excel Microcosmos :
 ```
 
 Les commandes `report` et `report-batch` acceptent `--octoflow` pour produire
-des rapports contenant uniquement la feuille `Octoflow`. Dans cette feuille,
+des rapports contenant les deux feuilles `Raw Rules`, puis `Octoflow`.
+`Raw Rules` conserve les valeurs d'origine avant développement. Dans `Octoflow`,
 les valeurs multiples de `sources` et `destinations` sont séparées par `;`.
 
 La première feuille doit contenir les colonnes `Kear Id`, `Application Name`,
@@ -354,11 +355,20 @@ fallback SQLite si cet export n'est pas disponible. Ils sont affichés comme
 fallback sur `name`. Les IP Lists sont résolues depuis l'export complet
 `export_iplists.csv`; le dérivé limité à `NZ3_*` sert uniquement à la
 corrélation workload/subnet. Les commentaires `#...` sont retirés de chaque
-membre. Lors de la génération, le rapport charge en priorité le
-`export_iplists.csv` du sous-répertoire d'exécution horodaté le plus récent.
+membre des colonnes `include` et `exclude`. Les exclusions sont préfixées par
+`!` : `IP List: SUBNET-GLOBAL-IPL (0.0.0.0/0; !193.79.20.0/24)`.
+Le comptage d'adresses, la détection des règles permissives et la corrélation
+des zones retranchent les exclusions de chaque liste avant de réunir les
+sélecteurs de la règle, sans développer les sous-réseaux IP par IP.
+Ces règles s'appliquent aux lots PRD et NONPRD, avec ou sans `--octoflow`.
+Lors de la génération, le rapport charge en priorité
+`raw_dir/snapshot/export_iplists.csv`, puis le `export_iplists.csv` du
+sous-répertoire d'exécution horodaté le plus récent.
 Le répertoire technique `raw/preflight` est explicitement exclu. Cela corrige
 également les bases historiques qui avaient été alimentées uniquement avec les
 IP Lists `NZ3_*`; SQLite reste le fallback si aucun export brut n'est disponible.
+Ce fallback utilise les membres déjà stockés et ne peut pas reconstituer les
+exclusions absentes d'une ancienne base. Les exports CSV d'origine sont préservés.
 La feuille `Presentation` indique le fichier effectivement utilisé.
 
 Les objets de service nommés Illumio sont résolus depuis le

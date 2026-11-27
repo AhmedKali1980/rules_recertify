@@ -989,6 +989,11 @@ With `--out`, supply an explicit `.zip` path. Archive members are named
 Modules and environments belonging to the same Entity/Kear ID are combined;
 the same Kear ID in multiple Entities generates a separate workbook in each
 Entity directory, following the batch-report grouping convention.
+Entity and Kear ID grouping ignores letter case and surrounding whitespace.
+For example, `CFT`/`cft` and uppercase/lowercase spellings of the same UUID share
+one workbook. The first trimmed spelling encountered supplies the folder and
+filename components consistently across the archive; original row values and
+all rows remain unchanged.
 
 Provide a Microcosmos XLSX or an app-based CSV/XLSX containing `Kear Id`.
 Missing/blank Entity values use `UNSPECIFIED`. Rows with no Kear ID are skipped
@@ -999,8 +1004,10 @@ Matching and remote-Kear lookup use the entire input before grouping; each
 workbook's Summary is then computed from its own group, including any rows on
 disabled detail sheets. All members use the selected visibility profile.
 
-Path components are sanitized and case-insensitive filename collisions are
-rejected. Workbooks and ZIP are staged inside the output filesystem and the
+Path components are sanitized. Distinct identities that still produce the same
+case-insensitive path (for example, Entities `E/A` and `E?A`) are rejected with
+both identities in the error instead of combining unrelated groups.
+Workbooks and ZIP are staged inside the output filesystem and the
 archive is atomically replaced only after all reports succeed. Failures clean
 temporary staging and preserve an existing archive. Shared installations retain
 group ownership/write access on the resulting ZIP through the existing runtime

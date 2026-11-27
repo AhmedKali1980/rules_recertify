@@ -265,6 +265,8 @@ def _write_split_compliance_archive(
     if not re.fullmatch(r"\d{8}T\d{6}Z", stamp):
         raise ValueError("Invalid compliance report timestamp; expected YYYYMMDDTHHMMSSZ")
     groups: Dict[Tuple[str, str], List[Mapping[str, object]]] = defaultdict(list)
+    entities: Dict[str, str] = {}
+    kears: Dict[str, str] = {}
     skipped = 0
     for row in rows:
         kear = _get_case_insensitive(row, "Kear Id").strip()
@@ -272,20 +274,29 @@ def _write_split_compliance_archive(
             skipped += 1
             continue
         entity = _get_case_insensitive(row, "Entity").strip() or "UNSPECIFIED"
-        groups[(entity, kear)].append(row)
+        # Match the case-insensitive identity semantics used by report matching
+        # and archive paths, while retaining every original row unchanged.
+        entity_key, kear_key = entity.casefold(), kear.casefold()
+        entities.setdefault(entity_key, entity)
+        kears.setdefault(kear_key, kear)
+        groups[(entity_key, kear_key)].append(row)
     if skipped:
         LOG.warning("Skipped %s compliance report rows without Kear Id", skipped)
     if not groups:
         raise ValueError("No non-empty Kear Id is available for --split-by-kear-id")
 
     members = []
-    names = set()
-    for (entity, kear), data in sorted(groups.items()):
+    names: Dict[str, Tuple[str, str]] = {}
+    for (entity_key, kear_key), data in sorted(groups.items()):
+        entity, kear = entities[entity_key], kears[kear_key]
         member = Path(_safe_component(entity)) / f"compliance_{_safe_component(kear)}_{stamp}.xlsx"
         key = member.as_posix().casefold()
         if key in names:
-            raise ValueError(f"Split report filenames collide after sanitization: {member}")
-        names.add(key)
+            raise ValueError(
+                f"Split report filenames collide after sanitization: {member} "
+                f"(Entity/Kear Id {names[key]!r} and {(entity, kear)!r})"
+            )
+        names[key] = (entity, kear)
         members.append((member, data))
     output.parent.mkdir(parents=True, exist_ok=True)
     # Stage complete workbooks and ZIP in the output filesystem, inheriting
